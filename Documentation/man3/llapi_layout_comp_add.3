@@ -1,0 +1,66 @@
+.TH LLAPI_LAYOUT_COMP_ADD 3 2024-08-27 "Lustre User API" "Lustre Library Functions"
+.SH NAME
+llapi_layout_comp_add, llapi_layout_comp_del \- add or delete a layout component into/from the layout.
+.SH SYNOPSIS
+.nf
+.B #include <lustre/lustreapi.h>
+.PP
+.BI "int llapi_layout_comp_add(struct llapi_layout *" layout ,
+.BI "                          struct llapi_layout *" comp );
+.PP
+.BI "int llapi_layout_comp_del(struct llapi_layout *" layout ,
+.BI "                          struct llapi_layout *" comp );
+.fi
+.SH DESCRIPTION
+A composite layout is made of several layout components.
+.PP
+.BR llapi_layout_comp_add (3)
+adds the layout component
+.I comp
+into the existing in-memory
+.I layout
+under construction, and
+.I comp
+is freed.  The
+.I layout
+will be turned into composite if it was plain before adding. All layout
+attributes of
+.I comp
+will be inherited from the
+.IR layout ,
+unless otherwise specified for this component by llapi_layout_*_set(3)
+functions.
+.PP
+.BR llapi_layout_comp_del (3)
+deletes the layout component
+.I comp
+from the in-memory
+.IR layout ,
+but does not delete the component from an existing file layout on the MDT.
+.SH RETURN VALUES
+.B llapi_layout_comp_add()
+and
+.B llapi_layout_comp_del()
+return 0 on success, or -1 if an error occurred (in which case,
+.B errno
+is set appropriately).
+.SH ERRORS
+.TP 15
+.B EINVAL
+An invalid argument was specified.
+.SH AVAILABILITY
+.B llapi_layout_comp_add()
+and
+.B llapi_layout_comp_del()
+are part of the
+.BR lustre (7)
+user application interface library since release 2.10.0.
+.\" Added in commit v2_9_55_0-18-gc4702b7443
+.SH SEE ALSO
+.BR llapi_layout_alloc (3),
+.BR llapi_layout_file_comp_add (3),
+.BR llapi_layout_file_comp_del (3),
+.BR llapi_layout_file_open (3),
+.BR llapi_layout_free (3),
+.BR llapi_layout (7),
+.BR lustreapi (7)

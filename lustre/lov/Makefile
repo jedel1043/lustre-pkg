@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# This file is part of Lustre, http://www.lustre.org/
+#
+
+obj-m += lov.o
+lov-objs := lov_dev.o \
+	lov_ea.o \
+	lov_io.o \
+	lov_lock.o \
+	lov_merge.o \
+	lov_obd.o \
+	lov_object.o \
+	lov_offset.o \
+	lov_pack.o \
+	lov_page.o \
+	lov_pool.o \
+	lov_request.o \
+	lovsub_dev.o \
+	lovsub_object.o \
+	lproc_lov.o

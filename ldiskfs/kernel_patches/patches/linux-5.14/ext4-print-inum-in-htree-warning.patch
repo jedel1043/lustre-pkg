@@ -1,0 +1,33 @@
+commit e3ee697515c1c8fa1480f03ed24e0265380fb323
+Author:     Kalpak Shah <kalpak@clusterfs.com>
+AuthorDate: Thu May 22 16:38:19 2008 +0000
+
+Print dir inode number when displaying corrupt hash code warning
+
+Bugzilla-ID: b=9570
+Signed-off-by: Kalpak Shah <kalpak@clusterfs.com>
+Reviewed-by: Andreas Dilger <adilger@clusterfs.com>
+Reviewed-by: Girish Shilamkar <girish@clusterfs.com>
+---
+ fs/ext4/namei.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/fs/ext4/namei.c b/fs/ext4/namei.c
+index 87cefa6..caf84b5 100644
+--- a/fs/ext4/namei.c
++++ b/fs/ext4/namei.c
+@@ -794,8 +794,9 @@ dx_probe(struct ext4_filename *fname, struct inode *dir,
+ 	    root->info.hash_version != DX_HASH_HALF_MD4 &&
+ 	    root->info.hash_version != DX_HASH_LEGACY &&
+ 	    root->info.hash_version != DX_HASH_SIPHASH) {
+-		ext4_warning_inode(dir, "Unrecognised inode hash code %u",
+-				   root->info.hash_version);
++		ext4_warning_inode(dir,
++			"Unrecognised inode hash code %u for directory %lu",
++			root->info.hash_version, dir->i_ino);
+ 		goto fail;
+ 	}
+ 	if (ext4_hash_in_dirent(dir)) {
+-- 
+2.31.1
+

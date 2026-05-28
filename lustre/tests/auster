@@ -1,0 +1,212 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# This file is part of Lustre, http://www.lustre.org/
+#
+# lustre/tests/auster
+#
+# Drive lustre tests
+#
+
+#
+# TODO
+#  1. --time-limt <seconds>  add per test time limit, kill test if it runs to long
+#  2. Read list of tests to run from a file. same syntax as cli, but one test per line
+#  3. Run test on remote node
+#
+
+set -e
+
+export TF_FAIL=/tmp/tf.fail
+export TF_SKIP=/tmp/tf.skip
+
+usage() {
+	less -F <<EOF
+Usage ${0##*/} [options]  suite [suite options] [suite [suite options]]
+Run Lustre regression tests suites.
+      -c, --config CONFIG   Test environment config file
+      -C, --client-only     Run client-side sanity tests against an already setup
+                            filesystem. Users must define FSNAME and mgs_HOST manually.
+      -d, --log-dir LOGDIR            Top level directory for logs
+      -D, --full-log-dir FULLLOGDIR   Full directory for logs
+      -f, --cfg-name STR    Config name (cfg/<name>.sh)
+      -g, --group GROUP     Test group file (Overrides tests listed on command line)
+      -S, --suite TESTSUITE           First test suite to run allows for restarts
+      -H, --honor           Honor the EXCEPT and ALWAYS_EXCEPT list when --only is used
+      -i, --repeat N        Repeat tests N times (default 1). A new directory
+                            will be created under LOGDIR for each iteration.
+      -k  --no-stop         Don't stop when subtests fail
+      -R, --remount         Remount lustre between tests
+      -r, --reformat        Reformat (during initial configuration if needed)
+      -s  --slow            SLOW=yes
+      -v, --verbose         Verbose mode
+      -l, --send-logs       Send logs to the Maloo database after run
+                              (can be done later by running maloo_upload.sh)
+      -L, --lang            Script language of test suite. Default: bash
+      -N, --no-setup        No setup. Do not setup Lustre prior to executing test suite.
+      -h, --help            This help.
+
+Suite options
+These are suite specific options that can be specified after each suite on
+the command line.
+   suite-name  [options]
+      --only LIST         Run only specific list of subtests
+      --except LIST       Skip list of subtests
+      --start-at SUBTEST  Start testing from subtest
+      --stop-at SUBTEST   Stop testing at subtest
+      --time-limit LIMIT  Don't allow this suite to run longer
+                          than LIMT seconds. [UNIMPLEMENTED]
+
+Example usage:
+Run all of sanity and all of replay-single except for 70b with SLOW=y using
+the default "local" configuration.
+
+  auster -s sanity replay-single --except 70b
+
+Run all tests in the regression group 5 times using large config.
+
+  auster -f large -g test-groups/regression -i 5
+
+Run the client-only tests from sanity.
+
+  FSNAME=myfilesystem mgs_HOST=1.2.3.4 auster -C sanity
+
+EOF
+	exit
+}
+
+dry_run=false
+do_reset=false
+verbose=false
+repeat_count=1
+upload_logs=false
+reformat=false
+script_lang=bash
+test_logs_dir=/tmp/test_logs/$(date +%Y-%m-%d)/$(date +%H%M%S)
+export HONOR_EXCEPT=
+export do_setup=true
+export client_tests_only=false
+export "${SLOW:=no}"
+export "${NAME:=local}"
+
+# Replace long option with corresponding short option
+for arg in "$@"; do
+	shift
+	case "$arg" in
+		--config) set -- "$@" '-c';;
+		--client-only) set -- "$@" '-C';;
+		--log-dir) set -- "$@" '-d';;
+		--full-log-dir) set -- "$@" '-D';;
+		--group) set -- "$@" '-g';;
+		--suite) set -- "$@" '-S';;
+		--no-stop) set -- "$@" '-k';;
+		--verbose) set -- "$@" '-v';;
+		--honor) set -- "$@" '-H';;
+		--repeat) set -- "$@" '-i';;
+		--cfg-name) set -- "$@" '-f';;
+		--remount) set -- "$@" '-R';;
+		--reformat) set -- "$@" '-r';;
+		--slow) set -- "$@" '-s';;
+		--send-logs) set -- "$@" '-l';;
+		--lang) set -- "$@" '-L';;
+		--no-setup) set -- "$@" '-N';;
+		--help) set -- "$@" '-h';;
+		*) set -- "$@" "$arg";;
+	esac
+done
+
+while getopts "c:Cd:D:nkf:S:g:Hi:rRslL:Nhv" opt
+do
+	case "$opt" in
+		c) export CONFIG=$OPTARG;;
+		C) client_tests_only=true;;
+		d) test_logs_dir=$OPTARG/$(date +%Y-%m-%d)/$(date +%H%M%S);;
+		D) test_logs_dir=$OPTARG;;
+		g) test_group_file=$OPTARG;;
+		S) FIRST_SUITE=$OPTARG;;
+		k) export FAIL_ON_ERROR=false;;
+		n) dry_run=:;;
+		v) verbose=:;;
+		H) export HONOR_EXCEPT="y";;
+		i) repeat_count=$OPTARG;;
+		f) NAME=$OPTARG;;
+		R) do_reset=:;;
+		r) reformat=:;;
+		s) export SLOW=yes;;
+		l) upload_logs=true;;
+		L) script_lang=$OPTARG;;
+		N) do_setup=false;;
+		h|\?) usage;;
+	esac
+done
+
+# If a test_group_file is specified, then ignore rest of command line
+if [[ $test_group_file ]]; then
+    export TEST_GROUP=$(basename $test_group_file)
+    set $(sed 's/#.*$//' $test_group_file)
+else
+    shift $((OPTIND -1))
+fi
+
+STARTTIME=`date +%s`
+
+: ${LUSTRE:=$(cd $(dirname $0)/..; echo $PWD)}
+. $LUSTRE/tests/test-framework.sh
+init_test_env
+
+# Set CLIENTONLY, while trying to discover some common
+# variables so the test runner doesn't need do this
+# manually
+if $client_tests_only; then
+	export CLIENTONLY=true;
+	export FSTYPE=${FSTYPE:-ldiskfs};
+	export MDSCOUNT="$(( $($LFS mdts | wc -l) - 1 ))"
+	export OSTCOUNT="$(( $($LFS osts | wc -l) - 1 ))"
+fi
+
+# special return code to stop testing without cleanup
+# used with the --stop-on-error option
+export STOP_NOW_RC=111
+
+if [ $upload_logs = true ] ; then
+    upload_script=$(find_script_in_path maloo_upload.sh $PATH:$LUSTRE/tests)
+    if [[ -z $upload_script ]]; then
+        echo "Can't find maloo_upload.sh script"
+        exit 1
+    fi
+
+    if [ ! -r ~/.maloorc ] ; then
+        echo "A ~/.maloorc file is required in order to upload results."
+        echo "Visit your maloo web interface to download your .maloorc file"
+        exit 1
+    fi
+fi
+
+export NAME MOUNT START CLEAN
+. ${CONFIG:-$LUSTRE/tests/cfg/$NAME.sh}
+
+# Only need to know where (MOUNT) and how (mgs_HOST) to
+# mount Lustre for client-side only tests
+if $client_tests_only; then
+	assert_env mgs_HOST
+else
+	assert_env mds_HOST
+	assert_env ost_HOST OSTCOUNT
+	assert_env MOUNT2
+fi
+
+assert_env FSNAME MOUNT
+
+echo "Started at `date`"
+setup_if_needed
+
+run_suites "$@"
+RC=$?
+
+if [[ $RC -eq 0 ]]; then
+    cleanup_if_needed
+fi
+
+echo "Finished at `date` in $((`date +%s` - $STARTTIME))s"
+echo "$0: completed with rc $RC" && exit $RC

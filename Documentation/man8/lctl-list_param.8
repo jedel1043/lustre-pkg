@@ -1,0 +1,272 @@
+.TH LCTL-LIST_PARAM 8 2026-03-06 Lustre "Lustre Configuration Utilities"
+.SH NAME
+lctl-list_param \- list configuration parameter names
+.SH SYNOPSIS
+.SY "lctl list_param"
+.RB [ --dshbak | -b ]
+.RB [ --color | -c ]
+.RB [ --dir-only | -D ]
+.RB [ --classify | -F ]
+.RB [ --links | -l ]
+.RB [ --no-links | -L ]
+.RB [ --merge | -m ]
+.RB [ --no-merge | -M ]
+.RB [ --module | -o ]
+.RB [ --path | -p ]
+.RB [ --readable | -r ]
+.RB [ --recursive | -R ]
+.RB [ --tunable | -t ]
+.RB [ --writeable | -w ]
+.IR PARAM_PATH1 " [" PARAM_PATH2 " ...]"
+.YS
+.SH DESCRIPTION
+List the Lustre or LNet parameter name(s) matching
+.IR param_search .
+The parameter name(s) may contain wildcards using
+.BR glob (3)
+pathname patterns.
+.SH OPTIONS
+The various options supported by
+.BR lctl list_param
+are listed and explained below:
+.TP
+.BR -b ", " --dshbak
+Aggregate parameters with wildcards whenever a device number appears in the
+parameter name.
+By default --merge is enabled with this option to merge the simplified names.
+Specify --no-merge if you want the parameter names with wildcards but do not
+want them to be merged.
+.TP
+.BR -c ", " --color=auto|always|never
+Use one of auto|always|never as the rule of when to apply color. The default is
+auto which will display color only when the output is a terminal.
+.TP
+.BR -D ", " --dir-only
+Only list directories.
+.TP
+.BR -F ", " --classify
+Append '/', '@' or '=' for dirs, symlinks and writeable files, respectively.
+.TP
+.BR -l ", " --links
+Follow symlinks while searching for parameters. (enabled by default)
+.TP
+.BR -L ", " --no-links
+Do not follow symlinks while searching for parameters.
+.TP
+.BR -m ", " --merge
+Merge all parameters that have the same name such that only one will be shown.
+Enabled by default.
+.TP
+.BR -M ", " --no-merge
+Do not merge parameters. All parameters will be shown, regardless if they are
+have the same name or not. Duplicate parameters will be printed in yellow.
+.TP
+.BR -o ", " --module
+Include modules params in the parameter search path, meaning that matching
+module parameters will be shown along side with Lustre parameters.
+.TP
+.BR -p ", " --path
+Print the parameter path instead of the parameter name.
+.TP
+.BR -r ", " --readable
+Print only parameters that have read permission. Can be used with
+.RB [ -w | --writable ]
+to print parameters that are both readable and writable.
+.TP
+.BR -R ", " --recursive
+Recursively list all parameters under the specified parameter search string. If
+.I param_search
+is unspecified, all the parameters will be shown.
+.TP
+.BR -t ", " --tunable
+Print only tunable parameters. This avoids printing directories and all
+parameters containing any of the following:
+.br
+.BR console | debug_ | fail_ | force | import | nis | panic_ | srpc_sepol | stats | target_obd
+.TP
+.BR -w ", " --writable
+Print only parameters that have write permission. Can be used with
+.RB [ -r | --readable ]
+to print parameters that are both readable and writable.
+.SH BASH COMPLETION
+This command supports
+.BR bash-completion (1)
+for tab completion of parameter names available on the local node,
+with suitable shell and package installation.
+This can greatly simplify finding which parameters are available,
+instead of running
+.BR lctl-list_param (8)
+repeatedly.
+To list long options (more descriptive and easily understood) type
+.RB ' --TAB ',
+and to list short options type
+.RB ' -TAB '.
+.SH EXAMPLES
+Use wildcards to obtain all matching parameters:
+.RS
+.EX
+.B # lctl list_param ost.*
+ost.OSS
+ost.num_refs
+.EE
+.RE
+.PP
+Show the file type with
+.BR -F ,
+this can be useful in combination with
+.B grep
+to find certain types of parameters:
+.RS
+.EX
+.B # lctl list_param -F ost.* debug
+ost.OSS/
+ost.num_refs
+debug=
+.EE
+.RE
+.PP
+Since there are multiple location that hold paramters, use
+.B -p
+to get the full filepath for more efficient use by external mornitoring tools:
+.RS
+.EX
+.B # lctl list_param -p ost.*
+/sys/fs/lustre/ost/OSS
+/sys/fs/lustre/ost/num_refs
+.EE
+.RE
+.PP
+Search recursively through the directory tree with
+.B -R
+to get the full list of both directories and parameters in the tree:
+.RS
+.EX
+.B # lctl list_param -R mdt
+mdt
+mdt.lustre-MDT0000
+mdt.lustre-MDT0000.capa
+mdt.lustre-MDT0000.capa_count
+mdt.lustre-MDT0000.capa_key_timeout
+mdt.lustre-MDT0000.capa_timeout
+mdt.lustre-MDT0000.commit_on_sharing
+mdt.lustre-MDT0000.evict_client
+.B ...
+.EE
+.RE
+.PP
+To avoid following symlinks which can lead to duplicate output use
+.BR --no-links .
+Note that
+.I mgs.MGS.osd
+is a symlink to
+.I ../../ost-ldiskfs/lustre-MDT0000:
+.RS
+.EX
+.B # lctl list_param -L -R mgs.MGS
+.B ...
+mgs.MGS.mgs.timeouts
+mgs.MGS.mntdev
+mgs.MGS.num_exports
+mgs.MGS.uuid
+mgs.MGS.filesystems
+mgs.MGS.gss
+.B ...
+.EE
+.RE
+Compare this to the same command with --links enabled:
+.RS
+.EX
+.B # lctl list_param -l -R mgs.MGS
+.B ...
+mgs.MGS.mgs.timeouts
+mgs.MGS.mntdev
+mgs.MGS.num_exports
+mgs.MGS.osd
+mgs.MGS.osd.auto_scrub
+.B ...
+mgs.MGS.osd.quota_slave_md.root_prj_enable
+mgs.MGS.osd.quota_slave_md.timeout
+mgs.MGS.uuid
+mgs.MGS.filesystems
+mgs.MGS.gss
+.B ...
+.EE
+.RE
+.PP
+To get a full list of tunable parameters on the filesystem combine -t with -wr:
+.RS
+.EX
+.B # lctl list_param -R -L -t -wr ost.OSS.ost_seq
+ost.OSS.ost_seq.high_priority_ratio
+ost.OSS.ost_seq.threads_max
+ost.OSS.ost_seq.threads_min
+ost.OSS.ost_seq.nrs_crrn_quantum
+ost.OSS.ost_seq.nrs_delay_max
+ost.OSS.ost_seq.nrs_delay_min
+ost.OSS.ost_seq.nrs_delay_pct
+ost.OSS.ost_seq.nrs_policies
+ost.OSS.ost_seq.nrs_tbf_rule
+ost.OSS.ost_seq.req_buffer_history_max
+ost.OSS.ost_seq.req_buffers_max
+.EE
+.RE
+.PP
+Using --merge will collapse copies of the same parameter if they have the exact
+same name. Multiple copies are often caused by symlinks pointing to the same
+directory that has already been searched.  To show all parameters:
+.RS
+.EX
+.B # lctl list_param -R --no-merge osp.lustre-OST0000-osc-MDT0000
+osp.lustre-OST0000-osc-MDT0000
+.I osp.lustre-OST0000-osc-MDT0000 <- symlink
+osp.lustre-OST0000-osc-MDT0000.active
+osp.lustre-OST0000-osc-MDT0000.active
+osp.lustre-OST0000-osc-MDT0000.blocksize
+osp.lustre-OST0000-osc-MDT0000.blocksize
+.B ...
+.P
+.B # lctl list_param -R --merge osp.lustre-OST0000-osc-MDT0000
+osp.lustre-OST0000-osc-MDT0000
+osp.lustre-OST0000-osc-MDT0000.active
+osp.lustre-OST0000-osc-MDT0000.blocksize
+osp.lustre-OST0000-osc-MDT0000.create_count
+.B ...
+.EE
+.RE
+.PP
+Use --dshbak will collapse multiple OSTs and MDTs so params are easier to read:
+.RS
+.EX
+.B # lctl list_param -R osp.*
+osp.lustre-OST0000-osc-MDT0000.active
+osp.lustre-OST0000-osc-MDT0000.blocksize
+osp.lustre-OST0000-osc-MDT0000.create_count
+osp.lustre-OST0000-osc-MDT0000.destroys_in_flight
+.B ...
+osp.lustre-OST0001-osc-MDT0000.active
+osp.lustre-OST0001-osc-MDT0000.blocksize
+osp.lustre-OST0001-osc-MDT0000.create_count
+osp.lustre-OST0001-osc-MDT0000.destroys_in_flight
+.B ...
+.P
+.B # lctl list_param -R --dshbak osp.*
+osp.lustre-OST*-osc-MDT*.active
+osp.lustre-OST*-osc-MDT*.blocksize
+osp.lustre-OST*-osc-MDT*.create_count
+osp.lustre-OST*-osc-MDT*.destroys_in_flight
+.B ...
+.EE
+.RE
+.SH AVAILABILITY
+.B lctl list_param
+is part of the
+.BR lustre (7)
+filesystem package since release 1.7.0
+.\" Added in commit 1.6.1-3050-g04248c9069
+.SH SEE ALSO
+.BR lfs (1),
+.BR lustre (7),
+.BR lctl-find_param (8),
+.BR lctl-get_param (8),
+.BR lctl-help_param (8),
+.BR lctl-set_param (8)

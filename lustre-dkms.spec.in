@@ -1,0 +1,205 @@
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# This file is part of Lustre, http://www.lustre.org/
+#
+# lustre-dkms.spec.in
+#
+# spec file template for RHEL dkms package builds
+#
+
+%bcond_without servers
+%bcond_without zfs
+%bcond_with ldiskfs
+
+%if ! 0%{?rhel}%{?fedora}%{?suse_version}%{?openEuler}
+%define not_rpm 1
+%endif
+
+# Turn off brp-python-precompile script as we don't want the python files
+# to be compiled on installation
+%global __os_install_post %(echo '%{__os_install_post}' | sed -e 's!/usr/lib[^[:space:]]*/brp-python-bytecompile[[:space:]].*$!!g')
+
+# Set the package name prefix
+%if %{undefined lustre_name}
+	%global lustre_name @PACKAGE@
+%endif
+
+# Set the package name prefix
+%if %{with servers}
+    %if %{with zfs}
+	%if %{with ldiskfs}
+	    %define module %{lustre_name}-all
+	%else
+	    %define module %{lustre_name}-zfs
+	%endif
+    %else
+	%if %{without ldiskfs}
+	    %define module %{lustre_name}-BADSTATE
+	%else
+	    %define module %{lustre_name}-ldiskfs
+	%endif
+    %endif
+    %define lustre_kmp_name %{lustre_name}
+%else
+    %define module %{lustre_name}-client
+    %define lustre_kmp_name %{lustre_name}-client
+%endif
+
+%if "%{_vendor}" == "redhat" || "%{_vendor}" == "fedora"
+	%global kmod_name kmod-%{lustre_kmp_name}
+	%define mkconf_options %{nil}
+#for Suse / Ubuntu
+%else
+	%global kmod_name %{lustre_kmp_name}-kmp
+	%define mkconf_options -k updates
+%endif
+
+%define buildid 1
+%define mkconf  lustre/scripts/dkms.mkconf
+
+# There should be a better (non-arch dependent) way to require ext4
+# sources
+%define ext4_source_rpm kernel-debuginfo-common-%{_arch}
+
+Name:           %{module}-dkms
+
+Version:        @VERSION@
+Release:        %{buildid}%{?dist}
+Summary:        Kernel module(s) (dkms)
+
+License:        GPL-2.0-only
+URL:            http://lustre.opensfs.org/
+Source0:        @PACKAGE@-%{version}.tar.gz
+BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
+BuildArch:      noarch
+
+# DKMS >= 2.2.0.3-28.git.7c3e7c5 to fully support inter-modules deps
+# (ie, "BUILD_DEPENDS[#]=<pkg>"), and have latest DKMS fixes integrated
+# for bugs that prevented our module to build/install.
+Requires:       dkms >= 2.2.0.3-28.git.7c3e7c5
+Requires:       flex bison libmount-devel
+# for lnetctl
+Requires:	libyaml-devel
+Requires:	zlib-devel
+# for netlink support
+Requires:	libnl3-devel
+%if %{with servers}
+# If client package is installed when installing server, remove it since
+# the server package also includes the client.  This can be removed if/when
+# the packages are split into independent client/server/common packages.
+Obsoletes:	%{lustre_name}-client < %{version}
+%if %{with zfs}
+Requires:       zfs-dkms >= 0.6.5
+Conflicts:	%{lustre_name}-ldiskfs-dkms
+Conflicts:	%{lustre_name}-client-dkms
+# lustre-zfs-dkms replicates the functionality old lustre-dkms package
+Provides:	%{lustre_name}-dkms
+Obsoletes:	%{lustre_name}-dkms
+%endif
+%if %{with ldiskfs}
+Requires:	patch
+Requires:	ldiskfsprogs-devel >= 1.47.1
+Requires:	%{ext4_source_rpm}
+Conflicts:	%{lustre_name}-zfs-dkms
+Conflicts:	%{lustre_name}-client-dkms
+%if "%{module}" != "%{lustre_name}-all"
+Conflicts:	%{lustre_name}-dkms
+%endif
+%endif
+%if "%{module}" != "%{lustre_name}-all"
+Conflicts:	%{lustre_name}-all-dkms
+%endif
+%endif
+Requires:	gcc, make
+Requires:	kernel-devel >= 3.10
+%if 0%{?rhel} > 7 || 0%{?fedora} > 33 || 0%{?rhel} < 1
+Recommends:	perl
+Suggests:	bash-completion
+%else
+Requires:	perl
+%endif
+Provides:	%{kmod_name} = %{version}
+Provides:	%{lustre_name}-modules = %{version}
+%if %{with servers}
+%if %{with zfs}
+Provides:	%{lustre_name}-osd-zfs = %{version}
+Provides:	kmod-%{lustre_name}-osd-zfs = %{version}
+Provides:	%{lustre_name}-osd-zfs-mount = %{version}
+%endif
+%if %{with ldiskfs}
+Provides:	%{lustre_name}-osd-ldiskfs = %{version}
+Provides:	kmod-%{lustre_name}-osd-ldiskfs = %{version}
+Provides:	%{lustre_name}-osd-ldiskfs-mount = %{version}
+%endif
+Provides:	%{lustre_name}-osd
+%else
+Provides:	%{lustre_name}-client
+%endif
+
+%description
+This package contains the dkms Lustre kernel modules.
+%if %{with ldiskfs}
+
+The required %{ext4_source_rpm} package is available from
+the repository with other debuginfo rpms.
+%endif
+
+%prep
+%setup -q -n @PACKAGE@-%{version}
+
+%build
+%{mkconf} -n %{module} -v %{version} -f dkms.conf %{mkconf_options}
+
+%install
+if [ "$RPM_BUILD_ROOT" != "/" ]; then
+    rm -rf $RPM_BUILD_ROOT
+fi
+mkdir -p $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig
+cp lustre/conf/dkms-lustre $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig
+mkdir -p $RPM_BUILD_ROOT/usr/src/
+cp -rfp ${RPM_BUILD_DIR}/@PACKAGE@-%{version} $RPM_BUILD_ROOT/usr/src/
+mv $RPM_BUILD_ROOT/usr/src/@PACKAGE@-%{version} $RPM_BUILD_ROOT/usr/src/%{module}-%{version}
+
+%clean
+if [ "$RPM_BUILD_ROOT" != "/" ]; then
+    rm -rf $RPM_BUILD_ROOT
+fi
+
+%files
+%defattr(-,root,root)
+/usr/src/%{module}-%{version}
+%config(noreplace) %{_sysconfdir}/sysconfig/dkms-lustre
+
+%post
+for POSTINST in /usr/lib/dkms/common.postinst; do
+    if [ -f $POSTINST ]; then
+        $POSTINST %{module} %{version}
+        exit $?
+    fi
+done
+dkms add -m %{module} -v %{version} %{!?not_rpm:--rpm_safe_upgrade} ||:
+dkms build -m %{module} -v %{version} || :
+dkms install --force -m %{module} -v %{version}
+
+%preun
+dkms remove -m %{module} -v %{version} --all %{!?not_rpm:--rpm_safe_upgrade}
+exit 0
+
+%changelog
+* Sat Jul 12 2025 Shaun Tancheff <shaun.tancheff@hpe.com>
+- Use common.postinst if it is available
+* Wed Dec 11 2024 Jian Yu <yujian@whamcloud.com>
+- Fix the /usr/lib/dkms/common.postinst does not exist warning.
+* Wed May 16 2018 Joe Grund <joe.grund@intel.com>
+- Add patch requirement
+* Mon Aug  1 2016 Nathaniel Clark <nathaniel.l.clark@intel.com>
+- Add option to build either ldiskfs or zfs flavour of server version
+* Sat Jan 23 2016 Bruno Faccini <bruno.faccini@intel.com>
+ - detect and handle cases where [spl,zfs]-dkms packages are not built
+ - also handle on-target configure issues
+* Wed Oct  7 2015 Bruno Faccini <bruno.faccini@intel.com>
+ - adapted for Lustre Client DKMS creation
+ - allow for on-target reconfig to prevent static deps requires
+* Mon Apr  8 2013 Brian Behlendorf <behlendorf1@llnl.gov> - 2.3.63-1
+- First DKMS packages.

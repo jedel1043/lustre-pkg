@@ -1,0 +1,138 @@
+.TH LFS-PROJECT 1 2026-03-19 "Lustre" "Lustre User Utilities"
+.SH NAME
+lfs-project \- Change or list project attribute for specified file or directory.
+.SH SYNOPSIS
+.SY "lfs project"
+.RB [ -p | --proj-inherit | --inherit
+.IR ID ]
+.RB [ -d | --directory ]
+.RB [ -r | --recursive ]
+.RB [ -s | --set-inherit ]
+.IR FILE | DIRECTORY ...
+.SY "lfs project"
+.BR -c | --check
+.RB [ -0 | --print0 ]]
+.RB [ -d | --directory ]
+.RB [ -p | --proj-inherit | --inherit
+.IR ID ]
+.RB [ -r | --recursive ]
+.IR FILE | DIRECTORY ...
+.SY "lfs project"
+.BR -C | --clear
+.RB [ -d | --directory ]
+.RB [ -k | --keep ]
+.RB [ -r | --recursive ]
+.IR FILE | DIRECTORY ...
+.YS
+.SH DESCRIPTION
+.B lfs project
+can list or change the numeric project ID and flags stored on individual
+.IR FILE "(s) or " DIRECTORIES .
+Only one numeric project ID can be stored on each file,
+similar to the numeric User ID (UID) or Group ID (GID),
+but the ProjID does not affect Unix file access permissions as they do.
+The Project ID interface is compatible with existing tools like
+.BR chattr (1)
+and
+.BR lsattr (1)
+from
+.BR e2fsprogs .
+.SH OPTIONS
+.TP
+.BR -0 ", " --print0
+Print pathnames returned by -c with a trailing NUL, suitable for use by
+.B 'xargs -0 lfs project -p'.
+.TP
+.BR -c ", " --check
+Check project ID and inherit flag on specified
+.IR FILE "(s) or " DIRECTORY .
+If
+.BR -p | --proj-inherit | --inherit
+is not given, then use the project ID on the top-level directory,
+otherwise use the specified
+.IR ID .
+If checking a directory and/or recursively, print only files that do not match
+.IR ID .
+.TP
+.BR -C ", " --clear
+Clear inherit attribute and reset project
+.I ID
+to 0 for
+.IR FILE " or " DIRECTORY .
+If the
+.BR -d | --directory
+option is set, then clear only the directory itself.
+.TP
+.BR -d ", " --directory
+Show the directory's own project ID and flags, override
+.BR -r | --recursive
+option.
+.TP
+.BR -k ", " --keep
+Keep the project ID unchanged.
+Can only be specified with
+.BR -C | --clear .
+.TP
+.BR -p ", " --proj-inherit | --inherit
+Set project ID and inherit flag on the
+.IR FILE "(s) or " DIRECTORIES.
+Set project ID with given value for the specified
+.IR FILE " or " DIRECTORY .
+.TP
+.BR -r ", " --recursive
+Recursively apply lfs project on all descendants of the
+.IR DIRECTORY .
+.TP
+.BR -p ", " --proj-inherit \fI" ID"
+Set project
+.I ID
+with given value for the specified file or directory.
+The project ID is a 32-bit integer (excluding 4294967295) or a project
+name as listed in the
+.BR /etc/projid (5)
+file.
+A username or group name can be used in place of a project name by specifying
+.BI u: USERNAME
+or
+.BI g: GROUPNAME
+respectively.
+.TP
+.BR -s ", " --set-inherit
+Set the
+.B PROJID_INHERIT
+attribute on directories, so that new files and subdirectories created
+therein will inherit the project ID and attribute from the parent.
+.SH EXAMPLES
+set directory quota on
+.BR /mnt/lustre/dir1,
+all descendants' project ID and inherit attribute are set:
+.EX
+.RS
+.B $ lfs project -srp 1000 /mnt/lustre/dir1
+.RE
+.EE
+.PP
+Check directory
+.BR /mnt/lustre/dir1,
+whether all files and directories ID are 1000, inherit attribute
+is properly set for all directories, print mismatch
+if any are found:
+.EX
+.RS
+.B $ lfs project -cr -p 1000 /mnt/lustre/dir1
+.RE
+.EE
+.SH AVAILABILITY
+.B lfs project
+is part of the
+.BR lustre (7)
+filesystem package since release 2.11.0.
+.\" Added in commit v2_10_56_0-77-g022c5a9a77
+.SH SEE ALSO
+.BR chattr (1),
+.BR lfs (1),
+.BR lfs-quota (1),
+.BR lsattr (1),
+.BR xargs (1),
+.BR mdt.enable_chprojid_gid (4),
+.BR projid (5)

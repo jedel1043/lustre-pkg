@@ -1,0 +1,177 @@
+#!/usr/bin/bash
+#
+# Takes a list of modules and unloads them and all dependent modules.
+# If a module cannot be unloaded (e.g. it's in use), an error is
+# returned.
+###############################################################################
+
+SCRIPT_NAME="$(basename "$0")"
+LCTL=${LCTL:-lctl}
+if [[ -z "$DEBUG" ]]; then
+	if [[ -n "$DEBUG_RMMOD" ]]; then
+		DEBUG=true
+	else
+		DEBUG=false
+	fi
+fi
+
+# Print help message
+print_usage() {
+	echo "$SCRIPT_NAME -h|--help"
+	echo "$SCRIPT_NAME [-d|--debug-kernel] [modulesname...]"
+	echo
+	echo -e "\t-h, --help\t\tDisplay this help message"
+	echo -e "\t-d, --debug-kernel\tDisplay lustre kernel debug messages"
+	echo -e "\tmodulesname\t\tList of lustre modules to unload. By default"
+	echo -e "\t\t\t\tldiskfs and libcfs (and their dependencies) are"
+	echo -e "\t\t\t\tselected."
+}
+
+# Print kernel debug message for lustre modules
+print_debug() {
+	local debug_file
+
+	$LCTL mark "$SCRIPT_NAME : Stop debug"
+	if [[ $DEBUG_RMMOD == "-" ]]; then
+		debug_file="" # dump to stdout
+	elif [[ "${DEBUG_RMMOD:0:1}" == "/" ]]; then
+		debug_file="$DEBUG_RMMOD"
+	else
+		debug_file=$TMP/${DEBUG_RMMOD:-debug}
+	fi
+	echo "Dump memory leak logs to $debug_file"
+	$LCTL debug_kernel $debug_file
+	DEBUG=false
+}
+
+# Unload all modules dependent on $1 (exclude removal of $1)
+unload_dep_modules_exclusive() {
+	local MODULE=$1
+
+	local DEPS="$(lsmod | awk '($1 == "'$MODULE'") { print $4 }')"
+	for SUBMOD in $(echo $DEPS | tr ',' ' '); do
+		unload_dep_modules_inclusive $SUBMOD || return 1
+	done
+	return 0
+}
+
+# Unload all modules dependent on $1 (include removal of $1)
+unload_dep_modules_inclusive() {
+	local MODULE=$1
+
+	# if $MODULE not loaded, return 0
+	lsmod | grep -E -q "^\<$MODULE\>" || return 0
+	unload_dep_modules_exclusive $MODULE || return 1
+
+	if $DEBUG; then
+		if [ "$MODULE" = 'libcfs' ]; then
+			print_debug
+		fi
+		$LCTL mark "$SCRIPT_NAME : Unload $MODULE"
+	fi
+
+	rmmod $MODULE || return 1
+	return 0
+}
+
+declare -a modules
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-h|--help)
+			print_usage >&2
+			exit 0
+			;;
+		-d|--debug-kernel)
+			if lsmod | grep -E -q '^libcfs'; then
+				DEBUG='true'
+			else
+				echo "Debug unavailable: libcfs is not loaded" >&2
+			fi
+			;;
+		-*)
+			echo "Error invalid option" >&2
+			print_usage >&2
+			exit 2
+			;;
+		*)
+			modules+=("$1")
+			;;
+	esac
+	shift
+done
+
+# To maintain backwards compatibility, ldiskfs and libcfs must be
+# unloaded if no parameters are given, or if only the ldiskfs parameter
+# is given. It's ugly, but is needed to emulate the prior functionality
+if [ "${#modules[@]}" -eq 0 ] || [ "${modules[*]}" = "ldiskfs" ]; then
+	unload_all=true
+	modules=('lnet_selftest' 'ldiskfs' 'libcfs')
+else
+	unload_all=false
+fi
+
+export KMEMLEAK=${KMEMLEAK:-/sys/kernel/debug/kmemleak}
+KMEMLEAK_MODS=/tmp/kmemleak-modules-list.txt
+if [[ -w $KMEMLEAK ]]; then
+	kmemleak_out=$(echo scan > $KMEMLEAK 2>&1 || true)
+
+	if [[ "$kmemleak_out" =~ "Device or resource busy" ]]; then
+		echo "kmemleak disabled"
+		export KMEMLEAK=disabled
+	else
+		kmemleak_pre=/tmp/kmemleak-pre-unload.txt
+
+		echo $kmemleak_out
+		cat /proc/modules > $KMEMLEAK_MODS
+		cat $KMEMLEAK > $kmemleak_pre
+		[[ -s $kmemleak_pre ]] && logger -t leak-pre -f $kmemleak_pre
+		rm -f $kmemleak_pre
+		# Clear everything here so that only new leaks show up
+		# after module unload
+		echo clear > $KMEMLEAK
+	fi
+fi
+
+# Manage debug
+if $DEBUG; then
+	echo "Lustre debug parameters:" >&2
+	$LCTL get_param debug >&2
+	$LCTL get_param debug_mb >&2
+
+	$LCTL mark "$SCRIPT_NAME : Start debug"
+fi
+
+if $unload_all; then
+	unload_dep_modules_inclusive 'ptlrpc' || exit 1
+	# LNet may have an internal ref which can prevent LND modules from
+	# unloading. Try to drop it before unloading modules.
+	# NB: we squelch stderr because lnetctl/lctl may complain about
+	# LNet being "busy", but this is normal. We're making a best effort
+	# here.
+	# Prefer lnetctl if it is present
+	if [ -n "$(which lnetctl 2>/dev/null)" ]; then
+		lnetctl lnet unconfigure 2>/dev/null
+	elif [ -n "$(which lctl 2>/dev/null)" ]; then
+		lctl net down 2>/dev/null | grep -v "LNET ready to unload"
+	fi
+fi
+
+for mod in ${modules[*]}; do
+	unload_dep_modules_inclusive $mod || exit 1
+done
+
+if $DEBUG; then
+	print_debug
+fi
+
+if [[ -f $KMEMLEAK ]]; then
+	kmemleak_post=/tmp/kmemleak-post-unload.txt
+
+	echo scan > $KMEMLEAK 2>&1 | grep -v "Device or resource busy"
+	cat $KMEMLEAK > $kmemleak_post
+	[[ -s $kmemleak_post ]] && logger -t leak-mods -f $KMEMLEAK_MODS &&
+		logger -t leak-post -f $kmemleak_post
+	rm -f $kmemleak_post $KMEMLEAK_MODS
+fi
+
+exit 0

@@ -1,0 +1,136 @@
+#
+# N.B.
+# This is the toplevel .gitignore file.  
+# This is not the place for entries that are specific to 
+# a subdirectory.  Instead add those files to the 
+# .gitignore file in that subdirectory.
+#
+# N.B. 
+# Please use 'git ls-files -i --exclude-standard'
+# command after changing this file, to see if there are
+# any tracked files which get ignored after the change.
+
+#
+# Normal rules
+#
+.cache.mk
+.dirstamp
+.deps
+.depend
+.DS_Store
+.*.cmd
+.*.d
+.*.flags
+.libs
+.tmp_versions
+.Xrefs
+*~
+\.#*
+\#*
+*.a
+*.dSYM
+*.ko
+*.la
+*.lo
+*.mod.c
+*.o
+*.dwo
+*.o.ur-safe
+*.orig
+*.rej
+*.s
+*-stamp
+*.so
+*.swp
+*.unsigned
+_lpb
+00[0-9][0-9]-*.patch
+autoMakefile
+autoMakefile.in
+config.guess
+config.log
+config.status
+config.sub
+configure
+debs
+depcomp
+install-sh
+Makefile
+missing
+modules.order
+TAGS
+
+#
+# Top level generated files specific to this top level dir
+#
+/find-provides
+/find-provides.ksyms
+/.mergeinfo-*
+/.pc
+/.Xrefs-2.5
+/acl.size
+/aclocal.m4
+/autom4te-2.53.cache
+/autom4te.cache
+/COMMIT*
+/compile
+/config.cache
+/config.h
+/config.h.in
+/undef.h
+/INSTALL
+/libtool
+/lustre.spec
+/lustre-dkms.spec
+/lustre*.tar.gz
+/lustre*.rpm
+/kmod-lustre*.rpm
+/kmp-*.files
+/kmp-*.preamble
+/mkinstalldirs
+/Module.markers
+/Module.symvers
+/Module.symvers.old
+/Modules.symvers
+/patches
+/Rules
+/series
+/stamp-h1
+/LUSTRE-VERSION-FILE
+/kconftest.*
+
+# common python venv names
+/.venv
+/venv
+
+# Vagrant artifacts
+.vagrant/
+
+# Coverity results
+*.tgz
+
+#
+# Top level generic files
+#
+!.gitignore
+tags
+
+# cscope files
+cscope.*
+
+# doxygen files
+doxygen.*
+*.mod
+
+#
+# LNet generated files
+#
+/lnet/klnds/in-kernel-o2iblnd/o2iblnd*.c
+/lnet/klnds/in-kernel-o2iblnd/o2iblnd*.h
+/lnet/klnds/o2iblnd/Module.symvers
+/debian/changelog
+/debian/control
+
+# coverage artifacts:
+*.gcno
+lustre/tests/lcov-merge.sh

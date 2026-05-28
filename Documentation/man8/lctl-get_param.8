@@ -1,0 +1,203 @@
+.TH LCTL-GET_PARAM 8 2026-03-06 Lustre "Lustre Configuration Utilities"
+.SH NAME
+lctl-get_param \- retrieve configuration parameters
+.SH SYNOPSIS
+.SY "lctl get_param"
+.RB [ --dshbak | -b ]
+.RB [ --color | -c ]
+.RB [ --classify | -F ]
+.RB [ --header | -H ]
+.RB [ --links | -l ]
+.RB [ --no-links | -L ]
+.RB [ --merge | -m ]
+.RB [ --no-merge | -M ]
+.RB [ --no-name | -n ]
+.RB [ --only-name | -N ]
+.BR [ --module | -o ]
+.RB [ --path | -p ]
+.RB [ --readable | -r ]
+.RB [ --recursive | -R ]
+.RB [ --tunable | -t ]
+.RB [ --writable | -w ]
+.RB [ --yaml | -y ]
+.IR PARAM_PATH1 " [" PARAM_PATH2 " ...]"
+.YS
+.SH DESCRIPTION
+Get the value of the named Lustre or LNet
+.I PARAMETER
+on the local node. Parameter names consist of one or more components,
+separated by a '.' (period). Each component may be specified by plain text
+or by a wildcard in the
+.BR glob (7)
+format.
+When wildcards are used, more than one parameter may match and be returned.
+Parameters are often, but not always, of the form
+.IR obd_name . obd_instance . parameter_name ,
+where
+.I obd_name
+is one of the OBD object types, like
+.BR ldlm ", " llite ", " lmv ", " lov ", " mdc ", " osc ,
+etc., and
+.I obd_instance
+is the name of a Lustre device, like
+.BR testfs-OST0000 ,
+but may be a specific component, or contain wildcards to match some or all
+devices on the node. Many parameters are readable as a regular user, though
+some of them are accessible only by the root user for security or
+implementation reasons. Parameters that match a directory will be shown in blue
+and symlinks will be shown in cyan.
+.SH OPTIONS
+.TP
+.BR -b ", " --dshbak
+Aggregate parameters with wildcards whenever a device number appears in the
+parameter name.
+By default --merge is enabled with this option to merge the simplified names.
+Specify --no-merge if you want the parameter names with wildcards but do not
+want them to be merged. See
+.BR lctl-list_param (8)
+for examples.
+.TP
+.BR -c ", " --color=auto|always|never
+Use one of auto|always|never as the rule of when to apply color. The default is
+auto which will display color only when the output is to a terminal.
+The NO_COLOR environment variable is supported.
+.TP
+.BR -F ", " --classify
+Append a '/', '@', or '=' suffix for directories, symlinks, and writeable
+parameters, respectively.
+.B "lctl get_param -NF"
+is equivalent to
+.BR "lctl list_param -F" .
+.TP
+.BR -H ", " --header
+Prefix each parameter value line with the parameter name, as a header.
+It also print a line for empty values.
+It could be useful when wildcards are used and filtering the output.
+.TP
+.BR -l ", " --links
+Follow symlinks while searching for parameters. (enabled by default)
+.TP
+.BR -L ", " --no-links
+Do not follow symlinks while searching for parameters.
+.TP
+.BR -n ", " --no-name
+Print only the parameter value and not parameter name.
+This may be confusing if multiple parameter names are specified,
+as the parameters are not identified,
+and may not be returned in the order that they are specified.
+.TP
+.BR -m ", " --merge
+Merge all parameters that have the same name and value such that only the
+first one will be shown. Parameters with the same name but different values have
+the difference highlighted in red.
+.TP
+.BR -M ", " --no-merge
+Do not merge parameters. All parameters will be shown, regardless if they are
+have the same name and value or not. Duplicate parameters will be printed in
+yellow, if the values are different the difference will be highlighted in red.
+.TP
+.BR -N ", " --only-name
+Print only matched parameter names and not the values. This is especially
+useful when using patterns. This option is equivalent to
+.TP
+.BR -o ", " --module
+Include modules params in the parameter search path, meaning that matching
+module parameters will be shown along side with Lustre parameters.
+.TP
+.BR -p ", " --path
+Print the parameter path instead of the parameter name.
+.TP
+.BR -r ", " --readable
+Print only parameters that are have read permission. Can be used with
+.RB [ -w | --writable ]
+to print parameters that are both readable and writable.
+.TP
+.BR -R ", " --recursive
+Recursively show all of the parameter names below the specified name.
+.TP
+.BR -t ", " --tunable
+Print only tunable parameters. This avoids all parameters containing any of the
+following:
+.br
+.BR console | debug_ | fail_ | force | import | nis | panic_ | srpc_sepol | stats | target_obd
+.TP
+.BR -w ", " --writable
+Print only parameters that are have write permission. Can be used with
+.RB [ -r | --readable ]
+to print parameters that are both readable and writable.
+.TP
+.BR -y ", " --yaml
+Some paramters can be presented in a YAML format but are not by default. This
+will format the parameter data in YAML. If the YAML provides a source: field
+it can be suppressed with the -n option.
+.SH BASH COMPLETION
+This command supports
+.BR bash-completion (1)
+for tab completion of parameter names available on the local node,
+with suitable shell and package installation.
+This can greatly simplify finding which parameters are available,
+instead of running
+.BR lctl-list_param (8)
+repeatedly.
+To list long options (more descriptive and easily understood) type
+.RB ' --TAB ',
+and to list short options type
+.RB ' -TAB '.
+.SH EXAMPLES
+Use wildcards to obtain all matching parameters:
+.RS
+.EX
+.B # lctl get_param osc.*.max_pages_per_rpc
+osc.myth-OST0000-osc-ffff8803c9c0f000.max_pages_per_rpc=1024
+osc.myth-OST0001-osc-ffff8803c9c0f000.max_pages_per_rpc=1024
+osc.testfs-OST0000-osc-ffff8803c9c0f000.max_pages_per_rpc=1024
+osc.testfs-OST0001-osc-ffff8803c9c0f000.max_pages_per_rpc=1024
+osc.testfs-OST0002-osc-ffff8803c9c0f000.max_pages_per_rpc=1024
+.P
+.B # lctl get_param {mdc,osc}.testfs-*.max_rpcs_in_flight
+mdc.testfs-MDT0000-mdc-ffff8803c9c0f000.max_rpcs_in_flight=16
+osc.testfs-OST0000-osc-ffff8803c9c0f000.max_rpcs_in_flight=8
+osc.testfs-OST0001-osc-ffff8803c9c0f000.max_rpcs_in_flight=8
+osc.testfs-OST0002-osc-ffff8803c9c0f000.max_rpcs_in_flight=8
+.EE
+.RE
+.PP
+Use -n to obtain output that can be pipped into further commands:
+.RS
+.EX
+.B # lctl get_param -n debug
+super warning dlmtrace error emerg rpctrace vfstrace config console
+.P
+.B # lctl get_param -n devices
+0 UP osd-ldiskfs MGS-osd MGS-osd_UUID 4
+.EE
+.RE
+.PP
+Some parameters can be shown in a YAML format but require the
+.B -y
+option to do so:
+.RS
+.EX
+.B # lctl get_param -y devices
+devices:
+- index: 0
+  status: UP
+  type: osd-ldiskfs
+  name: MGS-osd
+  uuid: MGS-osd_UUID
+  refcount: 4
+.EE
+.RE
+.SH AVAILABILITY
+.B lctl get_param
+is part of the
+.BR lustre (7)
+filesystem package since release 1.7.0
+.\" Added in commit 1.6.1-673-g04af22fc24
+.SH SEE ALSO
+.BR lustre (7),
+.BR lctl (8),
+.BR lctl-find_param (8),
+.BR lctl-help_param (8),
+.BR lctl-list_param (8),
+.BR lctl-set_param (8)

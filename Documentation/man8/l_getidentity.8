@@ -1,0 +1,128 @@
+.TH L_GETIDENTITY 8 2024-08-29 Lustre "Lustre Configuration Utilities"
+.SH NAME
+l_getidentity \- Handle Lustre user/group cache upcall
+.SH SYNOPSIS
+.SY l_getidentity
+.RB { -d | mdtname }
+.I UID
+.YS
+.SH DESCRIPTION
+The identity upcall command specifies the path to an executable that,
+when properly installed, is invoked to resolve the numeric
+.I UID
+to a group membership list.
+.PP
+.B l_getidentity
+is the reference implementation of the user/group cache upcall.
+This command is normally run directly by the Lustre MDS service
+and specifies the
+.B mdtname
+argument for the MDT that should be updated.
+.SS "The permissions file"
+.B /etc/lustre/perm.conf
+supports a flat file database of permissions in the format:
+.EX
+.IB UID <space> NID <space> PERM1 , PERM2 ,..., PERMN
+.EE
+where
+.I PERM
+is one of:
+.B [no]setuid
+.B [no]setgid
+.B [no]setgrp
+.B [no]rmtacl
+.B [no]rmtown
+.PP
+.BR nss (5)
+modules can be enabled for auth handling by adding a 
+.B lookup 
+command with a list of nss modules to the first line of
+.BR perm.conf
+.PP
+At the time of writing, known 
+.BR nss (5)
+modules include:
+.BR lustre ", " nss_files ", " ldap ", " nis ", " sss ", and" systemd
+additional modules may be documented in
+.BR nsswitch.conf (5)
+or installed separately.
+.PP
+.BR nss (5)
+modules are searched in order. Once an entry is found in
+the module no further modules are searched.
+.PP
+A special
+.B lustre
+module is used to enable lustre specific password and group
+auth by way of
+.B /etc/lustre/passwd
+and
+.B /etc/lustre/group
+.PP
+For historical reasons
+.B nss_files
+was needed to use the
+.BR nss (5)
+.B files
+module.
+This alias is now deprecated and will be removed in a future release.
+.SH OPTIONS
+.TP
+.B -d
+Run in debug mode and print supplementary groups information for
+.I UID
+to
+.B stdout
+instead of updating Lustre.
+.SH FILES
+.EX
+.RI /{proc,sys}/fs/lustre/mdt/ mdt-service /identity_upcall
+.RI /etc/lustre/perm.conf
+.RI /etc/lustre/passwd
+.RI /etc/lustre/group
+.EE
+.SH LIMITS
+A maximum of 8 nss modules can be enabled.
+.SH EXAMPLES
+The identity upcall command can be specified via:
+.RS
+.EX
+.BI "lctl set_param mdt." MDTNAME .identity_upcall= PATH_TO_UPCALL
+.EE
+.RE
+.PP
+Enable lustre auth and ldap:
+.RS
+.EX
+[/etc/lustre/perm.conf]
+.B # lookup lustre ldap
+\&
+[/etc/lustre/passwd]
+root:x:0:0:root:/root:/bin/bash
+\&...
+[/etc/lustre/group]
+root:x:0:root
+\&...
+.EE
+.RE
+Lustre passwd and group files use the same format as the system
+.BR passwd (5)
+and
+.BR group (5)
+files.
+.P
+In this configuration root is local to the cluster
+and all other perms are delegated to ldap.
+.EE
+.SH AVAILABILITY
+.B l_getidentity
+is part of the
+.BR lustre (7)
+filesystem package since release 1.7.0
+.\" Added in commit 1.6.0.1-152-gd2d56f38da
+.SH SEE ALSO
+.BR group (5),
+.BR nss (5),
+.BR passwd (5)
+.PP
+Lustre Programming Interfaces section of Lustre Operations Manual.

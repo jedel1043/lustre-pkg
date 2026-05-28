@@ -1,0 +1,18 @@
+#!/usr/bin/bash
+#
+# lsvcgss      Lustre GSS daemon
+#
+
+# If service is not configured, launch with all mechs
+# -k -- Enable kerberos support
+# -s -- Enable shared key support
+# -z -- Enable gssnull support
+LSVCGSSDARGS="-k -s -z"
+
+# Check for and source configuration file
+[ -f /etc/sysconfig/lsvcgss ] && . /etc/sysconfig/lsvcgss
+
+/usr/sbin/lsvcgssd ${LSVCGSSDARGS}
+RETVAL=$?
+
+exit $RETVAL

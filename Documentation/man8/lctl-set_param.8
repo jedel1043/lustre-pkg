@@ -1,0 +1,218 @@
+.TH LCTL-SET_PARAM 8 2026-03-06 Lustre "Lustre Configuration Utilities"
+.SH NAME
+lctl-set_param \- Lustre tunable parameter setting utility
+.SH SYNOPSIS
+.SY "lctl set_param"
+.RB [ --client | -C\c
+.RI [ FSNAME ]]
+.RB [ --delete | -d ]
+.RB [ --file | -F ]
+.RB [ --no-name | -n ]
+.RB [ --module | -o ]
+.RB [ --permanent | -P ]
+.RB [ --threads | -t\c
+.RI [ THREAD_COUNT ]]
+.IR PARAMETER \= VALUE " ..."
+.SY "lctl set_param -F"
+.I FILENAME
+.YS
+.SH DESCRIPTION
+Set the value of the named Lustre or LNet
+.I PARAMETER
+to
+.I VALUE
+on the local node, or permanently on the MGS for the whole filesystem.
+Parameter names consist of one or more components,
+separated by a '.' (period).
+Each component may be specified by plain text or with a wildcard in the
+.BR glob (7)
+format, typically using
+.RB ' * '
+to match all named instances of the given parameter.
+When wildcards are used, more than one parameter may match and be changed,
+simplifying configuration for large filesystems with many instances of a device.
+Parameters are often, but not always, of the form
+.IR OBD_NAME.OBD_INSTANCE.PARAMETER_NAME ,
+where
+.I OBD_NAME
+is one of the OBD object types, like
+.BR ldlm ", " llite ", " lmv ", " lov ", " mdc ", " osc ,
+etc., and
+.I OBD_INSTANCE
+is the name of a Lustre device, like
+.BR testfs-OST0000 ,
+but may be a specific component,
+or contain wildcards to match some or all device instances.
+Parameters can only be modified by the root user for security reasons.
+.SH OPTIONS
+The various options supported by
+.B lctl get_param
+are listed and explained below:
+.TP
+.BR -C ", " --client
+Instead of setting the parameter once, write the parameter to the
+.B /etc/lustre/mount.client.params
+config file on the local node.
+On all future Lustre client mounts
+.B on only that node
+those parameters will be set on the local node.
+If
+.I FSNAME
+was specified, the parameters will be instead written to the filesystem-specific
+.BI /etc/lustre/mount. FSNAME .params
+config file on the local node.
+The filesystem specific params will be set only when that filesystem is mounted
+on that local node and will override the more generic client mount parameters
+from the
+.B /etc/lustre/mount.client.params
+file or permanent parameters from the MGS.
+.TP
+.BR -d ", " --delete
+Remove the permanent setting (only for filesystem-wide parameters set with
+.B -P
+on the MGS or with
+.B -C
+on the local node).
+.TP
+.BR -F ", " --file
+Set parameters from
+.I FILENAME
+instead of from the command-line. The contents of
+.I FILENAME
+is YAML format, created by the output from running
+.RB ' "lctl llog_print"
+.I FSNAME\c
+.BR -client ',
+or from any other valid llog configuration log as listed by
+.RB ' "lctl llog_catlist" '.
+.TP
+.BR -n ", " --no-name
+Disable printing of the parameter name after setting it.
+.TP
+.BR -o ", " --module
+Allow module parameters to be visible to the
+.B lctl set_param
+command.
+The module parameters will be set on the local node at module load time.
+.TP
+.BR -P ", " --permanent
+Set
+.I PARAMETER
+permanently in the MGS configuration log for
+.B all
+mountpoints using the MGS where the command is run, both now and in the future.
+To limit wildcard
+.I PARAMETER
+matching to specific filesystems or parameters, itvis preferred that
+.I PARAMETER
+contains a suitably-specific expression for the
+.I OBD_NAME
+and
+.IR OBD_INSTANCE ,
+such as the
+.B FSNAME
+and/or specific target name.
+.TP
+.BR -t ", " --threads " ["\fITHREAD_COUNT\fR]
+Spawn threads to set multiple parameters in parallel, optionally specifying
+the maximum number of threads to run (with no space between
+.B -t
+and
+.IR THREAD_COUNT ).
+Without this option the specified parameter(s) are set serially.
+If
+.B lctl
+was compiled without pthread support, a warning message will be
+printed and parameters will be set serially. If
+.B -t
+is specified without any argument, it runs up to 8 threads by default.
+.SH BASH COMPLETION
+This command supports
+.BR bash-completion (1)
+for tab completion of parameter names available on the local node,
+with suitable shell and package installation.
+This can greatly simplify finding which parameters are available,
+instead of running
+.BR lctl-list_param (8)
+repeatedly.
+To list long options (more descriptive and easily understood) type
+.RB ' --TAB ',
+and to list short options type
+.RB ' -TAB '.
+.SH EXAMPLES
+Set two parameters temporarily on the local node:
+.RS
+.EX
+.B client# lctl set_param jobid_name=%H:%e:%u debug_mb=1024
+jobid_name=%H:%e:%u
+debug_mb=1024
+.EE
+.RE
+.PP
+Set two parameters, but don't print parameter names with the values:
+.RS
+.EX
+.B client# lctl set_param -n jobid_name=%H:%e:%u debug_mb=1024
+%H:%e:%u
+1024
+.EE
+.RE
+.PP
+Run two parallel threads to set parameters that may do a lot of work:
+.RS
+.EX
+.B client# lctl set_param -t2 "ldlm.namespaces.*osc*.lru_size=clear"
+ldlm.namespaces.fsname-OST0001-osc-MDT0000.lru_size=clear
+ldlm.namespaces.fsname-OST0000-osc-MDT0000.lru_size=clear
+.EE
+.RE
+.PP
+Permanently set a parameter with a wildcard in the MGS config llog:
+.RS
+.EX
+.B mgs# lctl set_param -P osc.testfs-OST*.max_dirty_mb=512
+osc.testfs-OST0000-osc-ffff8803c9c0f000.max_dirty_mb=512
+osc.testfs-OST0001-osc-ffff8803c9c0f000.max_dirty_mb=512
+osc.testfs-OST0002-osc-ffff8803c9c0f000.max_dirty_mb=512
+osc.testfs-OST0003-osc-ffff8803c9c0f000.max_dirty_mb=512
+osc.testfs-OST0004-osc-ffff8803c9c0f000.max_dirty_mb=512
+.EE
+.RE
+.PP
+Permanently set
+.B osc.testfs-*.max_dirty_mb=2000
+when mounting 'testfs' and
+.B osc.testfs-*.max_dirty_mb=1024
+for other Lustre mountpoints on this client node:
+.RS
+.EX
+.B client# lctl set_param -C=test_fs osc.testfs-*.max_dirty_mb=2000
+.B client# lctl set_param -C osc.*.max_dirty_mb=1024
+.RE
+.EE
+.PP
+Backup the
+.RB ' params '
+configuration log, and then restore it (at some later time):
+.RS
+.EX
+.B mgs# lctl llog_print params > /home/admin/params.yaml
+[ params log is erased, not shown here ]
+.B mgs# lctl set_param -F /home/admin/params.yaml
+.RE
+.EE
+.SH AVAILABILITY
+.B lctl set_param
+is part of the
+.BR lustre (7)
+filesystem package since release 1.7.0
+.\" Added in commit 1.6.0-903-g04af22fc24
+.SH SEE ALSO
+.BR lustre (7),
+.BR lctl (8),
+.BR lctl-find_param (8),
+.BR lctl-get_param (8),
+.BR lctl-help_param (8),
+.BR lctl-list_param (8),
+.BR lctl-llog_catlist (8),
+.BR lctl-llog_print (8)

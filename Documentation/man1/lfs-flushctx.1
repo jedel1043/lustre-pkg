@@ -1,0 +1,59 @@
+.TH LFS-FLUSHCTX 1 2024-08-15 Lustre "Lustre User Utilities"
+.SH NAME
+lfs-flushctx \- flush security context of current user.
+.SH SYNOPSIS
+.SY "lfs flushctx"
+.RB [ --help | -h ]
+.RB [ -k ]
+.RB [ -r ]
+.RI [ rootpath ]
+.YS
+.SH DESCRIPTION
+Flush security context of current user, for Lustre file system as specified by
+.BR rootpath ,
+or for all mounted Lustre file systems.
+.P
+If
+.B -k
+is specified, proceed to Kerberos credentials cache destroy as well,
+by calling kdestroy.
+.P
+If
+.B -r
+is specified, reap revoked keys from the session keyring.
+.SH OPTIONS
+.TP
+.BR -k
+Destroy the Kerberos credentials cache.
+.TP
+.BR -r
+Remove revoked keys from the session keyring.
+.TP
+.BR -h
+Print usage message.
+.SH EXAMPLES
+Flush security context of current user for Lustre file system mounted
+under /mnt/lustre, as well as destroys its Kerberos credentials cache and reaps
+revoked keys from its session keyring. This is the recommended way of using the
+command:
+.RS
+.EX
+.B # lfs flushctx -k -r /mnt/lustre
+.EE
+.RE
+.PP
+This simply flushes security context of current user for all mounted Lustre file
+systems:
+.RS
+.EX
+.B # lfs flushctx
+.EE
+.RE
+.SH AVAILABILITY
+.B lfs flushctx
+is part of the
+.BR lustre (7)
+filesystem package since release 2.0.0
+.\" Added in commit 1.6.0.1-152-gd2d56f38da
+.SH SEE ALSO
+.BR lfs (1),

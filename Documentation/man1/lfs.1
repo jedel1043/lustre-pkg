@@ -1,0 +1,216 @@
+.TH LFS 1 2026-03-06 Lustre "Lustre User Utilities"
+.SH NAME
+lfs \- Lustre client utility for file layouts and space usage
+.SH SYNOPSIS
+.SY lfs
+.I COMMAND
+.RI [ ARGS ]
+.SY lfs
+.YS
+.SH DESCRIPTION
+.B lfs
+is used by all users to create new files with a specific layout pattern,
+show the layout (geomety and OST objects) for a specific file or directory,
+show the space and inode usage of filesystem targets, and more.
+It can be invoked non-interactivly to execute the specified
+.BR COMMAND ,
+or it can be run interactively without arguments to execute multiple commands.
+.PP
+The most common commands are:
+.BR df ,
+.BR find ,
+.BR getstripe ,
+.BR setstripe ,
+.BR migrate ,
+.BR mirror ,
+and
+.BR project .
+Most commands are described in separate man pages of the form
+.BI lfs- COMMAND
+as listed in the
+.B SEE ALSO
+section at the end.
+Some sub-commands do not have their own detailed man page are listed below.
+.SH OPTIONS
+The following options can be used to invoke
+.BR lfs .
+.TP
+.BI help " COMMAND"
+To get basic help on the meaning and syntax of a command.
+.TP
+.BR --ignore_errors ", " ignore_errors
+Ignore errors during script processing.
+.TP
+.B --list-commands
+Output a list of the commands supported by the lctl utility.
+.TP
+.BR -V ", " --version
+Output the build version of the utility itself.
+.TP
+.BR exit ", " quit
+Quit an interactive session.
+.SH BASH COMPLETION
+The
+.B lfs
+command supports
+.BR bash-completion (1)
+for tab completion of sub-command names and their options,
+with proper package installation and supporing shell usage.
+This can greatly simplify finding available commands,
+their options, and in many cases option arguments.
+.PP
+To list commands, type
+.RB ' lfs\ TAB ',
+or after partially completing a command name.
+To list long options (more descriptive and easily understood) type
+.RI ' COMMAND
+.BR --TAB ',
+and to list short options type
+.RI ' COMMAND
+.BR -TAB '.
+Some commands also allow context-specific completion of arguments to the
+command-line option, for example generating a list of mountpoints for the
+.B df
+command, or a list of OST pools for the
+.B --pool
+option.
+.SH COMMANDS
+.TP
+.BR check " {" mgts | mdts | osts | all "} [" \fIPATH ]
+Display the status of the MGTs, MDTs or OSTs (as specified in the command)
+or all the servers (MGTs, MDTs and OSTs). If
+.I PATH
+is provided, display the status of the lustre file system mounted at specified
+.I PATH
+only. This command will make an RPC to all the servers in scope to discover
+the server status. NOTE:
+.B lfs osts
+may be preferable for some use cases.
+.TP
+.BR data_version
+Show the last modified version code for a file. See
+.BR lfs-data_version (1).
+.TP
+.B flushctx
+Flush security context of a user.  See
+.BR lfs-flushctx (1).
+.TP
+.B migrate
+Migrate a file to new OST(s), or directory to new MDTs. See
+.BR lfs-migrate (1).
+.TP
+.BR mkdir | setdirstripe
+Create a directory with a specific layout or MDTs.  See
+.BR lfs-mkdir (1).
+.TP
+.BR mdts " [" PATH ]
+List all the MDTs for all mounted filesystems. If a
+.I PATH
+is provided that is located on a lustre mounted file system
+then only the MDTs belonging to that filesystem are displayed.
+.TP
+.BR osts " [" PATH ]
+List all the OSTs for all mounted filesystems. If a
+.I PATH
+is provided that is located on a lustre mounted file system
+then only the OSTs belonging to that filesystem are displayed. This command will
+use a cached value for the OST status and will not make a RPC to discover
+status. The cached value will be updated by the client during the
+course of normal operations and would typically be less than 30 seconds old.
+NOTE:
+.B lfs check osts
+may be preferable for some use cases.
+.TP
+.BR pool_list " {" \fIFILESYSTEM }[ .\fIPOOLNAME "] | {" \fIPATHNAME }
+List the pools in
+.I FILESYSTEM
+or
+.IR PATHNAME ,
+or the OSTs in
+.IR FILESYSTEM.POOL .
+.TP
+.BR project
+Shows or sets the PROJECT ID of a file or directory. See
+.BR lfs-project (1).
+.TP
+.BR rm_entry " | " rmentry
+Remove the name entry of a remote directory. This command will only delete
+the name entry, making the remote directory inaccessible. This can only be
+done by the administrator.
+.TP
+.BI swap_layouts "FILENAME1 FILENAME2"
+Swap the data (layout and OST objects) of two regular files. The
+two files have to be in the same filesystem, owned by the same user,
+reside on the same MDT and writable by the user.
+.P
+Swapping the layout of two directories is not permitted.
+.TP
+.B setstripe
+Set the layout on a new file, or default on a directory. See
+.BR lfs-setstripe (1).
+.TP
+.B unlink_foreign
+Remove the foreign files/dirs that are prevented to be using
+regular unlink/rmdir commands/syscalls. Works also for regular files/dirs.
+.SH EXAMPLES
+Check the status of all servers (MGT, MDT, OST):
+.RS
+.EX
+.B # lfs check all
+.EE
+.RE
+.PP
+List all the OSTs:
+.RS
+.EX
+.B # lfs osts
+.EE
+.RE
+.PP
+List all the MDTs:
+.RS
+.EX
+.B # lfs mdts
+.EE
+.RE
+.SH AVAILABILITY
+The
+.B lfs
+command is part of the
+.BR lustre (7)
+filesystem package since release 0.10.0
+.\" Added in commit 0.9.1
+.SH SEE ALSO
+.BR lfs-changelog (1),
+.BR lfs-changelog_clear (1),
+.BR lfs-data_version (1),
+.BR lfs-df (1),
+.BR lfs-fid2path (1),
+.BR lfs-find (1),
+.BR lfs-flushctx (1),
+.BR lfs-getdirstripe (1),
+.BR lfs-getname (1),
+.BR lfs-getsom (1),
+.BR lfs-getstripe (1),
+.BR lfs-heat_get (1),
+.BR lfs-heat_set (1),
+.BR lfs-hsm (1),
+.BR lfs-ladvise (1),
+.BR lfs-migrate (1),
+.BR lfs_migrate (1),
+.BR lfs-mirror (1),
+.BR lfs-mkdir (1),
+.BR lfs-path2fid (1),
+.BR lfs-pcc (1),
+.BR lfs-project (1),
+.BR lfs-quota (1),
+.BR lfs-rm_entry (8),
+.BR lfs-rmfid (1),
+.BR lfs-setdirstripe (1),
+.BR lfs-setquota (1),
+.BR lfs-setstripe (1),
+.BR lfs-somsync (1),
+.BR lfs-swap_layouts (1),
+.BR lfs-unlink_foreign (1),
+.BR lustre (7),
+.BR lctl (8)

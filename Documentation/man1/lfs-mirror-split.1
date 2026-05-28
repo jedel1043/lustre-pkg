@@ -1,0 +1,126 @@
+.TH LFS-MIRROR-SPLIT 1 2024-08-20 Lustre "Lustre User Utilities"
+.SH NAME
+lfs-mirror-split \- split a specified mirror from an existing mirrored file
+.SH SYNOPSIS
+.SY "lfs mirror split"
+.RB { --mirror-id
+.I MIRROR_ID
+|
+.BR --component-id | --comp-id | -I
+.I COMP_ID
+|
+.B --pool
+.IR POOL }
+.RB [ --destroy | -d ]
+.RB [ -f
+.IR NEW_FILE ]
+.I MIRRORED_FILE
+.YS
+.SH DESCRIPTION
+This command splits a mirror with mirror ID
+.I MIRROR_ID
+or containing a component with
+.I COMP_ID
+or containing a component on
+.I POOL
+out of a mirrored file specified by the path name
+.IR MIRRORED_FILE .
+By default, the layout of the split mirror will be stored into a new file named
+.IR MIRRORED_FILE .mirror~ MIRROR_ID .
+If
+.B -f
+.I NEW_FILE
+option is specified,
+then the layout of the split mirror will be stored into the named file.
+.p
+If
+.I MIRRORED_FILE
+has only one mirror existing after split,
+it will be converted to a regular non-mirrored file.
+.P
+If the original
+.I MIRRORED_FILE
+is not a mirrored file, then the command will return an error.
+.SH OPTIONS
+.TP
+.BI --mirror-id " MIRROR_ID"
+The numerical unique identifier for a mirror. The mirror ID is unique within a
+mirrored file and is automatically assigned at file creation or extension time.
+It can be fetched by
+.B lfs getstripe
+command (see
+.BR lfs (1)).
+.TP
+.BI --comp-id " COMP_ID"
+The numerical unique identifier for a component contained within a mirror.
+.TP
+.BI --pool " POOL"
+The pool storing a component contained within a mirror.
+.TP
+.BR -d ", " --destroy
+This option indicates the split mirror will be destroyed.
+.P
+This option is mandatory on encrypted files when the encryption key is not
+available. Otherwise operation results in
+.BR -ENOKEY .
+.TP
+.BI -f " NEW_FILE"
+This option indicates the layout of the split mirror will be stored into
+.IR NEW_FILE .
+.P
+This option cannot be used on encrypted files when the encryption key is not
+available. It will result in
+.BR -ENOKEY .
+.SH EXAMPLES
+Split a mirror with ID 1 out of /mnt/lustre/file1 and store it into
+/mnt/lustre/file1.mirror~1:
+.RS
+.EX
+.B # lfs mirror split --mirror-id 1 /mnt/lustre/file1
+.EE
+.RE
+.PP
+Split a mirror with ID 2 out of /mnt/lustre/file1 and destroy it:
+.RS
+.EX
+.B # lfs mirror split --mirror-id 2 -d /mnt/lustre/file1
+.EE
+.RE
+.PP
+Split a mirror with ID 3 out of /mnt/lustre/file1 and store it into
+/mnt/lustre/file2:
+.RS
+.EX
+.B # lfs mirror split --mirror-id 3 -f /mnt/lustre/file2 /mnt/lustre/file1
+.EE
+.RE
+.PP
+Split a mirror containing the component with ID 65537 out of /mnt/lustre/file1
+and destroy it:
+.RS
+.EX
+.B # lfs mirror split --comp-id 65537 -d /mnt/lustre/file1
+.EE
+.RE
+.PP
+Split a mirror on pool lustre-nvme out of /mnt/lustre/file1 and destroy it:
+.RS
+.EX
+.B # lfs mirror split --pool lustre-nvme -d /mnt/lustre/file1
+.EE
+.RE
+.SH AVAILABILITY
+The
+.B lfs mirror split
+command is part of the
+.BR lustre (7)
+filesystem package since release 2.11.0
+.\" Added in commit v2_10_58_0-2-g23b2d47818
+.SH SEE ALSO
+.BR lfs (1),
+.BR lfs-mirror-create (1),
+.BR lfs-mirror-delete (1),
+.BR lfs-mirror-extend (1),
+.BR lfs-mirror-resync (1),
+.BR lfs-mirror-verify (1),
+.BR lfs-setstripe (1)

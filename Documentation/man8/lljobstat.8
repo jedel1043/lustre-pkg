@@ -1,0 +1,84 @@
+.TH LLJOBSTAT 8 2024-08-28 Lustre "Lustre Configuration Utilities"
+.SH NAME
+lljobstat \- display top jobs and statistics
+.SH SYNOPSIS
+.SY "llobdstat"
+.RB [ -c|--count
+.IR COUNT ]
+.RB [ -i|--interval
+.IR INTERVAL ]
+.RB [ -n|--repeats
+.IR REPEATS ]
+.RB [ -m|--mdt ]
+.RB [ -o|--ost ]
+.RB [ --param
+.IR PARAM ]
+.RB [ --fullname ]
+.RB [ --no-fullname ]
+.YS
+.SH DESCRIPTION
+.B lljobstat
+reads and parses the job_stats files on local node,
+sums up the operations of each job, and displays the top jobs.
+Repeat for some times or forever with given interval.
+.P
+Type Ctrl-C to stop printing.
+.SS Abbreviations
+.B lljobstat
+displays abbreviations of operation names as listed below:
+.P
+.nf
+ops: total number of operations
+cl: close,      cr: create,     dt: destroy,    fa: fallocate, ga: getattr
+gi: get_info,   gx: getxattr,   ln: link,       mi: migrate,   mk: mkdir
+mn: mknod,      mv: rename,     op: open,       pa: prealloc,  pu: punch
+qc: quotactl,   rd: read,       rm: rmdir,      sa: setattr,   si: set_info
+st: statfs,     sx: setxattr,   sy: sync,       ul: unlink,    wr: write
+.fi
+.SH OPTIONS
+.TP
+.BR -c ", " --count \ \fICOUNT
+how many top jobs are listed. Default 5.
+.TP
+.BR -i ", " --interval \ \fIINTERVAL
+interval in seconds before list top jobs again. Default 10.
+.TP
+.BR -n ", " --repeats \ \fIREPEATS
+how many times to repeat. Default unlimited.
+.TP
+.BR -m ", " --mdt
+get data from only job_stats of MDTs.
+.TP
+.BR -o ", " --ost
+get data from only job_stats of OSTs.
+.TP
+.BI --param " PARAM"
+get data from only PARAM path. For example, "*.lustre-*.job_stat".
+.TP
+.B --fullname
+show full name of operations. Default no.
+.TP
+.B --no-fullname
+show abbreviated name of operations.
+.TP
+.BR -h ", " --help
+print help message.
+.SH EXAMPLES
+.EX
+.B # lljobstat -n 1 -c 3
+---
+timestamp: 1665623345
+top_jobs:
+- rm.0:            {ops: 99, cl: 32, ul: 16, rm: 16, ga: 19, st: 16}
+- touch.500:       {ops: 48, op: 8, cl: 8, mn: 8, ga: 8, sa: 16}
+- dd.0:            {ops: 38, op: 4, cl: 4, mn: 1, ga: 1, sa: 3, gx: 3, wr: 19, pu: 3}
+\[char46]..
+.EE
+.SH AVAILABILITY
+.B lljobstat
+is part of the
+.BR lustre (7)
+filesystem package since release 2.16.0
+.\" Added in commit v2_15_53-96-ge2812e8773
+.SH SEE ALSO
+.BR llobdstat (8)

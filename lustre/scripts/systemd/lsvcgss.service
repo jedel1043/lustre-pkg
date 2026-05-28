@@ -1,0 +1,14 @@
+[Unit]
+Description=Lustre GSS daemon
+Requires=network-online.target
+After=network-online.target openibd.service rdma.service opa.service
+
+[Service]
+Type=forking
+RemainAfterExit=yes
+StandardOutput=syslog
+ExecStart=/usr/bin/lsvcgss_sysd
+ExecReload=/bin/kill -HUP $MAINPID
+
+[Install]
+WantedBy=multi-user.target

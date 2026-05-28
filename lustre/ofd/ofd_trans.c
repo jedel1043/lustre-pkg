@@ -1,0 +1,118 @@
+// SPDX-License-Identifier: GPL-2.0
+
+/*
+ * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Use is subject to license terms.
+ *
+ * Copyright (c) 2012, 2014, Intel Corporation.
+ */
+
+/*
+ * This file is part of Lustre, http://www.lustre.org/
+ *
+ * This file provides functions for OBD Filter Device (OFD) transaction
+ * management.
+ *
+ * Author: Alex Zhuravlev <alexey.zhuravlev@intel.com>
+ * Author: Mikhail Pershin <mike.pershin@intel.com>
+ */
+
+#define DEBUG_SUBSYSTEM S_FILTER
+
+#include <obd_class.h>
+#include <lustre_nodemap.h>
+#include "ofd_internal.h"
+
+/**
+ * ofd_trans_create() - Create new transaction in OFD.
+ * @env: execution environment
+ * @ofd: OFD device
+ *
+ * This function creates a transaction with dt_trans_create()
+ * and makes it synchronous if required by the export state.
+ *
+ * Return:
+ * * %struct thandle if transaction was created successfully
+ * * %ERR_PTR on negative value in case of error
+ */
+struct thandle *ofd_trans_create(const struct lu_env *env,
+				 struct ofd_device *ofd)
+{
+	struct ofd_thread_info	*info = ofd_info(env);
+	struct thandle		*th;
+
+	LASSERT(info);
+
+	if (unlikely(ofd->ofd_readonly)) {
+		CERROR("%s: Deny transaction for read-only OFD device\n",
+		       ofd_name(ofd));
+		return ERR_PTR(-EROFS);
+	}
+
+	th = dt_trans_create(env, ofd->ofd_osd);
+	if (IS_ERR(th))
+		return th;
+
+	if (info->fti_exp != NULL) {
+		struct lu_nodemap *nodemap;
+
+		/* export can require sync operations */
+		th->th_sync |= info->fti_exp->exp_need_sync;
+
+		nodemap = nodemap_get_from_exp(info->fti_exp);
+		if (!IS_ERR_OR_NULL(nodemap)) {
+			th->th_ignore_root_proj_quota = !!(nodemap->nmf_rbac &
+						NODEMAP_RBAC_IGN_ROOT_PRJQUOTA);
+			nodemap_putref(nodemap);
+		} else {
+			th->th_ignore_root_proj_quota = 1;
+		}
+	}
+
+	return th;
+}
+
+/**
+ * ofd_trans_start() - Start transaction in OFD.
+ * @env: execution environment
+ * @ofd: OFD device
+ * @obj: OFD object affected by this transaction
+ * @th: transaction handle
+ *
+ * This function updates the given @obj object version and calls
+ * dt_trans_start().
+ *
+ * Return:
+ * * %0 if successful
+ * * %negative value in case of error
+ */
+int ofd_trans_start(const struct lu_env *env, struct ofd_device *ofd,
+		    struct ofd_object *obj, struct thandle *th)
+{
+	/* version change is required for this object */
+	if (obj != NULL)
+		tgt_vbr_obj_set(env, ofd_object_child(obj));
+
+	return dt_trans_start(env, ofd->ofd_osd, th);
+}
+
+/**
+ * ofd_trans_stop() - Stop transaction in OFD.
+ * @env: execution environment
+ * @ofd: OFD device
+ * @th: transaction handle
+ * @rc: result code of whole operation
+ *
+ * This function fills thandle::th_result with result of whole operation
+ * and calls dt_trans_stop().
+ *
+ * Return:
+ * * %0 if successful
+ * * %negative value if case of error
+ */
+int ofd_trans_stop(const struct lu_env *env, struct ofd_device *ofd,
+		    struct thandle *th, int rc)
+{
+	th->th_result = rc;
+	return dt_trans_stop(env, ofd->ofd_osd, th);
+}

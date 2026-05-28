@@ -1,0 +1,499 @@
+.TH LCTL 8 2026-03-06 Lustre "Lustre Configuration Utilities"
+.SH NAME
+lctl \- Lustre filesystem administrator configuration tool
+.SH SYNOPSIS
+.SY lctl
+.SY lctl
+.RB [ --device
+.IR DEVICE ]
+.I COMMAND
+.RI [ ARGS ]
+.YS
+.SH DESCRIPTION
+.B lctl
+is used by a storage administrator to perform various Lustre operations,
+allowing configuration, maintenance, and debugging features to be accessed.
+It can be invoked non-interactivly to execute the specified
+.BR COMMAND ,
+or it can be run interactively without arguments to execute multiple commands.
+In some cases,
+.I COMMAND
+must be executed on a specific
+.IR DEVICE ,
+which can be specified on the command-line,
+or interactively before the command is run.
+.PP
+The most common commands are:
+.BR debug_daemon ,
+.BR debug_kernel ,
+.BR device_list ,
+.BR get_param ,
+.BR set_param ,
+.BR list_nids ,
+.BR mark ,
+and
+.BR ping .
+Most sub-commands are explained in separate man pages of the form
+.BI lctl- COMMAND
+as listed in the
+.B SEE ALSO
+section at the end.
+Some sub-commands do not have their own detailed man page are listed below.
+.SH OPTIONS
+The following options can be used to invoke
+.BR lctl .
+.TP
+.B --device
+Specify the
+.I DEVICE
+name or number to be used for the operation.  The
+.B device_list
+command shows a list of locally configured devices.
+.TP
+.BI help " COMMAND"
+To get basic help on the meaning and syntax of a command.
+.TP
+.B --list-commands
+Output a list of the commands supported by the lctl utility.
+.TP
+.BR --ignore_errors ", " ignore_errors
+Ignore errors during script processing.
+.TP
+.B lustre_build_version
+Output the build version of the Lustre kernel modules.
+.TP
+.BR -V ", " --version
+Output the build version of the utility itself.
+.TP
+.BR exit ", " quit
+Quit an interactive session.
+.SH BASH COMPLETION
+The
+.B lctl
+command supports
+.BR bash-completion (1)
+for tab completion of sub-command names and their options,
+with proper package installation and supporing shell usage.
+This can greatly simplify finding available commands,
+their options, and in many cases option arguments.
+.PP
+To list commands, type
+.RB ' lctl\ TAB ',
+or after partially completing a command name.
+To list long options (more descriptive and easily understood) type
+.RI ' COMMAND
+.BR --TAB ',
+and to list short options type
+.RI ' COMMAND
+.BR -TAB '.
+Some commands also allow context-specific completion of arguments to the
+command-line option, for example generating a list of OBD devices for the
+.B --device
+option, or a list of OST pools for the
+.B pool_*
+commands.
+.SH COMMANDS
+.SS System Configuration
+The on-line tool set for displaying, modifying, backup, or removal of Lustre
+system configuration.
+For detail, please see:
+.BR lctl-get_param (8),
+.BR lctl-set_param (8),
+.BR lctl-llog_print (8),
+and
+.BR lctl-lcfg_* (8).
+.SS Network Configuration
+.TP
+.BR network { up | down }|{ tcp | o2ib }
+Start or stop LNET, or select a network type for other
+.B lctl
+LNET commands.  See also
+.BR lnetctl (8)
+for most LNet configuration commands.
+.TP
+.B conn_list
+Print all the connected remote NIDs for a given
+.B network
+type.
+.TP
+.B interface_list
+Print the network interface information for a given
+.B NETWORK
+type.
+.TP
+.BI list_nids
+Print all Network Identifiers on the local node. LNET must be running.
+.TP
+.B peer_list
+Print the known peers for a given
+.B NETWORK
+type.
+.TP
+.BI ping " NID TIMEOUT"
+Check LNET connectivity via an LNET ping. This will use the fabric
+appropriate to the specified NID. By default lctl will attempt to
+reach the remote node up to 120 seconds and then timeout. To disable
+the timeout just specify an negative timeout value.
+.TP
+.BI replace_nids " DEVICE_NAME NIDS_LIST"
+Replace the LNet NIDs. See
+.BR lctl-replace_nids (8)
+for details.
+.TP
+.B route_list
+Print the complete routing table.
+.TP
+.BI which_nid " NIDLIST"
+From a list of nids for a remote node, show which interface communication
+will take place on.
+.SS Device Selection
+.TP
+.BI device " DEVNAME"
+This will select the specified OBD device.
+All other commands depend on the device being set.
+.TP
+.BR device_list
+Show all the local Lustre OBDs.  See
+.BR lctl-device_list (8).
+.SS Device Operations
+.TP
+.BI conf_param " \fR[" "-d\fR] " DEVICE \fR| FSNAME . PARAMETER = VALUE
+Set a permanent configuration parameter for any device via the MGS. This
+command must be run on the MGS node.
+.IP
+[NOTE]
+The conf_param command is deprecated and should not be used for configuring
+Lustre parameters. It only applies settings to targets present at the time the
+command is executed; targets (such as OSTs) added or mounted later will not
+automatically receive these settings. For reliable and consistent
+configuration, use set_param instead. The set_param command immediately applies
+parameter changes to all relevant targets, including those added in the future.
+See
+.BR lctl-set_param (8)
+for details.
+
+For example, replace:
+    lctl conf_param testfs-OST0000.osc.max_rpcs_in_flight=16
+with:
+    lctl set_param -P osc.testfs-*.max_rpcs_in_flight=16
+
+Update any scripts or procedures to use set_param in place of conf_param.
+Use conf_param -d to remove existing conf_param settings; set_param -P
+does not remove them.
+.PP
+The
+.B -d
+option deletes a parameter setting (use the default value at the next restart).
+A null value for
+.I VALUE
+also deletes the parameter setting.
+This is useful if an incorrect or obsolete parameter is in the configuration.
+.RS 2
+.TP
+.B Parameters:
+All of the writable parameters under
+.B lctl list_param
+(e.g.
+.B lctl list_param -w osc.*.*
+or
+.B lctl list_param -F osc.*.* | grep =
+) can be permanently set using
+.B lctl conf_param
+, but the format is slightly different. For conf_param,
+the device is specified first, then the obdtype.
+(See examples below.) Wildcards are not supported.
+.br
+Additionally, failover nodes may be added (or removed),
+and some system-wide parameters may be set as well
+(sys.at_max, sys.at_min, sys.at_extra, sys.at_early_margin, sys.at_history,
+sys.timeout, sys.ldlm_timeout.)
+.I DEVICE
+is ignored for system wide parameters.
+.TP
+.B activate
+Reactivate an import after deactivating, below.
+This setting is only effective until the next restart (see
+.BR conf_param).
+.TP
+.B deactivate
+Deactivate an import, in particular meaning do not assign new file stripes
+to an OSC. This command should be used on the OSC in the MDT LOV
+corresponding to a failed OST device, to prevent further attempts at
+communication with the failed OST.
+.TP
+.B abort_recovery
+Abort the recovery process on a restarting MDT or OST device
+.SS Changelogs
+Changelog user can be registered and deregistered on particular device.
+Changelog starts logging when any user is registered.
+.PP
+For more details see:
+.TP
+.BR lctl-changelog_register (8)
+Register a new changelog user on specified MDT device with specified parameters.
+.TP
+.BR lctl-changelog_deregister (8)
+Deregister an existing changelog user on the specified MDT.
+.SS Nodemap
+The nodemap feature allows UIDs, GIDs, and PROJIDs from remote systems to be
+mapped to local sets of UIDs, GIDs, and PROJIDs while retaining POSIX ownership,
+permissions and quota information. As a result, multiple sites with conflicting
+user and group identifiers can operate on a single Lustre file system without
+creating collisions in the UID, GID, or PROJID space.
+.P
+Nodemap commands must be run on the MGS from where the current nodemap
+configuration is asynchronously propagated to all server nodes. The nodemap
+configuration further persists across restarts. An exception represents dynamic
+nodemaps (see lctl-nodemap-add (8)) which are defined on the local server only
+and are not persistent.
+.P
+In addition to assigning client nodes to nodemaps, it is necessary to define a
+privileged nodemap that covers all Lustre server nodes for ID mapping to work
+correctly. The privileged nodemap should have both "admin" and "trusted"
+properties set.
+.P
+The "default" nodemap is a special nodemap which cannot be removed and
+represents a fallback nodemap for all nodes that are not assigned to any other
+nodemap. Because of its special role, only some properties can be set on it,
+such as "squash_uid". ID mapping is explicitly disabled on the "default"
+nodemap. Care should be taken when modifying the "admin" and "trusted"
+properties on the "default" nodemap, especially if Lustre servers are not
+covered by any other nodemap.
+.P
+See also:
+.TP
+.BR lctl-nodemap-activate (8)
+Activate/deactivate the nodemap feature.
+.TP
+.BR lctl-nodemap-add (8)
+Add a new nodemap, to which NID ranges, identities, and properties can be added.
+.TP
+.BR lctl-nodemap-add-idmap (8)
+Add a UID or GID mapping to a nodemap.
+.TP
+.BR lctl-nodemap-add-range (8)
+Define a range of NIDs for a nodemap.
+.TP
+.BR lctl-nodemap-add-offset (8)
+Set a UID/GID/PROJID offset value
+.TP
+.BR lctl-nodemap-del (8)
+Delete an existing nodemap.
+.TP
+.BR lctl-nodemap-del-idmap (8)
+Delete an existing UID or GID mapping from a nodemap.
+.TP
+.BR lctl-nodemap-del-range (8)
+Delete an existing NID range from a nodemap.
+.TP
+.BR lctl-nodemap-del-offset (8)
+Remove a UID/GID/PROJID offset from a nodemap.
+.TP
+.BR lctl-nodemap-fileset-add (8)
+Add a primary or alternate fileset to a nodemap.
+.TP
+.BR lctl-nodemap-fileset-del (8)
+Delete a type of fileset from a nodemap.
+.TP
+.BR lctl-nodemap-fileset-modify (8)
+Modify a fileset in a nodemap, changing its path, type, or access mode.
+.TP
+.BR lctl-nodemap-modify (8)
+Modify a nodemap property.
+.TP
+.BR lctl-nodemap-info (8)
+Print nodemap information.
+.TP
+.BR lctl-nodemap-set-cap (8)
+Set user capabilities on a nodemap.
+.TP
+.BR lctl-nodemap-set-sepol (8)
+Set SELinux policy info on a nodemap.
+.SS Configuration logs
+.TP
+.BI clear_conf " DEVICE" \fR| FSNAME
+This command runs on MGS node having MGS device mounted with -o nosvc.
+It cleans up configuration files stored in the CONFIGS/ directory
+of any records marked SKIP. If the device name is given, then the
+specific logs for that filesystem (e.g. testfs-MDT0000) is processed.
+Otherwise, if a filesystem name is given then all configuration files for the
+specified filesystem are cleared.
+.SS LFSCK
+An on-line Lustre consistency check and repair tool. It is used for totally
+replacing the old lfsck tool for kinds of Lustre inconsistency verification,
+including: corrupted or lost OI mapping, corrupted or lost link EA, corrupted
+or lost FID in name entry, dangling name entry, multiple referenced name entry,
+unmatched MDT-object and name entry pairs, orphan MDT-object, incorrect
+MDT-object links count, corrupted namespace, corrupted or lost LOV EA, lost
+OST-object, multiple referenced OST-object, unmatched MDT-object and OST-object
+pairs, orphan OST-object, and so on.
+.P
+See also:
+.TP
+.BR lctl-lfsck-start (8)
+Start LFSCK on the specified MDT or OST device with specified parameters.
+.TP
+.BR lctl-lfsck-stop (8)
+Stop LFSCK on the specified MDT or OST device.
+.TP
+.BR lctl-lfsck-query (8)
+Get the LFSCK global status via the specified MDT device.
+.SS Barrier
+The tools set for write (modify) barrier on all MDTs. For detail, please see:
+.TP
+.BR lctl-barrier (8)
+.SS Snapshot
+ZFS backend based snapshot tools set. The tool loads system configuration
+from the file
+.B /etc/ldev.conf
+on the MGS, and call related ZFS commands to
+maintain Lustre snapshot pieces on all targets (MGS/MDT/OST).
+The configuration file
+.B /etc/ldev.conf
+is not only for snapshot, but also
+for other purpose.
+.P
+The format is:
+.EX
+.IB "HOST " foreign/- "LABEL DEVICE"\c
+.RI [ JOURNAL_PATH "]\c
+.B /- \c
+.RI [ RAIDTAB ]
+.EE
+.P
+The format of
+.I LABEL
+is:
+.EX
+.IB FSNAME -\c
+.RI { ROLE }{ INDEX "} or {" ROLE }{ INDEX }
+.EE
+.P
+The format of
+.I DEVICE
+is:
+.EX
+.RB [ md | zfs: ]\c
+.RI [ POOL_DIR\c
+.BR / ]\c
+.IB POOL / FILESYSTEM
+.EE
+.P
+Snapshot only uses the fields
+.IR HOST ,
+.I LABEL
+and
+.IR DEVICE .
+.TP Example:
+.EX
+.B # cat /etc/ldev.conf
+ host-mdt1 - myfs-MDT0000 zfs:/tmp/myfs-mdt1/mdt1
+ host-mdt2 - myfs-MDT0001 zfs:myfs-mdt2/mdt2
+ host-ost1 - OST0000 zfs:/tmp/myfs-ost1/ost1
+ host-ost2 - OST0001 zfs:myfs-ost2/ost2
+.P
+See also:
+.TP
+.BR lctl-snapshot-create (8)
+Create snapshot with the given name.
+.TP
+.BR lctl-snapshot-destroy (8)
+Destroy the specified snapshot.
+.TP
+.BR lctl-snapshot-modify (8)
+Modify the specified snapshot.
+.TP
+.BR lctl-snapshot-list (8)
+Query the snapshot information.
+.TP
+.BR lctl-snapshot-mount (8)
+Mount the specified snapshot.
+.TP
+.BR lctl-snapshot-umount (8)
+Umount the specified snapshot.
+.SS Debug
+.TP
+.B debug_daemon
+Start and stop the debug daemon, and control the output filename and size.
+.TP
+.BR debug_kernel " [" \fIFILE "] [" \fIRAW ]
+Dump the kernel debug buffer to stdout or file.
+.TP
+.BI debug_file " INPUT " \fR[ OUTPUT \fR]
+Convert kernel-dumped debug log from binary to plain text format.
+.TP
+.BI clear
+Clear the kernel debug buffer.
+.TP
+.BI mark " TEXT"
+Insert marker text in the kernel debug buffer.
+.TP
+.BI filter " SUBSYSTEM_ID" \fR| DEBUG_MASK
+Filter kernel debug messages by subsystem or mask.
+.TP
+.BI show " SUBSYSTEM_ID" \fR| DEBUG_MASK
+Show specific type of messages.
+.TP
+.BI debug_list " SUBS" \fR| TYPES
+List all the subsystem and debug types.
+.TP
+.BI modules " PATH"
+Provide gdb-friendly module information.
+.SH EXAMPLES
+List the devices configured on the local node:
+.EX
+.B # lctl dl
+  0 UP mgc MGC192.168.0.20@tcp bfbb24e3-7deb-2ffa-eab0-44dffe00f692 5
+  1 UP ost OSS OSS_uuid 3
+  2 UP obdfilter testfs-OST0000 testfs-OST0000_UUID 3
+.EE
+Dump the kernel debug log to a file for review:
+.EX
+.B # lctl dk /tmp/debug.log
+Debug log: 87 lines, 87 kept, 0 dropped.
+.EE
+.SH AVAILABILITY
+.B lctl
+is part of the
+.BR lustre (7)
+filesystem package since release 0.5.0
+.\" Added in commit 0.4.2-6-gbefd9c343f
+.SH SEE ALSO
+.BR lfs (1),
+.BR lustre (7),
+.BR lctl (8),
+.BR lctl-barrier (8),
+.BR lctl-changelog_deregister (8),
+.BR lctl-changelog_register (8),
+.BR lctl-get_param (8),
+.BR lctl-lcfg (8),
+.BR lctl-lfsck-query (8),
+.BR lctl-lfsck-start (8),
+.BR lctl-lfsck-stop (8),
+.BR lctl-list_param (8),
+.BR lctl-llog_catlist (8),
+.BR lctl-llog_info (8),
+.BR lctl-llog_print (8),
+.BR lctl-network (8),
+.BR lctl-nodemap-activate (8),
+.BR lctl-nodemap-add (8),
+.BR lctl-nodemap-add-idmap (8),
+.BR lctl-nodemap-add-offset (8),
+.BR lctl-nodemap-add-range (8),
+.BR lctl-nodemap-del (8),
+.BR lctl-nodemap-del-idmap (8),
+.BR lctl-nodemap-del-offset (8),
+.BR lctl-nodemap-del-range (8),
+.BR lctl-nodemap-modify (8),
+.BR lctl-nodemap-set-capabilities (8),
+.BR lctl-pcc (8),
+.BR lctl-replace-nids (8),
+.BR lctl-set_param (8),
+.BR lctl-snapshot-create (8),
+.BR lctl-snapshot-destroy (8),
+.BR lctl-snapshot-list (8),
+.BR lctl-snapshot-modify (8),
+.BR lctl-snapshot-mount (8),
+.BR lctl-snapshot-umount (8),
+.BR mkfs.lustre (8),
+.BR mount.lustre (8)

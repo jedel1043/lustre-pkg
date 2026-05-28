@@ -1,0 +1,4483 @@
+#
+# LC_CONFIG_SRCDIR
+#
+# Wrapper for AC_CONFIG_SUBDIR
+#
+AC_DEFUN([LC_CONFIG_SRCDIR], [
+AC_CONFIG_SRCDIR([lustre/obdclass/obdo.c])
+ldiskfs_is_ext4="yes"
+])
+
+#
+# LC_PATH_DEFAULTS
+#
+# lustre specific paths
+#
+AC_DEFUN([LC_PATH_DEFAULTS], [
+# ptlrpc kernel build requires this
+LUSTRE="$PWD/lustre"
+AC_SUBST(LUSTRE)
+
+# mount.lustre
+rootsbindir='/sbin'
+AC_SUBST(rootsbindir)
+
+demodir='$(docdir)/demo'
+AC_SUBST(demodir)
+
+pkgexampledir='${pkgdatadir}/examples'
+AC_SUBST(pkgexampledir)
+]) # LC_PATH_DEFAULTS
+
+#
+# LC_TARGET_SUPPORTED
+#
+# is the target os supported?
+#
+AC_DEFUN([LC_TARGET_SUPPORTED], [
+case $target_os in
+	linux*)
+$1
+		;;
+	*)
+$2
+		;;
+esac
+]) # LC_TARGET_SUPPORTED
+
+#
+# LC_GLIBC_SUPPORT_FHANDLES
+#
+AC_DEFUN([LC_GLIBC_SUPPORT_FHANDLES], [
+AC_CHECK_FUNCS([name_to_handle_at],
+	[AC_DEFINE(HAVE_FHANDLE_GLIBC_SUPPORT, 1,
+		[file handle and related syscalls are supported])],
+	[AC_MSG_WARN([file handle and related syscalls are not supported])])
+]) # LC_GLIBC_SUPPORT_FHANDLES
+
+#
+# LC_GLIBC_SUPPORT_COPY_FILE_RANGE
+#
+AC_DEFUN([LC_GLIBC_SUPPORT_COPY_FILE_RANGE], [
+AC_CHECK_FUNCS([copy_file_range],
+	[AC_DEFINE(HAVE_COPY_FILE_RANGE, 1,
+		[copy_file_range() is supported])],
+	[AC_MSG_WARN([copy_file_range() is not supported])])
+]) # LC_GLIBC_SUPPORT_COPY_FILE_RANGE
+
+#
+# LC_FID2PATH_UNION
+#
+AC_DEFUN([LC_FID2PATH_ANON_UNION], [
+saved_flags="$CFLAGS"
+CFLAGS="-Werror"
+AC_MSG_CHECKING([if 'struct getinfo_fid2path' has anonymous union])
+AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+	#include <linux/lustre/lustre_idl.h>
+
+	int main(void) {
+		struct getinfo_fid2path gf;
+		struct lu_fid root_fid;
+
+		*gf.gf_root_fid = root_fid;
+		return 0;
+	}
+])],[
+	AC_DEFINE(HAVE_FID2PATH_ANON_UNIONS, 1, [union is unnamed])
+	AC_MSG_RESULT([yes])
+],[
+	AC_MSG_RESULT([no])
+])
+CFLAGS="$saved_flags"
+]) # LC_FID2PATH_ANON_UNION
+
+#
+# LC_STACK_SIZE
+#
+# Ensure the stack size is at least 8k in Lustre server (all kernels)
+#
+AC_DEFUN([LC_SRC_STACK_SIZE], [
+	LB2_LINUX_TEST_SRC([stack_size_8k], [
+		#include <linux/thread_info.h>
+	], [
+		#if THREAD_SIZE < 8192
+		#error "stack size < 8192"
+		#endif
+	])
+])
+AC_DEFUN([LC_STACK_SIZE], [
+	LB2_MSG_LINUX_TEST_RESULT([if stack size is at least 8k],
+	[stack_size_8k], [],[
+		AC_MSG_ERROR(
+		[Lustre requires that Linux is configured with at least a 8KB stack.])
+	])
+]) # LC_STACK_SIZE
+
+#
+# LC_MDS_MAX_THREADS
+#
+# Allow the user to set the MDS thread upper limit
+#
+AC_DEFUN([LC_MDS_MAX_THREADS], [
+AC_MSG_CHECKING([for maximum number of MDS threads])
+AC_ARG_WITH([mds_max_threads],
+	AS_HELP_STRING([--with-mds-max-threads=count],
+		[maximum threads available on the MDS: (default=512)]),
+	[AC_DEFINE_UNQUOTED(MDS_MAX_THREADS, $with_mds_max_threads,
+		[maximum number of MDS threads])])
+AC_MSG_RESULT([$with_mds_max_threads])
+]) # LC_MDS_MAX_THREADS
+
+#
+# LC_CONFIG_PINGER
+#
+# the pinger is temporary, until we have the recovery node in place
+#
+AC_DEFUN([LC_CONFIG_PINGER], [
+AC_MSG_CHECKING([whether to enable Lustre pinger support])
+AC_ARG_ENABLE([pinger],
+	AS_HELP_STRING([--disable-pinger],
+		[disable recovery pinger support]),
+	[], [enable_pinger="yes"])
+AC_MSG_RESULT([$enable_pinger])
+AS_IF([test "x$enable_pinger" != xno], [
+	AC_DEFINE(CONFIG_LUSTRE_FS_PINGER, 1, [Use the Pinger])
+	AC_SUBST(ENABLE_PINGER, yes)
+], [
+	AC_SUBST(ENABLE_PINGER, no)
+])
+]) # LC_CONFIG_PINGER
+
+#
+# LC_CONFIG_CHECKSUM
+#
+# do checksum of bulk data between client and OST
+#
+AC_DEFUN([LC_CONFIG_CHECKSUM], [
+AC_MSG_CHECKING([whether to enable data checksum support])
+AC_ARG_ENABLE([checksum],
+	AS_HELP_STRING([--disable-checksum],
+		[disable data checksum support]),
+	[], [enable_checksum="yes"])
+AC_MSG_RESULT([$enable_checksum])
+AS_IF([test "x$enable_checksum" != xno], [
+	AC_DEFINE(CONFIG_ENABLE_CHECKSUM, 1, [do data checksums])
+	AC_SUBST(ENABLE_CHECKSUM, yes)
+], [
+	AC_SUBST(ENABLE_CHECKSUM, no)
+])
+]) # LC_CONFIG_CHECKSUM
+
+#
+# LC_CONFIG_FLOCK
+#
+# enable distributed flock by default
+#
+AC_DEFUN([LC_CONFIG_FLOCK], [
+AC_MSG_CHECKING([whether to enable flock by default])
+AC_ARG_ENABLE([flock],
+	AS_HELP_STRING([--disable-flock],
+		[disable flock by default]),
+	[], [enable_flock="yes"])
+AC_MSG_RESULT([$enable_flock])
+AS_IF([test "x$enable_flock" != xno], [
+	AC_DEFINE(CONFIG_ENABLE_FLOCK, 1, [enable flock by default])
+	AC_SUBST(ENABLE_FLOCK, yes)
+], [
+	AC_SUBST(ENABLE_FLOCK, no)
+])
+]) # LC_CONFIG_FLOCK
+
+#
+# LC_CONFIG_LRU_RESIZE
+#
+AC_DEFUN([LC_CONFIG_LRU_RESIZE], [
+AC_MSG_CHECKING([whether to enable lru self-adjusting])
+AC_ARG_ENABLE([lru_resize],
+	AS_HELP_STRING([--enable-lru-resize],
+		[enable lru resize support]),
+	[], [enable_lru_resize="yes"])
+AC_MSG_RESULT([$enable_lru_resize])
+AS_IF([test "x$enable_lru_resize" != xno], [
+	AC_DEFINE(HAVE_LRU_RESIZE_SUPPORT, 1, [Enable lru resize support])
+	AC_SUBST(ENABLE_LRU_RESIZE, yes)
+], [
+	AC_SUBST(ENABLE_LRU_RESIZE, no)
+])
+]) # LC_CONFIG_LRU_RESIZE
+
+#
+# LC_CONFIG_QUOTA
+#
+# Quota support. The kernel must support CONFIG_QUOTA.
+#
+AC_DEFUN([LC_SRC_CONFIG_QUOTA], [
+	LB2_SRC_CHECK_CONFIG_IM([QUOTA])
+])
+AC_DEFUN([LC_CONFIG_QUOTA], [
+	LB2_TEST_CHECK_CONFIG_IM([QUOTA],[],[AC_MSG_ERROR(
+[Lustre quota requires that CONFIG_QUOTA is enabled in your kernel.])])
+]) # LC_CONFIG_QUOTA
+
+#
+# LC_CONFIG_FHANDLE
+#
+# fhandle kernel support for open_by_handle_at() and name_to_handle_at()
+# system calls. The kernel must support CONFIG_FHANDLE.
+#
+AC_DEFUN([LC_SRC_CONFIG_FHANDLE], [
+	LB2_SRC_CHECK_CONFIG_IM([FHANDLE])
+])
+AC_DEFUN([LC_CONFIG_FHANDLE], [
+	LB2_TEST_CHECK_CONFIG_IM([FHANDLE],[],[AC_MSG_ERROR(
+[Lustre fid handling requires that CONFIG_FHANDLE is enabled in your kernel.])])
+]) # LC_CONFIG_FHANDLE
+
+#
+# LC_POSIX_ACL_CONFIG
+#
+# POSIX ACL support.
+#
+AC_DEFUN([LC_SRC_POSIX_ACL_CONFIG], [
+	LB2_SRC_CHECK_CONFIG_IM([FS_POSIX_ACL])
+])
+AC_DEFUN([LC_POSIX_ACL_CONFIG], [
+	LB2_TEST_CHECK_CONFIG_IM([FS_POSIX_ACL],
+		[AC_DEFINE(CONFIG_LUSTRE_FS_POSIX_ACL, 1, [Enable POSIX acl])],
+		[])
+]) # LC_POSIX_ACL_CONFIG
+
+# CRYPTO_MD5 check and warn only if GSS is not disabled.
+
+#
+# LC_CONFIG_GSS_KEYRING
+#
+# default 'auto', tests for dependencies, if found, enables;
+# only called if gss is enabled
+#
+AC_DEFUN([LC_CONFIG_GSS_KEYRING], [
+AC_MSG_CHECKING([whether to enable gss keyring backend])
+AC_ARG_ENABLE([gss_keyring],
+	[AS_HELP_STRING([--disable-gss-keyring],
+		[disable gss keyring backend])],
+	[], [AS_IF([test "x$enable_gss" = xauto], [
+			enable_gss_keyring="auto"], [
+			enable_gss_keyring="$enable_gss"])])
+AC_MSG_RESULT([$enable_gss_keyring])
+AS_IF([test "x$enable_gss_keyring" != xno], [
+	LB_CHECK_CONFIG_IM([KEYS], [], [
+		gss_keyring_conf_test="fail"
+		AC_MSG_WARN([GSS keyring backend requires that CONFIG_KEYS be enabled in your kernel.])])
+
+	AC_CHECK_LIB([keyutils], [keyctl_search], [], [
+		gss_keyring_conf_test="fail"
+		AC_MSG_WARN([GSS keyring backend requires libkeyutils])])
+
+	AS_IF([test "x$gss_keyring_conf_test" != xfail], [
+		AC_DEFINE([HAVE_GSS_KEYRING], [1],
+			[Define this if you enable gss keyring backend])
+		enable_gss_keyring="yes"
+	], [
+		AS_IF([test "x$enable_gss_keyring" = xyes], [
+			AC_MSG_ERROR([Cannot enable gss_keyring. See above for details.])
+		])
+		enable_ssk="no"
+	])
+], [
+	enable_ssk="no"
+])
+]) # LC_CONFIG_GSS_KEYRING
+
+#
+# LC_CONFIG_SUNRPC
+#
+AC_DEFUN([LC_CONFIG_SUNRPC], [
+LB_CHECK_CONFIG_IM([SUNRPC], [], [
+	AS_IF([test "x$sunrpc_required" = xyes], [
+		AC_MSG_ERROR([
+
+kernel SUNRPC support is required by using GSS.
+])
+	])])
+]) # LC_CONFIG_SUNRPC
+
+# LC_CONFIG_COVERAGE
+# Setup for code coverage using gcov,
+# Also check gcov is available and the kernel was built with GCOV support.
+AC_DEFUN([LC_CONFIG_COVERAGE], [
+	AC_MSG_CHECKING([whether to enable gcov code coverage])
+	AC_ARG_ENABLE([coverage], [
+		AS_HELP_STRING([--enable-coverage],
+			[enable gcov code coverage support])],
+			[enable_coverage="yes"], [enable_coverage="no"])
+	AS_IF([test "x$enable_coverage" != xno], [
+		AC_MSG_RESULT([checking])
+		LB_CHECK_CONFIG_IM([GCOV_KERNEL], [
+			AC_MSG_CHECKING([may enable coverage with kernel support])
+		], [
+			AC_MSG_WARN([kernel GCOV support required to enable coverage.])
+			enable_coverage="no"
+			AC_MSG_CHECKING([may enable coverage without kernel support])
+		])
+	])
+	AC_MSG_RESULT([$enable_coverage])
+	AC_SUBST(ENABLE_COVERAGE, ${enable_coverage:0:1})
+]) # LC_CONFIG_COVERAGE
+
+#
+# LC_CONFIG_GSS (default 'auto' (tests for dependencies, if found, enables))
+#
+# Build gss and related tools of Lustre. Currently both kernel and user space
+# parts are depend on linux platform.
+#
+AC_DEFUN([LC_CONFIG_GSS], [
+AC_MSG_CHECKING([whether to enable gss support])
+AC_ARG_ENABLE([gss],
+	[AS_HELP_STRING([--enable-gss], [enable gss support])],
+	[], [enable_gss="auto"])
+AC_MSG_RESULT([$enable_gss])
+
+AC_ARG_VAR([TEST_JOBS],
+    [simultaneous jobs during configure (defaults to $(nproc))])
+if test "x$ac_cv_env_TEST_JOBS_set" != "xset"; then
+	TEST_JOBS=${TEST_JOBS:-$(nproc)}
+fi
+AC_SUBST(TEST_JOBS)
+
+AC_ARG_VAR([TEST_DIR],
+    [location of temporary parallel configure tests (defaults to $PWD/lb2)])
+	TEST_DIR=${TEST_DIR:-${ac_pwd}/_lpb}
+AC_SUBST(TEST_DIR)
+
+AS_IF([test "x$enable_gss" != xno], [
+	LC_CONFIG_GSS_KEYRING
+
+	sunrpc_required=$enable_gss
+	LC_CONFIG_SUNRPC
+	sunrpc_required="no"
+
+	require_krb5=$enable_gss
+	AC_KERBEROS_V5
+	require_krb5="no"
+
+	AS_IF([test -n "$KRBDIR"], [
+		gss_conf_test="success"
+	], [
+		gss_conf_test="failure"
+	])
+
+	AS_IF([test "x$gss_conf_test" = xsuccess && test "x$enable_gss" != xno], [
+		AC_DEFINE([HAVE_GSS], [1], [Define this is if you enable gss])
+		enable_gss="yes"
+	], [
+		enable_gss_keyring="no"
+		enable_gss="no"
+	])
+
+	AS_IF([test "x$enable_ssk" != xno], [
+		enable_ssk=$enable_gss
+	])
+], [
+	enable_gss_keyring="no"
+])
+]) # LC_CONFIG_GSS
+
+#
+# LC_CONFIG_XARRAY_MULTI
+#
+# Xarray multi-tier support. The kernel must support CONFIG_XARRAY_MULTI.
+# Since device zone support depends on this the chances are very small
+# its disabled but just in case.
+#
+AC_DEFUN([LC_SRC_CONFIG_XARRAY_MULTI], [
+	LB2_SRC_CHECK_CONFIG_IM([XARRAY_MULTI])
+])
+AC_DEFUN([LC_CONFIG_XARRAY_MULTI], [
+	LB2_TEST_CHECK_CONFIG_IM([XARRAY_MULTI],[],[AC_MSG_ERROR(
+[Lustre quota requires that CONFIG_XARRAY_MULTI is enabled in your kernel.])])
+]) # LC_CONFIG_XARRAY_MULTI
+
+# LC_OPENSSL_HMAC
+#
+# OpenSSL 1.0+ return int for HMAC functions but older SLES11 versions do not
+AC_DEFUN([LC_OPENSSL_HMAC], [
+has_hmac_functions="no"
+saved_flags="$CFLAGS"
+CFLAGS="-Werror"
+AC_MSG_CHECKING([whether OpenSSL has HMAC_Init_ex])
+AS_IF([test "x$enable_ssk" != xno], [
+AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+	#include <openssl/hmac.h>
+	#include <openssl/evp.h>
+
+	int main(void) {
+		int rc;
+		rc = HMAC_Init_ex(NULL, "test", 4, EVP_md_null(), NULL);
+		return rc;
+	}
+])],[
+	has_hmac_functions="yes"
+])
+])
+AC_MSG_RESULT([$has_hmac_functions])
+CFLAGS="$saved_flags"
+]) # LC_OPENSSL_HMAC
+
+# LC_OPENSSL_FIPS
+#
+# OpenSSL 1.0+ can be built with or without FIPS support
+AC_DEFUN([LC_OPENSSL_FIPS], [
+has_fips_support="no"
+saved_flags="$CFLAGS"
+CFLAGS="-Werror"
+AC_MSG_CHECKING([whether OpenSSL has FIPS_mode])
+AS_IF([test "x$enable_ssk" != xno], [
+AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+	#include <openssl/dh.h>
+	#include <openssl/dsa.h>
+	#include <openssl/evp.h>
+	#include <openssl/hmac.h>
+	#include <openssl/fips.h>
+
+	int main(void) {
+		int rc;
+		rc = FIPS_mode();
+		return rc;
+	}
+])],[
+	AC_DEFINE(HAVE_OPENSSL_FIPS, 1, [OpenSSL FIPS_mode])
+	has_fips_support="yes"
+])
+])
+AC_MSG_RESULT([$has_fips_support])
+CFLAGS="$saved_flags"
+]) # LC_OPENSSL_FIPS
+
+# LC_OPENSSL_EVP_PKEY
+#
+# OpenSSL 3.0 introduces EVP_PKEY_get_params
+AC_DEFUN([LC_OPENSSL_EVP_PKEY], [
+has_evp_pkey="no"
+saved_flags="$CFLAGS"
+CFLAGS="-Werror"
+AC_MSG_CHECKING([whether OpenSSL has EVP_PKEY_get_params])
+AS_IF([test "x$enable_ssk" != xno], [
+AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+	#include <openssl/evp.h>
+
+	int main(void) {
+		OSSL_PARAM *params;
+
+		int rc = EVP_PKEY_get_params(NULL, params);
+		return rc;
+	}
+])],[
+	AC_DEFINE(HAVE_OPENSSL_EVP_PKEY, 1, [OpenSSL EVP_PKEY_get_params])
+	has_evp_pkey="yes"
+])
+])
+CFLAGS="$saved_flags"
+AC_MSG_RESULT([$has_evp_pkey])
+]) # LC_OPENSSL_EVP_PKEY
+
+#
+# LC_OPENSSL_SSK
+#
+# Check whether to enable Lustre client crypto
+#
+AC_DEFUN([LC_OPENSSL_SSK], [
+AS_IF([test "x$enable_ssk" != xno], [
+	LC_OPENSSL_HMAC
+	LC_OPENSSL_FIPS
+	LC_OPENSSL_EVP_PKEY
+])
+AS_IF([test "x$has_hmac_functions" = xyes -o "x$has_evp_pkey" = xyes], [
+	AC_DEFINE(HAVE_OPENSSL_SSK, 1, [OpenSSL HMAC functions needed for SSK])
+], [
+	enable_ssk="no"
+])
+AC_MSG_CHECKING([whether OpenSSL has functions needed for SSK])
+AC_MSG_RESULT([$enable_ssk])
+]) # LC_OPENSSL_SSK
+
+# LC_OPENSSL_GETSEPOL
+#
+# OpenSSL is needed for l_getsepol
+AC_DEFUN([LC_OPENSSL_GETSEPOL], [
+saved_flags="$CFLAGS"
+CFLAGS="-Werror"
+AC_MSG_CHECKING([whether openssl-devel is present])
+AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+	#include <openssl/evp.h>
+
+	int main(void) {
+		EVP_MD_CTX *mdctx = EVP_MD_CTX_create();
+		(void) mdctx;
+	}
+])],[
+	AC_DEFINE(HAVE_OPENSSL_GETSEPOL, 1, [openssl-devel is present])
+	enable_getsepol="yes"
+
+],[
+	enable_getsepol="no"
+	AC_MSG_WARN([
+
+No openssl-devel headers found, unable to build l_getsepol and SELinux status checking
+])
+])
+AC_MSG_RESULT([$enable_getsepol])
+CFLAGS="$saved_flags"
+]) # LC_OPENSSL_GETSEPOL
+
+# LC_GCONFIG_GETSEPOL
+AC_DEFUN([LC_CONFIG_GETSEPOL], [
+AC_ARG_ENABLE([l_getsepol], [AS_HELP_STRING([--disable-l_getsepol],
+    [build the l_getsepol utility])], [config_getsepol="no"],
+    [config_getsepol="yes"])
+AC_MSG_CHECKING([whether to build l_getsepol])
+AC_MSG_RESULT([$config_getsepol])
+]) # LC_GETSEPOL
+
+# LC_HAVE_LIBAIO
+AC_DEFUN([LC_HAVE_LIBAIO], [
+	AC_CHECK_HEADER([libaio.h],
+		enable_libaio="yes",
+		AC_MSG_WARN([libaio is not installed on the system]))
+]) # LC_HAVE_LIBAIO
+
+#
+# LC_GENL_FAMILY_HAS_RESV_START_OP
+#
+# Linux v5.0-11693-g3b0f31f2b8c9
+#   genetlink: make policy common to family
+#
+AC_DEFUN([LC_SRC_GENL_FAMILY_HAS_RESV_START_OP], [
+	LB2_LINUX_TEST_SRC([genl_family_has_resv_start_op], [
+		#include <net/genetlink.h>
+	],[
+		static const struct genl_family family = {
+			.resv_start_op = 42,
+		};
+		(void)family;
+	],[-Werror])
+])
+AC_DEFUN([LC_GENL_FAMILY_HAS_RESV_START_OP], [
+	LB2_MSG_LINUX_TEST_RESULT([if struct genl_family has resv_start_op member],
+	[genl_family_has_resv_start_op], [
+		AC_DEFINE(GENL_FAMILY_HAS_RESV_START_OP, 1,
+			[struct genl_family has resv_start_op member])
+	])
+]) # LC_GENL_FAMILY_HAS_RESV_START_OP
+
+#
+# LC_HAVE_BVEC_ITER_ALL
+#
+# kernel 5.1 commit 6dc4f100c175dd0511ae8674786e7c9006cdfbfa
+# block: allow bio_for_each_segment_all() to iterate over multi-page bvec
+#
+AC_DEFUN([LC_SRC_HAVE_BVEC_ITER_ALL], [
+	LB2_LINUX_TEST_SRC([struct_bvec_iter_all], [
+		#include <linux/bvec.h>
+	],[
+		struct bvec_iter_all iter;
+		(void)iter;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_BVEC_ITER_ALL], [
+	LB2_MSG_LINUX_TEST_RESULT(
+	[if bvec_iter_all exists for multi-page bvec iteration],
+	[struct_bvec_iter_all], [
+		AC_DEFINE(HAVE_BVEC_ITER_ALL, 1,
+			[if bvec_iter_all exists for multi-page bvec iteration])
+	])
+]) # LC_HAVE_BVEC_ITER_ALL
+
+#
+# LC_ACCOUNT_PAGE_DIRTIED
+#
+# After 5.2 kernel page dirtied is not exported
+#
+AC_DEFUN([LC_ACCOUNT_PAGE_DIRTIED], [
+LB_CHECK_EXPORT([account_page_dirtied], [mm/page-writeback.c],
+	[AC_DEFINE(HAVE_ACCOUNT_PAGE_DIRTIED_EXPORT, 1,
+			[account_page_dirtied is exported])])
+]) # LC_ACCOUNT_PAGE_DIRTIED
+
+#
+# LC_KEYRING_SEARCH_4ARGS
+#
+# Kernel 5.2 commit dcf49dbc8077
+# keys: Add a 'recurse' flag for keyring searches
+#
+AC_DEFUN([LC_SRC_KEYRING_SEARCH_4ARGS], [
+	LB2_LINUX_TEST_SRC([keyring_search_4args], [
+		#include <linux/key.h>
+	],[
+		key_ref_t keyring = make_key_ref(NULL, 0);
+
+		keyring_search(keyring, NULL, NULL, false);
+	])
+])
+AC_DEFUN([LC_KEYRING_SEARCH_4ARGS], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'keyring_search' has 4 args],
+	[keyring_search_4args], [
+		AC_DEFINE(HAVE_KEYRING_SEARCH_4ARGS, 1,
+			[keyring_search has 4 args])
+	])
+]) # LC_KEYRING_SEARCH_4ARGS
+
+#
+# LC_BIO_BI_PHYS_SEGMENTS
+#
+# kernel 5.3-rc1 commit 14ccb66b3f585b2bc21e7256c96090abed5a512c
+# block: remove the bi_phys_segments field in struct bio
+#
+AC_DEFUN([LC_SRC_BIO_BI_PHYS_SEGMENTS], [
+	LB2_LINUX_TEST_SRC([bye_bio_bi_phys_segments], [
+		#include <linux/bio.h>
+	],[
+		struct bio *bio = NULL;
+		bio->bi_phys_segments++;
+	],[-Werror])
+])
+AC_DEFUN([LC_BIO_BI_PHYS_SEGMENTS], [
+	LB2_MSG_LINUX_TEST_RESULT([if struct bio has bi_phys_segments member],
+	[bye_bio_bi_phys_segments], [
+		AC_DEFINE(HAVE_BIO_BI_PHYS_SEGMENTS, 1,
+			[struct bio has bi_phys_segments member])
+	])
+]) # LC_BIO_BI_PHYS_SEGMENTS
+
+#
+# LC_HAVE_FLUSH_DELAYED_FPUT
+#
+# kernel commit v3.5-rc6-284-g4a9d4b024a31 adds flush_delayed_fput()
+# kernel commit v5.3-rc2-13-g7239a40ca8bf exports flush_delayed_fput()
+#
+AC_DEFUN([LC_HAVE_FLUSH_DELAYED_FPUT], [
+LB_CHECK_EXPORT([flush_delayed_fput], [fs/file_table.c],
+	[AC_DEFINE(HAVE_FLUSH_DELAYED_FPUT, 1,
+			[flush_delayed_fput() is exported by the kernel])])
+]) # LC_FLUSH_DELAYED_FPUT
+
+#
+# LC_LM_COMPARE_OWNER_EXISTS
+#
+# kernel 5.3-rc3 commit f85d93385e9fe6886a751f647f6812a89bf6bee3
+# locks: Cleanup lm_compare_owner and lm_owner_key
+# removed lm_compare_owner
+#
+AC_DEFUN([LC_SRC_LM_COMPARE_OWNER_EXISTS], [
+	LB2_LINUX_TEST_SRC([lock_manager_ops_lm_compare_owner], [
+		#include <linux/fs.h>
+		#ifdef HAVE_LINUX_FILELOCK_HEADER
+		#include <linux/filelock.h>
+		#endif
+	],[
+		struct lock_manager_operations lm_ops = {};
+
+		lm_ops.lm_compare_owner = NULL;
+		(void)lm_ops;
+	],[-Werror])
+])
+AC_DEFUN([LC_LM_COMPARE_OWNER_EXISTS], [
+	LB2_MSG_LINUX_TEST_RESULT([if lock_manager_operations has lm_compare_owner],
+	[lock_manager_ops_lm_compare_owner], [
+		AC_DEFINE(HAVE_LM_COMPARE_OWNER, 1,
+			[lock_manager_operations has lm_compare_owner])
+	])
+]) # LC_LM_COMPARE_OWNER_EXISTS
+
+AC_DEFUN([LC_FSCRYPT_SUPPORT], [
+saved_flags="$CFLAGS"
+CFLAGS="-Werror"
+AC_MSG_CHECKING([for fscrypt in-kernel support])
+AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+	#include <strings.h>
+	#include <linux/fscrypt.h>
+
+	int main(void) {
+		struct fscrypt_policy_v2 policy;
+
+		bzero(&policy, sizeof(policy));
+		return 0;
+	}
+])],[
+	has_fscrypt_support="yes"
+	AC_MSG_RESULT([yes])
+],[
+	AC_MSG_RESULT([no])
+])
+CFLAGS="$saved_flags"
+]) # LC_FSCRYPT_SUPPORT used by LC_CONFIG_CRYPTO
+
+#
+# LC_FSCRYPT_DIGESTED_NAME
+#
+# Kernel 5.5-rc4 edc440e3d27fb31e6f9663cf413fad97d714c060
+# improved the format of no-key names. This results in the
+# removal of FSCRYPT_FNAME_DIGEST and FSCRYPT_FNAME_DIGEST_SIZE.
+#
+AC_DEFUN([LC_SRC_FSCRYPT_DIGESTED_NAME], [
+	LB2_LINUX_TEST_SRC([fscrypt_digested_name], [
+		#include <linux/fscrypt.h>
+	],[
+		struct fscrypt_digested_name fname;
+
+		fname.hash = 0;
+	],[-Werror])
+])
+AC_DEFUN([LC_FSCRYPT_DIGESTED_NAME], [
+	LB2_MSG_LINUX_TEST_RESULT([if fscrypt has 'struct fscrypt_digested_name'],
+	[fscrypt_digested_name], [
+		AC_DEFINE(HAVE_FSCRYPT_DIGESTED_NAME, 1,
+			['struct fscrypt_digested_name' exists])
+	])
+]) # LC_FSCRYPT_DIGESTED_NAME
+
+#
+# LC_FSCRYPT_DUMMY_CONTEXT_ENABLED
+#
+# Kernel 5.7-rc7 ed318a6cc0b620440e65f48eb527dc3df7269ce4
+# replaces fscrypt_dummy_context_enabled() with
+# fscrypt_get_dummy_context(). Later kernels rename
+# fscrypt_get_dummy_context() to fscrypt_get_dummy_policy()
+# which is why we test fscrypt_dummy_context_enabled().
+#
+AC_DEFUN([LC_SRC_FSCRYPT_DUMMY_CONTEXT_ENABLED], [
+	LB2_LINUX_TEST_SRC([fscrypt_dummy_context_enabled], [
+		#include <linux/fscrypt.h>
+	],[
+		fscrypt_dummy_context_enabled(NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_FSCRYPT_DUMMY_CONTEXT_ENABLED], [
+	LB2_MSG_LINUX_TEST_RESULT([if fscrypt_dummy_context_enabled() exists],
+	[fscrypt_dummy_context_enabled], [
+		AC_DEFINE(HAVE_FSCRYPT_DUMMY_CONTEXT_ENABLED, 1,
+			[fscrypt_dummy_context_enabled() exists])
+	])
+]) # LC_FSCRYPT_DUMMY_CONTEXT_ENABLED
+
+#
+# LC_HAVE_PRANDOM_HEADER
+#
+# Linux v5.8-2483-gc0842fbc1b18
+#   random32: move the pseudo-random 32-bit definitions to prandom.h
+#
+AC_DEFUN([LC_SRC_HAVE_PRANDOM_HEADER], [
+	LB2_CHECK_LINUX_HEADER_SRC([linux/prandom.h], [-Werror])
+])
+AC_DEFUN([LC_HAVE_PRANDOM_HEADER], [
+	LB2_CHECK_LINUX_HEADER_RESULT([linux/prandom.h], [
+		AC_DEFINE(HAVE_PRANDOM_H, 1,
+			[prandom.h is present])
+	])
+]) # LC_HAVE_PRANDOM_HEADER
+
+#
+# LC_HAVE_KTHREAD_USE_MM
+#
+# kernel 5.8 commit f5678e7f2ac31c270334b936352f0ef2fe7dd2b3
+# kernel: better document the use_mm/unuse_mm API contract
+#
+AC_DEFUN([LC_SRC_HAVE_KTHREAD_USE_MM], [
+	LB2_LINUX_TEST_SRC([kthread_use_mm], [
+		#include <linux/kthread.h>
+	],[
+		kthread_use_mm(NULL);
+	])
+])
+AC_DEFUN([LC_HAVE_KTHREAD_USE_MM], [
+	LB2_MSG_LINUX_TEST_RESULT([if have kthread_use_mm], [kthread_use_mm], [
+		AC_DEFINE(HAVE_KTHREAD_USE_MM, 1, ['kthread_use_mm' exists])
+	])
+]) # LC_HAVE_KTHREAD_USE_MM
+
+#
+# LC_FSCRYPT_FNAME_ALLOC_BUFFER
+#
+# Kernel 5.9-rc4 8b10fe68985278de4926daa56ad6af701839e40a
+# removed the inode parameter for the fscrypt function
+# fscrypt_fname_alloc_buffer()
+#
+AC_DEFUN([LC_SRC_FSCRYPT_FNAME_ALLOC_BUFFER], [
+	LB2_LINUX_TEST_SRC([fscrypt_fname_alloc_buffer], [
+		#include <linux/fscrypt.h>
+	],[
+		fscrypt_fname_alloc_buffer(0, NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_FSCRYPT_FNAME_ALLOC_BUFFER], [
+	LB2_MSG_LINUX_TEST_RESULT([if fscrypt_fname_alloc_buffer() removed inode parameter],
+	[fscrypt_fname_alloc_buffer], [
+	AC_DEFINE(HAVE_FSCRYPT_FNAME_ALLOC_BUFFER_NO_INODE, 1,
+		[fscrypt_fname_alloc_buffer() does not have inode parameter])
+	])
+]) # LC_FSCRYPT_FNAME_ALLOC_BUFFER
+
+#
+# LC_FSCRYPT_SET_CONTEXT
+#
+# Kernel 5.9-rc4 a992b20cd4ee360dbbe6f69339cb07146e4304d6
+# fscrypt_get_encryption_info() is not GFP_NOFS safe which
+# is used by fscrypt_inherit_context. Replace fscrypt_inherit_context,
+# with two new functions, fscrypt_prepare_new_inode() and
+# fscrypt_set_context()
+#
+AC_DEFUN([LC_SRC_FSCRYPT_SET_CONTEXT], [
+	LB2_LINUX_TEST_SRC([fscrypt_set_context], [
+		#include <linux/fscrypt.h>
+	],[
+		fscrypt_set_context(NULL, NULL);
+		fscrypt_prepare_new_inode(NULL, NULL, NULL);
+	])
+])
+AC_DEFUN([LC_FSCRYPT_SET_CONTEXT], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'fscrypt_set_context()' exists],
+	[fscrypt_set_context], [
+		AC_DEFINE(HAVE_FSCRYPT_SET_CONTEXT, 1,
+			[fscrypt_set_context() does exist])
+	])
+]) # LC_FSCRYPT_SET_CONTEXT
+
+#
+# LC_FSCRYPT_D_REVALIDATE
+#
+# kernel 5.9-rc4 5b2a828b98ec1872799b1b4d82113c76a12d594f
+# exported fscrypt_d_revalidate()
+#
+AC_DEFUN([LC_FSCRYPT_D_REVALIDATE], [
+LB_CHECK_EXPORT([fscrypt_d_revalidate], [fs/crypto/fname.c],
+	[AC_DEFINE(HAVE_FSCRYPT_D_REVALIDATE, 1,
+		   [fscrypt_d_revalidate() is exported by the kernel])])
+]) # LC_FSCRYPT_D_REVALIDATE
+
+#
+# LC_FSCRYPT_NOKEY_NAME
+#
+# kernel 5.9-rc4 70fb2612aab62d47e03f82eaa7384a8d30ca175d
+# renamed is_ciphertext_name to is_nokey_name
+#
+AC_DEFUN([LC_SRC_FSCRYPT_NOKEY_NAME], [
+	LB2_LINUX_TEST_SRC([fname_is_nokey_name], [
+		#include <linux/fscrypt.h>
+	],[
+		struct fscrypt_name fname;
+
+		fname.is_nokey_name = true;
+	],[-Werror])
+])
+AC_DEFUN([LC_FSCRYPT_NOKEY_NAME], [
+	LB2_MSG_LINUX_TEST_RESULT([if struct fscrypt_name has is_nokey_name field],
+	[fname_is_nokey_name], [
+		AC_DEFINE(HAVE_FSCRYPT_NOKEY_NAME, 1,
+			[struct fscrypt_name has is_nokey_name field])
+	])
+]) # LC_FSCRYPT_NOKEY_NAME
+
+#
+# LC_FSCRYPT_SET_TEST_DUMMY_ENC_CHAR_ARG
+# Kernel 5.9-rc4 c8c868abc91ff23f6f5c4444c419de7c277d77e1
+# changed fscrypt_set_test_dummy_encryption() take a 'const char *
+#
+AC_DEFUN([LC_SRC_FSCRYPT_SET_TEST_DUMMY_ENC_CHAR_ARG], [
+	LB2_LINUX_TEST_SRC([fscrypt_set_test_dummy_encryption], [
+		#include <linux/fscrypt.h>
+	],[
+		char *arg = "arg";
+		fscrypt_set_test_dummy_encryption(NULL, arg, NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_FSCRYPT_SET_TEST_DUMMY_ENC_CHAR_ARG], [
+	LB2_MSG_LINUX_TEST_RESULT([if fscrypt_set_test_dummy_encryption() take 'const char' parameter],
+	[fscrypt_set_test_dummy_encryption], [
+		AC_DEFINE(HAVE_FSCRYPT_SET_TEST_DUMMY_ENC_CHAR_ARG, 1,
+			[fscrypt_set_test_dummy_encryption() take 'const char' parameter])
+	])
+]) # LC_FSCRYPT_SET_TEST_DUMMY_ENC_CHAR_ARG
+
+#
+# LC_FSCRYPT_DUMMY_POLICY
+#
+# Kernel 5.9-rc4 ac4acb1f4b2b6b7e8d913537cccec8789903e164
+# move the test dummy context for fscrypt_policy which is
+# also used by the user land interface.
+#
+AC_DEFUN([LC_SRC_FSCRYPT_DUMMY_POLICY], [
+	LB2_LINUX_TEST_SRC([fscrypt_free_dummy_policy], [
+		#include <linux/fscrypt.h>
+	],[
+		fscrypt_free_dummy_policy(NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_FSCRYPT_DUMMY_POLICY], [
+	LB2_MSG_LINUX_TEST_RESULT([if fscrypt_free_dummy_policy() exists],
+	[fscrypt_free_dummy_policy], [
+		AC_DEFINE(HAVE_FSCRYPT_DUMMY_POLICY, 1,
+			[fscrypt_free_dummy_policy() exists])
+	])
+]) # LC_FSCRYPT_DUMMY_POLICY
+
+#
+# LC_HAVE_ITER_FILE_SPLICE_WRITE
+#
+# Linux commit v5.9-rc1-6-g36e2c7421f02
+#  fs: don't allow splice read/write without explicit ops
+#
+AC_DEFUN([LC_SRC_HAVE_ITER_FILE_SPLICE_WRITE], [
+	LB2_LINUX_TEST_SRC([iter_file_splice_write], [
+		#include <linux/fs.h>
+	],[
+		(void)iter_file_splice_write(NULL, NULL, NULL, 1, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_ITER_FILE_SPLICE_WRITE], [
+	LB2_MSG_LINUX_TEST_RESULT([if iter_file_splice_write() exists],
+	[iter_file_splice_write], [
+		AC_DEFINE(HAVE_ITER_FILE_SPLICE_WRITE, 1,
+			['iter_file_splice_write' exists])
+	])
+]) # LC_HAVE_ITER_FILE_SPLICE_WRITE
+
+#
+# LC_HAVE_BDI_DEBUG_STATS
+#
+# Linux kernel v5.10 commit 2d146b924ec3c0873f06308d149684dc1105d9a3
+# backing-dev: no need to check return value of debugfs_create functions
+# backing_dev_info.debug_stats was remove.
+#
+AC_DEFUN([LC_SRC_HAVE_BDI_DEBUG_STATS], [
+	LB2_LINUX_TEST_SRC([bdi_has_debug_stats], [
+		#include <linux/backing-dev-defs.h>
+	],[
+		struct backing_dev_info info;
+
+		info.debug_stats = NULL;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_BDI_DEBUG_STATS], [
+	LB2_MSG_LINUX_TEST_RESULT(
+	[if 'struct backing_dev_info' has 'debug_stats' field],
+	[bdi_has_debug_stats], [
+		AC_DEFINE(HAVE_BDI_DEBUG_STATS, 1,
+			[backing_dev_info has debug_stats])
+	])
+]) # LC_HAVE_BDI_DEBUG_STATS
+
+#
+# LC_FSCRYPT_IS_NOKEY_NAME
+#
+# Kernel 5.10-rc4 159e1de201b6fca10bfec50405a3b53a561096a8
+# introduced fscrypt_is_nokey_name() inline macro. While
+# introduced for 5.10 kernels it was backported to earlier
+# Ubuntu kernels. Also it hides the change introduced due
+# to git commit 501e43fbe for kernel 5.9 which also was
+# backported to earlier Ubuntu kernels.
+#
+AC_DEFUN([LC_SRC_FSCRYPT_IS_NOKEY_NAME], [
+	LB2_LINUX_TEST_SRC([fscrypt_is_no_key_name], [
+		#include <linux/fscrypt.h>
+	],[
+		fscrypt_is_nokey_name(NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_FSCRYPT_IS_NOKEY_NAME], [
+	LB2_MSG_LINUX_TEST_RESULT([if fscrypt_is_no_key_name() exists],
+	[fscrypt_is_no_key_name], [
+		AC_DEFINE(HAVE_FSCRYPT_IS_NOKEY_NAME, 1,
+			[fscrypt_is_nokey_name() exists])
+	])
+]) # LC_FSCRYPT_IS_NOKEY_NAME
+
+#
+# LC_FSCRYPT_PREPARE_READDIR
+#
+# Kernel 5.10-rc4 ec0caa974cd092549ab282deb8ec7ea73b36eba0
+# replaced fscrypt_get_encryption_info() with
+# fscrypt_prepare_readdir()
+#
+AC_DEFUN([LC_SRC_FSCRYPT_PREPARE_READDIR], [
+	LB2_LINUX_TEST_SRC([fscrypt_prepare_readdir], [
+		#include <linux/fscrypt.h>
+	],[
+		fscrypt_prepare_readdir(NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_FSCRYPT_PREPARE_READDIR], [
+	LB2_MSG_LINUX_TEST_RESULT([if fscrypt_prepare_readdir() exists],
+	[fscrypt_prepare_readdir], [
+		AC_DEFINE(HAVE_FSCRYPT_PREPARE_READDIR, 1,
+			[fscrypt_prepare_readdir() exists])
+	])
+]) # LC_FSCRYPT_PREPARE_READDIR
+
+#
+# LC_SET_POSIX_ACL_USER_NS
+# Linux commit v5.11-rc4-8-ge65ce2a50cf6
+#   acl: handle idmapped mounts
+#
+AC_DEFUN([LC_SRC_SET_POSIX_ACL_USER_NS], [
+	LB2_LINUX_TEST_SRC([set_posix_acl_user_ns], [
+		#include <linux/fs.h>
+		#include <linux/posix_acl.h>
+	],[
+		set_posix_acl((struct user_namespace *)NULL, (struct inode*)NULL, 0, NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_SET_POSIX_ACL_USER_NS], [
+	LB2_MSG_LINUX_TEST_RESULT([if set_posix_acl() has user namespace argument],
+	[set_posix_acl_user_ns], [
+		AC_DEFINE(HAVE_SET_POSIX_ACL_USER_NS, 1,
+			[set_posix_acl() has user namespace argument])
+	])
+]) # LC_SET_POSIX_ACL_USER_NS
+
+#
+# LC_BI_BDEV
+#
+# Linux 5.11-rc5 commit 309dca309
+#   ("block: store block_device pointer in struct bio")
+#
+# block_device pointer 'bi_dev' replaced bi_disk.
+#
+AC_DEFUN([LC_SRC_BI_BDEV], [
+	LB2_LINUX_TEST_SRC([bi_bdev], [
+		#include <linux/bio.h>
+	],[
+		((struct bio *)0)->bi_bdev = NULL;
+	])
+])
+AC_DEFUN([LC_BI_BDEV], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'bi_bdev' exists],
+	[bi_bdev], [
+		AC_DEFINE(HAVE_BI_BDEV, 1, ['bi_bdev' is available])
+	])
+]) # LC_BI_BDEV
+
+#
+# LC_BIO_SET_DEV
+#
+# Linux: v5.11-rc5-9-g309dca309fc3
+#   block: store a block_device pointer in struct bio
+# created bio_set_dev macro
+# Linux: v5.15-rc6-127-gcf6d6238cdd3
+#   block: turn macro helpers into inline functions
+# created inline function(s).
+#
+# Only provide a bio_set_dev it is is not proveded by the kernel
+#
+AC_DEFUN([LC_SRC_BIO_SET_DEV], [
+	LB2_LINUX_TEST_SRC([bio_set_dev], [
+		#include <linux/bio.h>
+	],[
+		struct bio *bio = NULL;
+		struct block_device *bdev = NULL;
+
+		bio_set_dev(bio, bdev);
+	],[-Werror])
+])
+AC_DEFUN([LC_BIO_SET_DEV], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'bio_set_dev' is available],
+	[bio_set_dev], [
+		AC_DEFINE(HAVE_BIO_SET_DEV, 1, ['bio_set_dev' is available])
+	])
+]) # LC_BIO_SET_DEV
+
+#
+# LC_HAVE_USER_NAMESPACE_ARG
+#
+# kernel 5.12 commit 549c7297717c32ee53f156cd949e055e601f67bb
+# fs: make helpers idmap mount aware
+# Extend some inode methods with an additional user namespace argument.
+#
+AC_DEFUN([LC_SRC_HAVE_USER_NAMESPACE_ARG], [
+	LB2_LINUX_TEST_SRC([inode_ops_has_user_namespace_argument], [
+		#include <linux/fs.h>
+	],[
+		struct inode_operations *iops = NULL;
+		struct user_namespace *user_ns = NULL;
+
+		iops->getattr(user_ns, NULL, NULL, 0, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_USER_NAMESPACE_ARG], [
+	LB2_MSG_LINUX_TEST_RESULT(
+	[if 'inode_operations' members have user namespace argument],
+	[inode_ops_has_user_namespace_argument], [
+		AC_DEFINE(HAVE_USER_NAMESPACE_ARG, 1,
+			['inode_operations' members have user namespace argument])
+	])
+]) # LC_HAVE_USER_NAMESPACE_ARG
+
+#
+# LC_HAVE_ACCOUNT_PAGE_DIRTIED
+#
+# kernel v5.13-57-g6e1cae881a06
+#	mm/writeback: move __set_page_dirty() to core mm
+# The function account_page_dirtied() no longer exist.
+#
+AC_DEFUN([LC_SRC_HAVE_ACCOUNT_PAGE_DIRTIED], [
+	LB2_LINUX_TEST_SRC([account_page_dirtied], [
+		#include <linux/mm.h>
+	],[
+		account_page_dirtied(NULL, NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_ACCOUNT_PAGE_DIRTIED], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'account_page_dirtied' is defined],
+	[account_page_dirtied], [
+		AC_DEFINE(HAVE_ACCOUNT_PAGE_DIRTIED, 1, [account_page_dirtied() is defined])
+	])
+]) # LC_HAVE_ACCOUNT_PAGE_DIRTIED
+
+#
+# LC_HAVE_FILEATTR_GET
+#
+# kernel 5.13 4c5b479975212065ef39786e115fde42847e95a9
+# vfs: add fileattr ops
+# Add inode operations to replace FS_IOC_[SG]ETFLAGS ioctl
+# The type signature of ->fileattr_set is not stable for the
+# first few iterations, so don't commit to a particular signature
+# here.  Hopefully we will only want to support the final version.
+#
+AC_DEFUN([LC_SRC_HAVE_FILEATTR_GET], [
+	LB2_LINUX_TEST_SRC([fileattr_set], [
+		#include <linux/fs.h>
+	],[
+		struct inode_operations *iops = NULL;
+		iops->fileattr_get(NULL, NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_FILEATTR_GET], [
+	LB2_MSG_LINUX_TEST_RESULT(
+	[if 'inode_operations' has fileattr_get (and fileattr_set)],
+	[fileattr_set], [
+		AC_DEFINE(HAVE_FILEATTR_GET, 1,
+			['inode_operations' has fileattr_get and fileattr_set])
+	])
+
+]) # LC_HAVE_FILEATTR_GET
+
+# LC_HAVE_COPY_PAGE_FROM_ITER_ATOMIC
+#
+# Kernel 5.13 commit f0b65f39ac505e8f1dcdaa165aa7b8c0bd6fd454
+# iov_iter: replace iov_iter_copy_from_user_atomic() with iterator-advancing variant
+#
+AC_DEFUN([LC_SRC_HAVE_COPY_PAGE_FROM_ITER_ATOMIC], [
+	LB2_LINUX_TEST_SRC([copy_page_from_iter_atomic], [
+		#include <linux/uio.h>
+	],[
+		copy_page_from_iter_atomic(NULL, 0, 0, NULL);
+	])
+])
+AC_DEFUN([LC_HAVE_COPY_PAGE_FROM_ITER_ATOMIC], [
+	LB2_MSG_LINUX_TEST_RESULT([if have copy_page_from_iter_atomic],
+	[copy_page_from_iter_atomic], [
+		AC_DEFINE(HAVE_COPY_PAGE_FROM_ITER_ATOMIC, 1,
+			['copy_page_from_iter_atomic' exists])
+	])
+]) # LC_HAVE_COPY_PAGE_FROM_ITER_ATOMIC
+
+#
+# LC_HAVE_GET_ACL_RCU_ARG
+#
+# kernel 5.15 commit 0cad6246621b5887d5b33fea84219d2a71f2f99a
+# vfs: add rcu argument to ->get_acl() callback
+# Add a rcu argument to the ->get_acl() callback to allow
+# get_cached_acl_rcu() to call the ->get_acl() method.
+#
+AC_DEFUN([LC_SRC_HAVE_GET_ACL_RCU_ARG], [
+	LB2_LINUX_TEST_SRC([get_acl_rcu_argument], [
+		#include <linux/fs.h>
+	],[
+		struct inode_operations *iops = NULL;
+
+		iops->get_acl((struct inode *)NULL, 0, false);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_GET_ACL_RCU_ARG], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'get_acl' has a rcu argument],
+	[get_acl_rcu_argument], [
+		AC_DEFINE(HAVE_GET_ACL_RCU_ARG, 1,
+			['get_acl' has a rcu argument])
+	])
+]) # LC_HAVE_GET_ACL_RCU_ARG
+
+# LC_HAVE_FAULT_IN_IOV_ITER_READABLE
+#
+# Kernel 5.15 commit a6294593e8a1290091d0b078d5d33da5e0cd3dfe
+# iov_iter: Turn iov_iter_fault_in_readable into fault_in_iov_iter_readable
+#
+AC_DEFUN([LC_SRC_HAVE_FAULT_IN_IOV_ITER_READABLE], [
+	LB2_LINUX_TEST_SRC([fault_in_iov_iter_readable], [
+		#include <linux/uio.h>
+	],[
+		fault_in_iov_iter_readable(NULL, 0);
+	])
+])
+AC_DEFUN([LC_HAVE_FAULT_IN_IOV_ITER_READABLE], [
+	LB2_MSG_LINUX_TEST_RESULT([if have fault_in_iov_iter_readable],
+	[fault_in_iov_iter_readable], [
+		AC_DEFINE(HAVE_FAULT_IN_IOV_ITER_READABLE, 1,
+			['fault_in_iov_iter_readable' exists])
+	])
+]) # LC_HAVE_FAULT_IN_IOV_ITER_READABLE
+
+#
+# LC_HAVE_INVALIDATE_LOCK
+#
+# Kernel version v5.15-rc1 commit 730633f0b7f951726e87f912a6323641f674ae34
+# mm: Protect operations adding pages to page cache with invalidate_lock
+#
+AC_DEFUN([LC_SRC_HAVE_INVALIDATE_LOCK], [
+	LB2_LINUX_TEST_SRC([address_space_invalidate_lock], [
+		#include <linux/fs.h>
+	],[
+		struct address_space *mapping = NULL;
+
+		filemap_invalidate_lock(mapping);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_INVALIDATE_LOCK], [
+	LB2_MSG_LINUX_TEST_RESULT([if filemap_invalidate_lock() is available],
+	[address_space_invalidate_lock], [
+		AC_DEFINE(HAVE_INVALIDATE_LOCK, 1,
+			[filemap_invalidate_lock() is available])
+	])
+]) # LC_HAVE_INVALIDATE_LOCK
+
+#
+# LC_HAVE_SECURITY_DENTRY_INIT_WITH_XATTR_NAME_ARG
+#
+# Linux v5.15-rc1-20-g15bf32398ad4
+# security: Return xattr name from security_dentry_init_security()
+#
+AC_DEFUN([LC_SRC_HAVE_SECURITY_DENTRY_INIT_WITH_XATTR_NAME_ARG], [
+	LB2_LINUX_TEST_SRC([security_dentry_init_security_xattr_name_arg], [
+		#include <linux/security.h>
+	],[
+		struct dentry *dentry = NULL;
+		int mode = 0;
+		const struct qstr *name = NULL;
+		const char *xattr_name = NULL;
+		void **ctx = NULL;
+		u32 *ctxlen = 0;
+		int rc = security_dentry_init_security(dentry, mode, name, &xattr_name,
+						       ctx, ctxlen);
+		(void)rc;
+
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_SECURITY_DENTRY_INIT_WITH_XATTR_NAME_ARG], [
+	LB2_MSG_LINUX_TEST_RESULT([if security_dentry_init_security() returns xattr name],
+	[security_dentry_init_security_xattr_name_arg], [
+		AC_DEFINE(HAVE_SECURITY_DENTRY_INIT_WITH_XATTR_NAME_ARG, 1,
+			[security_dentry_init_security() returns xattr name])
+	])
+]) # LC_HAVE_SECURITY_DENTRY_INIT_WITH_XATTR_NAME_ARG
+
+#
+# LC_FOLIO_MEMCG_LOCK
+#
+# kernel v5.15-rc3-45-gf70ad4487415
+#    mm/memcg: Add folio_memcg_lock() and folio_memcg_unlock()
+# Use folio_memcg_[un]lock when [un]lock_page_memcg is removed.
+#
+AC_DEFUN([LC_SRC_FOLIO_MEMCG_LOCK], [
+	LB2_LINUX_TEST_SRC([folio_memcg_lock], [
+		#include <linux/memcontrol.h>
+	],[
+		folio_memcg_lock(NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_FOLIO_MEMCG_LOCK], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'folio_memcg_lock' is defined],
+	[folio_memcg_lock], [
+		AC_DEFINE(HAVE_FOLIO_MEMCG_LOCK, 1, [folio_memcg_lock is defined])
+	])
+]) # LC_FOLIO_MEMCG_LOCK
+
+#
+# LC_HAVE___FILEMAP_GET_FOLIO
+#
+# Linux commit v5.15-rc3-88-g3f0c6a07fee6
+#  mm/filemap: Add filemap_get_folio
+#
+AC_DEFUN([LC_SRC_HAVE___FILEMAP_GET_FOLIO], [
+	LB2_LINUX_TEST_SRC([__filemap_get_folio], [
+		#include <linux/pagemap.h>
+	],[
+		struct address_space *m = NULL;
+		pgoff_t start = 0;
+
+		(void)__filemap_get_folio(m, start, 0, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE___FILEMAP_GET_FOLIO], [
+	AC_MSG_CHECKING([if __filemap_get_folio() exists])
+	LB2_LINUX_TEST_RESULT([__filemap_get_folio], [
+		AC_DEFINE(HAVE___FILEMAP_GET_FOLIO, 1,
+			[__filemap_get_folio() exists])
+	])
+]) # LC_HAVE___FILEMAP_GET_FOLIO
+
+#
+# LC_HAVE_KIOCB_COMPLETE_2ARGS
+#
+# kernel v5.15-rc6-145-g6b19b766e8f0
+# fs: get rid of the res2 iocb->ki_complete argument
+#
+AC_DEFUN([LC_SRC_HAVE_KIOCB_COMPLETE_2ARGS], [
+	LB2_LINUX_TEST_SRC([kiocb_ki_complete_2args], [
+		#include <linux/fs.h>
+
+		static void complete_fn(struct kiocb *iocb, long ret)
+		{
+			(void)iocb;
+			(void)ret;
+		}
+	],[
+		struct kiocb *kio = NULL;
+
+		kio->ki_complete = complete_fn;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_KIOCB_COMPLETE_2ARGS], [
+	LB2_MSG_LINUX_TEST_RESULT([if kiocb->ki_complete() has 2 arguments],
+	[kiocb_ki_complete_2args], [
+		AC_DEFINE(HAVE_KIOCB_COMPLETE_2ARGS, 1,
+			[kiocb->ki_complete() has 2 arguments])
+	])
+]) # LC_HAVE_KIOCB_COMPLETE_2ARGS
+
+#
+# LC_FOLIO_MEMCG_LOCK_EXPORTED
+#
+# Linux commit v5.15-12272-g913ffbdd9985
+#   mm: unexport folio_memcg_{,un}lock
+#
+AC_DEFUN([LC_FOLIO_MEMCG_LOCK_EXPORTED], [
+LB_CHECK_EXPORT([folio_memcg_lock], [mm/memcontrol.c],
+	[AC_DEFINE(FOLIO_MEMCG_LOCK_EXPORTED, 1,
+			[folio_memcg_{,un}lock are exported])])
+]) # LC_FOLIO_MEMCG_LOCK_EXPORTED
+
+#
+# LC_EXPORTS_DELETE_FROM_PAGE_CACHE
+#
+# Linux commit v5.16-rc4-44-g452e9e6992fe
+# filemap: Add filemap_remove_folio and __filemap_remove_folio
+#
+# Also removes the export of delete_from_page_cache
+#
+AC_DEFUN([LC_EXPORTS_DELETE_FROM_PAGE_CACHE], [
+LB_CHECK_EXPORT([delete_from_page_cache], [mm/filemap.c],
+	[AC_DEFINE(HAVE_DELETE_FROM_PAGE_CACHE, 1,
+			[delete_from_page_cache is exported])])
+]) # LC_EXPORTS_DELETE_FROM_PAGE_CACHE
+
+#
+# LC_HAVE_WB_STAT_MOD
+#
+# Kernel 5.16-rc1 bd3488e7b4d61780eb3dfaca1cc6f4026bcffd48
+# mm/writeback: Rename __add_wb_stat() to wb_stat_mod()
+#
+AC_DEFUN([LC_SRC_HAVE_WB_STAT_MOD], [
+	LB2_LINUX_TEST_SRC([wb_stat_mode], [
+		#include <linux/backing-dev.h>
+	],[
+		wb_stat_mod(NULL, WB_WRITEBACK, 1);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_WB_STAT_MOD], [
+	LB2_MSG_LINUX_TEST_RESULT([if wb_stat_mod() exists], [wb_stat_mode], [
+		AC_DEFINE(HAVE_WB_STAT_MOD, 1,
+			[wb_stat_mod() exists])
+	])
+]) # LC_HAVE_WB_STAT_MOD
+
+#
+# LC_HAVE_FOLIO_BATCH
+#
+# linux kernel v5.16-rc4-36-g10331795fb79
+#   pagevec: Add folio_batch
+#
+AC_DEFUN([LC_SRC_HAVE_FOLIO_BATCH], [
+	LB2_LINUX_TEST_SRC([struct_folio_batch_exists], [
+		#include <linux/pagevec.h>
+	],[
+		struct folio_batch fbatch __attribute__ ((unused));
+
+		folio_batch_init(&fbatch);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_FOLIO_BATCH], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'struct folio_batch' is available],
+	[struct_folio_batch_exists], [
+		AC_DEFINE(HAVE_FOLIO_BATCH, 1,
+			['struct folio_batch' is available])
+	])
+]) # LC_HAVE_FOLIO_BATCH
+
+#
+# LC_HAVE_INVALIDATE_FOLIO
+#
+# linux commit v5.17-rc4-10-g128d1f8241d6
+# fs: Add invalidate_folio() aops method
+#
+AC_DEFUN([LC_SRC_HAVE_INVALIDATE_FOLIO], [
+	LB2_LINUX_TEST_SRC([address_spaace_operaions_invalidate_folio], [
+		#include <linux/fs.h>
+	],[
+		struct address_space_operations *aops = NULL;
+		struct folio *folio = NULL;
+		aops->invalidate_folio(folio, 0, PAGE_SIZE);
+
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_INVALIDATE_FOLIO], [
+	LB2_MSG_LINUX_TEST_RESULT([if have address_spaace_operaions->invalidate_folio() member],
+	[address_spaace_operaions_invalidate_folio], [
+		AC_DEFINE(HAVE_INVALIDATE_FOLIO, 1,
+			[address_spaace_operaions->invalidate_folio() member exists])
+	])
+]) # LC_HAVE_INVALIDATE_FOLIO
+
+#
+# LC_HAVE_DIRTY_FOLIO
+#
+# linux commit v5.17-rc4-38-g6f31a5a261db
+# fs: Add aops->dirty_folio
+# ... replaces ->set_page_dirty() with ->dirty_folio()
+#
+AC_DEFUN([LC_SRC_HAVE_DIRTY_FOLIO], [
+	LB2_LINUX_TEST_SRC([address_spaace_operaions_dirty_folio], [
+		#include <linux/fs.h>
+	],[
+		struct address_space_operations *aops = NULL;
+		struct address_space *mapping = NULL;
+		struct folio *folio = NULL;
+		bool dirty = aops->dirty_folio(mapping, folio);
+		(void) dirty;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_DIRTY_FOLIO], [
+	LB2_MSG_LINUX_TEST_RESULT([if have address_spaace_operaions->dirty_folio() member],
+	[address_spaace_operaions_dirty_folio], [
+		AC_DEFINE(HAVE_DIRTY_FOLIO, 1,
+			[address_spaace_operaions->dirty_folio() member exists])
+	])
+]) # LC_HAVE_DIRTY_FOLIO
+
+#
+# LC_HAVE_ALLOC_INODE_SB
+#
+# linux commit v5.17-49-g8b9f3ac5b01d
+#   fs: introduce alloc_inode_sb() to allocate filesystems specific inode
+#
+AC_DEFUN([LC_SRC_HAVE_ALLOC_INODE_SB], [
+	LB2_LINUX_TEST_SRC([alloc_inode_sb], [
+		#include <linux/fs.h>
+	],[
+		struct super_block *sb = NULL;
+		struct kmem_cache *cache = NULL;
+
+		(void)alloc_inode_sb(sb, cache, GFP_NOFS);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_ALLOC_INODE_SB], [
+	LB2_MSG_LINUX_TEST_RESULT([if alloc_inode_sb() exists],
+	[alloc_inode_sb], [
+		AC_DEFINE(HAVE_ALLOC_INODE_SB, 1,
+			[alloc_inode_sb() exists])
+	])
+]) # LC_HAVE_ALLOC_INODE_SB
+
+#
+# LC_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS
+#
+# Linux commit v5.18-rc5-221-gb7446e7cf15f
+#   fs: Remove aop flags parameter from grab_cache_page_write_begin()
+#
+AC_DEFUN([LC_SRC_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS], [
+	LB2_LINUX_TEST_SRC([grab_cache_page_write_begin_with_flags], [
+		#include <linux/pagemap.h>
+	],[
+		struct address_space *mapping = NULL;
+		(void)grab_cache_page_write_begin(mapping, 0, 1);
+	],[-Werror])
+]) 
+AC_DEFUN([LC_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS], [
+	LB2_MSG_LINUX_TEST_RESULT([if grab_cache_page_write_begin() has flags argument],
+	[grab_cache_page_write_begin_with_flags], [
+		AC_DEFINE(HAVE_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS, 1,
+			[grab_cache_page_write_begin() has flags argument])
+	])
+]) # LC_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS
+
+#
+# LC_HAVE_ADDRESS_SPACE_OPERATIONS_READ_FOLIO
+#
+# Linux commit v5.18-rc5-241-g5efe7448a142
+#   fs: Introduce aops->read_folio
+#
+AC_DEFUN([LC_SRC_HAVE_ADDRESS_SPACE_OPERATIONS_READ_FOLIO], [
+	LB2_LINUX_TEST_SRC([address_space_operations_read_folio], [
+		#include <linux/fs.h>
+	],[
+		struct address_space_operations *aops = NULL;
+		struct file *file = NULL;
+		struct folio *folio = NULL;
+		int err = aops->read_folio(file, folio);
+		(void)err;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_ADDRESS_SPACE_OPERATIONS_READ_FOLIO], [
+	LB2_MSG_LINUX_TEST_RESULT([if struct address_space_operations() has read_folio()],
+	[address_space_operations_read_folio], [
+		AC_DEFINE(HAVE_AOPS_READ_FOLIO, 1,
+			[struct address_space_operations() has read_folio()])
+	])
+]) # LC_HAVE_ADDRESS_SPACE_OPERATIONS_READ_FOLIO
+
+#
+# LC_HAVE_READ_CACHE_FOLIO_FILLER_WITH_FILE
+#
+# Linux commit v5.18-rc5-280-ge9b5b23e957e
+#   fs: Change the type of filler_t
+#
+AC_DEFUN([LC_SRC_HAVE_READ_CACHE_FOLIO_FILLER_WITH_FILE], [
+	LB2_LINUX_TEST_SRC([read_cache_folio_filler_with_file], [
+		#include <linux/pagemap.h>
+		static inline int _filler(struct file *file, struct folio *f)
+		{
+			return 0;
+		}
+	],[
+		struct address_space *mapping = NULL;
+		struct file *file = NULL;
+		struct folio *folio = read_cache_folio(mapping, 0, _filler, file);
+		(void)folio;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_READ_CACHE_FOLIO_FILLER_WITH_FILE], [
+	LB2_MSG_LINUX_TEST_RESULT([if read_cache_folio() filler_t needs struct file],
+	[read_cache_folio_filler_with_file], [
+		AC_DEFINE(HAVE_READ_CACHE_FOLIO_WANTS_FILE, 1,
+			[read_cache_folio() filler_t needs struct file])
+	])
+]) # LC_HAVE_READ_CACHE_FOLIO_FILLER_WITH_FILE
+
+#
+# LC_HAVE_ADDRESS_SPACE_OPERATIONS_RELEASE_FOLIO
+#
+# Linux commit v5.18-rc5-282-gfa29000b6b26
+#  fs: Add aops->release_folio
+#
+AC_DEFUN([LC_SRC_HAVE_ADDRESS_SPACE_OPERATIONS_RELEASE_FOLIO], [
+	LB2_LINUX_TEST_SRC([address_space_operations_release_folio], [
+		#include <linux/fs.h>
+	],[
+		struct address_space_operations *aops = NULL;
+		struct folio *folio = NULL;
+		int err = aops->release_folio(folio, GFP_KERNEL);
+		(void)err;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_ADDRESS_SPACE_OPERATIONS_RELEASE_FOLIO], [
+	LB2_MSG_LINUX_TEST_RESULT([if struct address_space_operations() has release_folio()],
+	[address_space_operations_release_folio], [
+		AC_DEFINE(HAVE_AOPS_RELEASE_FOLIO, 1,
+			[struct address_space_operations() has release_folio()])
+	])
+]) # LC_HAVE_ADDRESS_SPACE_OPERATIONS_RELEASE_FOLIO
+
+#
+# LC_HAVE_LSMCONTEXT_INIT
+#
+# repo: git://git.launchpad.net/~ubuntu-kernel/ubuntu/+source/linux/+git/jammy
+# kernel linux-hwe-5.19 commit fef1deb99dad87dd700afae76b35c5b5750e33a8
+# LSM: Removed scaffolding function lsmcontext_init
+#
+AC_DEFUN([LC_SRC_HAVE_LSMCONTEXT_INIT], [
+	LB2_LINUX_TEST_SRC([lsmcontext_init], [
+		#include <linux/security.h>
+	],[
+		struct lsm_context ctx = {};
+
+		lsmcontext_init(&ctx, "", 0, 0);
+	],[])
+])
+AC_DEFUN([LC_HAVE_LSMCONTEXT_INIT], [
+	LB2_MSG_LINUX_TEST_RESULT([if lsmcontext_init is available],
+	[lsmcontext_init], [
+		AC_DEFINE(HAVE_LSMCONTEXT_INIT, 1,
+			[lsmcontext_init is available])
+	])
+]) # LC_HAVE_LSMCONTEXT_INIT
+
+#
+# LC_SECURITY_DENTRY_INIT_SECURTY_WITH_CTX
+#
+# repo: git://git.launchpad.net/~ubuntu-kernel/ubuntu/+source/linux/+git/jammy
+# kernel linux-hwe-5.19 commit 57d0004bc811254916be30f94c86d9607867deb0
+# LSM: Use lsm_context in security_dentry_init_security
+#
+AC_DEFUN([LC_SRC_SECURITY_DENTRY_INIT_SECURTY_WITH_CTX], [
+	LB2_LINUX_TEST_SRC([security_dentry_init_security_with_ctx], [
+		#include <linux/security.h>
+	],[
+		struct dentry *dentry = NULL;
+		const struct qstr *name = NULL;
+		struct lsm_context *ctx = NULL;
+		const char *xattr_name = "";
+
+		(void)security_dentry_init_security(dentry, 0, name,
+						    &xattr_name, ctx);
+	],[-Werror])
+])
+AC_DEFUN([LC_SECURITY_DENTRY_INIT_SECURTY_WITH_CTX], [
+	LB2_MSG_LINUX_TEST_RESULT([if security_dentry_init_security needs lsm_context],
+	[security_dentry_init_security_with_ctx], [
+		AC_DEFINE(HAVE_SECURITY_DENTRY_INIT_SECURTY_WITH_CTX, 1,
+			[security_dentry_init_security needs lsm_context])
+	])
+]) # LC_SECURITY_DENTRY_INIT_SECURTY_WITH_CTX
+
+#
+# LC_LSMCONTEXT_HAS_ID
+#
+# repo: git://git.launchpad.net/~ubuntu-kernel/ubuntu/+source/linux/+git/noble
+# commit dad7cffb719e45fd43121ade4ada90ff376c9cad
+# LSM stacking v39: LSM: Ensure the correct LSM context releaser
+#
+AC_DEFUN([LC_SRC_LSMCONTEXT_HAS_ID], [
+	LB2_LINUX_TEST_SRC([lsm_context_has_id], [
+		#include <linux/security.h>
+	],[
+		((struct lsm_context *)1)->id = 0;
+	],[-Werror])
+])
+AC_DEFUN([LC_LSMCONTEXT_HAS_ID], [
+	LB2_MSG_LINUX_TEST_RESULT([if lsm_context has id],
+	[lsm_context_has_id], [
+		AC_DEFINE(HAVE_LSMCONTEXT_HAS_ID, 1,
+			[lsm_context has id])
+	])
+]) # LC_LSMCONTEXT_HAS_ID
+
+#
+# LC_HAVE_NO_LLSEEK
+#
+# Linux commit v5.19-rc2-6-g868941b14441
+#   fs: remove no_llseek
+#
+AC_DEFUN([LC_SRC_HAVE_NO_LLSEEK], [
+	LB2_LINUX_TEST_SRC([no_llseek], [
+		#include <linux/fs.h>
+	],[
+		static const struct file_operations fops = {
+			.llseek = &no_llseek,
+		};
+		(void)fops;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_NO_LLSEEK], [
+	LB2_MSG_LINUX_TEST_RESULT([if no_llseek() is available],
+	[no_llseek], [
+		AC_DEFINE(HAVE_NO_LLSEEK, 1, [no_llseek() is available])
+	])
+]) # LC_HAVE_NO_LLSEEK
+
+#
+# LC_DQUOT_TRANSFER_WITH_USER_NS
+#
+# Linux commit v5.19-rc3-6-g71e7b535b890
+#  quota: port quota helpers mount ids
+#
+AC_DEFUN([LC_SRC_DQUOT_TRANSFER_WITH_USER_NS], [
+	LB2_LINUX_TEST_SRC([dquot_transfer], [
+		#include <linux/quotaops.h>
+	],[
+		struct user_namespace *userns = NULL;
+		struct inode *inode = NULL;
+		struct iattr *iattr = NULL;
+		int err __attribute__ ((unused));
+
+		err = dquot_transfer(userns, inode, iattr);
+	],[-Werror])
+])
+AC_DEFUN([LC_DQUOT_TRANSFER_WITH_USER_NS], [
+	LB2_MSG_LINUX_TEST_RESULT([if dquot_transfer() has user_ns argument],
+	[dquot_transfer], [
+		AC_DEFINE(HAVE_DQUOT_TRANSFER_WITH_USER_NS, 1,
+			[dquot_transfer() has user_ns argument])
+	])
+]) # LC_DQUOT_TRANSFER_WITH_USER_NS
+
+#
+# LC_HAVE_FILEMAP_GET_FOLIOS
+#
+# Linux commit v5.19-rc3-342-gbe0ced5e9cb8
+#  filemap: Add filemap_get_folios()
+#
+AC_DEFUN([LC_SRC_HAVE_FILEMAP_GET_FOLIOS], [
+	LB2_LINUX_TEST_SRC([filemap_get_folios], [
+		#include <linux/pagemap.h>
+	],[
+		struct address_space *m = NULL;
+		pgoff_t start = 0;
+		struct folio_batch *fbatch = NULL;
+		(void)filemap_get_folios(m, &start, ULONG_MAX, fbatch);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_FILEMAP_GET_FOLIOS], [
+	AC_MSG_CHECKING([if filemap_get_folios() exists])
+	LB2_LINUX_TEST_RESULT([filemap_get_folios], [
+		AC_DEFINE(HAVE_FILEMAP_GET_FOLIOS, 1,
+			[filemap_get_folios() exists])
+	])
+]) # LC_HAVE_FILEMAP_GET_FOLIOS
+
+#
+# LC_HAVE_ADDRESS_SPACE_OPERATIONS_MIGRATE_FOLIO
+#
+# Linux commit v5.19-rc3-392-g5490da4f06d1
+#  fs: Add aops->migrate_folio
+#
+AC_DEFUN([LC_SRC_HAVE_ADDRESS_SPACE_OPERATIONS_MIGRATE_FOLIO], [
+	LB2_LINUX_TEST_SRC([address_space_operations_migrate_folio], [
+		#include <linux/fs.h>
+	],[
+		struct address_space_operations *aops = NULL;
+		struct address_space *m = NULL;
+		struct folio *src = NULL;
+		struct folio *dst = NULL;
+		int err = aops->migrate_folio(m, dst, src, MIGRATE_ASYNC);
+		(void)err;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_ADDRESS_SPACE_OPERATIONS_MIGRATE_FOLIO], [
+	LB2_MSG_LINUX_TEST_RESULT([if struct address_space_operations() has migrate_folio()],
+	[address_space_operations_migrate_folio], [
+		AC_DEFINE(HAVE_AOPS_MIGRATE_FOLIO, 1,
+			[struct address_space_operations() has migrate_folio()])
+	])
+]) # LC_HAVE_ADDRESS_SPACE_OPERATIONS_MIGRATE_FOLIO
+
+#
+# LC_REGISTER_SHRINKER_FORMAT_NAMED
+#
+# Linux commit v5.19-rc4-52-ge33c267ab70d
+#   mm: shrinkers: provide shrinkers with names
+#
+AC_DEFUN([LC_SRC_REGISTER_SHRINKER_FORMAT_NAMED], [
+	LB2_LINUX_TEST_SRC([register_shrinker_format], [
+		#include <linux/mm.h>
+	],[
+		if (register_shrinker(NULL, "lustre-%ps", __func__))
+			unregister_shrinker(NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_REGISTER_SHRINKER_FORMAT_NAMED], [
+	LB2_MSG_LINUX_TEST_RESULT([if register_shrinker() returns status],
+	[register_shrinker_format], [
+		AC_DEFINE(HAVE_REGISTER_SHRINKER_FORMAT_NAMED, 1,
+			[register_shrinker() returns status])
+	])
+]) # LC_REGISTER_SHRINKER_FORMAT_NAMED
+
+#
+# LC_HAVE_VFS_SETXATTR_NON_CONST_VALUE
+#
+# From Linux commit v5.19-rc5-17-g0c5fd887d2bb
+#   acl: move idmapped mount fixup into vfs_{g,s}etxattr()
+# Until Linux commit v6.0-rc3-6-g6344e66970c6
+#   xattr: constify value argument in vfs_setxattr()
+#
+AC_DEFUN([LC_SRC_HAVE_VFS_SETXATTR_NON_CONST_VALUE], [
+	LB2_LINUX_TEST_SRC([vfs_setxattr_non_const_value_arg], [
+		#include <linux/xattr.h>
+	],[
+		struct dentry *de = NULL;
+		const char *name = "an.xattr";
+		const void *value = NULL;
+		int err = vfs_setxattr(&init_user_ns, de, name, value, 0, 0);
+		(void)err;
+	],[-Werror])
+]) # LC_HAVE_VFS_SETXATTR_NON_CONST_VALUE
+AC_DEFUN([LC_HAVE_VFS_SETXATTR_NON_CONST_VALUE], [
+	LB2_MSG_LINUX_TEST_RESULT([if vfs_setxattr() value argument is non-const],
+	[vfs_setxattr_non_const_value_arg], [
+		AC_DEFINE([VFS_SETXATTR_VALUE(value)],
+			  [(value)],
+			  [vfs_setxattr() value argument is const void *])
+	],[
+		AC_DEFINE([VFS_SETXATTR_VALUE(value)],
+			  [((void *)(value))],
+			  [vfs_setxattr() value argument is non-const])
+	])
+]) # LC_HAVE_VFS_SETXATTR_NON_CONST_VALUE
+
+#
+# LC_HAVE_IOV_ITER_GET_PAGES_ALLOC2
+#
+# Linux commit v5.19-10313-geba2d3d79829
+#   get rid of non-advancing variants
+#
+AC_DEFUN([LC_SRC_HAVE_IOV_ITER_GET_PAGES_ALLOC2], [
+	LB2_LINUX_TEST_SRC([iov_iter_get_pages_alloc2], [
+		#include <linux/uio.h>
+	],[
+		struct iov_iter *iter = NULL;
+		struct page ***pages = NULL;
+		size_t maxsize = 1;
+		size_t start;
+		size_t result __attribute__ ((unused));
+		result = iov_iter_get_pages_alloc2(iter, pages, maxsize, &start);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_IOV_ITER_GET_PAGES_ALLOC2], [
+	LB2_MSG_LINUX_TEST_RESULT([if iov_iter_get_pages_alloc2() is available],
+	[iov_iter_get_pages_alloc2], [
+		AC_DEFINE(HAVE_IOV_ITER_GET_PAGES_ALLOC2, 1,
+			[iov_iter_get_pages_alloc2() is available])
+	])
+]) # LC_HAVE_IOV_ITER_GET_PAGES_ALLOC2
+
+#
+# LC_HAVE_USER_BACKED_ITER
+#
+# Linux commit v5.19-10287-gfcb14cb1bdac
+#   new iov_iter flavour - ITER_UBUF
+#
+AC_DEFUN([LC_SRC_HAVE_USER_BACKED_ITER], [
+	LB2_LINUX_TEST_SRC([user_backed_iter], [
+		#include <linux/uio.h>
+	],[
+		struct iov_iter *iter = NULL;
+		bool result __attribute__ ((unused));
+
+		result = user_backed_iter(iter);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_USER_BACKED_ITER], [
+	LB2_MSG_LINUX_TEST_RESULT([if user_backed_iter() is available],
+	[user_backed_iter], [
+		AC_DEFINE(HAVE_USER_BACKED_ITER, 1,
+			[user_backed_iter() is available])
+	])
+]) # LC_HAVE_USER_BACKED_ITER
+
+#
+# LC_HAVE_IOV_ITER_IS_ALIGNED
+#
+# Linux commit v5.19-rc4-8-gcfa320f72882
+#    iov: introduce iov_iter_aligned
+#
+AC_DEFUN([LC_SRC_HAVE_IOV_ITER_IS_ALIGNED], [
+	LB2_LINUX_TEST_SRC([iov_iter_is_aligned], [
+		#include <linux/uio.h>
+	],[
+		struct iov_iter *iter = NULL;
+		bool result __attribute__ ((unused));
+
+		result = iov_iter_is_aligned(iter, ~PAGE_MASK, ~PAGE_MASK);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_IOV_ITER_IS_ALIGNED], [
+	LB2_MSG_LINUX_TEST_RESULT([if iov_iter_is_aligned() is available],
+	[iov_iter_is_aligned], [
+		AC_DEFINE(HAVE_IOV_ITER_IS_ALIGNED, 1,
+			[iov_iter_is_aligned() is available])
+	])
+]) # LC_HAVE_IOV_ITER_IS_ALIGNED
+
+#
+# LC_HAVE_GET_RANDOM_U32_AND_U64
+#
+# Linux commit v4.10-rc3-6-gc440408cf690
+#   random: convert get_random_int/long into get_random_u32/u64
+# Linux commit v6.0-11338-gde492c83cae0
+#   prandom: remove unused functions
+#
+AC_DEFUN([LC_SRC_HAVE_GET_RANDOM_U32_AND_U64], [
+	LB2_LINUX_TEST_SRC([get_random_u32_and_u64], [
+		#include <linux/random.h>
+	],[
+		u32 rand32 = get_random_u32();
+		u64 rand64 = get_random_u64();
+		(void)rand32;
+		(void)rand64;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_GET_RANDOM_U32_AND_U64], [
+	LB2_MSG_LINUX_TEST_RESULT([if get_random_u32() and get_random_u64() are available],
+	[get_random_u32_and_u64], [
+		AC_DEFINE(HAVE_GET_RANDOM_U32_AND_U64, 1,
+			[get_random_[u32|u64] are available])
+	],[
+		AC_DEFINE([get_random_u32()], [prandom_u32()],
+			[get_random_u32() is not available, use prandom_u32])
+	])
+]) # LC_HAVE_GET_RANDOM_U32_AND_U64
+
+#
+# LC_NFS_FILLDIR_USE_CTX_RETURN_BOOL
+#
+# Linux commit v6.0-rc1-2-g25885a35a720
+#  Change calling conventions for filldir_t
+#
+AC_DEFUN([LC_SRC_NFS_FILLDIR_USE_CTX_RETURN_BOOL], [
+	LB2_LINUX_TEST_SRC([filldir_ctx_return_bool], [
+		#include <linux/fs.h>
+
+		bool filldir(struct dir_context *ctx, const char* name,
+			     int i, loff_t off, u64 tmp, unsigned temp);
+		bool filldir(struct dir_context *ctx, const char* name,
+			     int i, loff_t off, u64 tmp, unsigned temp)
+		{
+			return 0;
+		}
+	],[
+		struct dir_context ctx = {
+			.actor = filldir,
+		};
+
+		ctx.actor(NULL, "test", 0, (loff_t) 0, 0, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_NFS_FILLDIR_USE_CTX_RETURN_BOOL], [
+	LB2_MSG_LINUX_TEST_RESULT([if filldir_t uses struct dir_context and returns bool],
+	[filldir_ctx_return_bool], [
+		AC_DEFINE(HAVE_FILLDIR_USE_CTX_RETURN_BOOL, 1,
+			[filldir_t needs struct dir_context and returns bool])
+		AC_DEFINE(FILLDIR_TYPE, bool,
+			[filldir_t return type is bool or int])
+	],[
+		AC_DEFINE(FILLDIR_TYPE, int,
+			[filldir_t return type is bool or int])
+	])
+]) # LC_NFS_FILLDIR_USE_CTX_RETURN_BOOL
+
+#
+# LC_HAVE_ADD_TO_PAGE_CACHE_LOCKED
+#
+# Linux version v6.0 commit: 2bb876b58d593d7f2522ec0f41f20a74fde76822
+# filemap: Remove add_to_page_cache() and add_to_page_cache_locked()
+# add_to_page_cache_locked() no longer exported.
+#
+AC_DEFUN([LC_HAVE_ADD_TO_PAGE_CACHE_LOCKED], [
+LB_CHECK_EXPORT([add_to_page_cache_locked], [mm/filemap.c],
+	[AC_DEFINE(HAVE_ADD_TO_PAGE_CACHE_LOCKED, 1,
+			[add_to_page_cache_locked is exported by the kernel])])
+]) # LC_HAVE_ADD_TO_PAGE_CACHE_LOCKED
+
+#
+# LC_HAVE_FILEMAP_GET_FOLIOS_CONTIG
+#
+# Linux commit v6.0-rc3-94-g35b471467f88
+#   filemap: add filemap_get_folios_contig()
+#
+AC_DEFUN([LC_SRC_HAVE_FILEMAP_GET_FOLIOS_CONTIG], [
+	LB2_LINUX_TEST_SRC([filemap_get_folios_contig], [
+		#include <linux/pagemap.h>
+	],[
+		struct address_space *m = NULL;
+		pgoff_t start = 0;
+		struct folio_batch *fbatch = NULL;
+		(void)filemap_get_folios_contig(m, &start, ULONG_MAX, fbatch);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_FILEMAP_GET_FOLIOS_CONTIG], [
+	LB2_MSG_LINUX_TEST_RESULT([if filemap_get_folios_contig() is available],
+	[filemap_get_folios_contig], [
+		AC_DEFINE(HAVE_FILEMAP_GET_FOLIOS_CONTIG, 1,
+			[filemap_get_folios_contig() is available])
+	])
+]) # LC_HAVE_FILEMAP_GET_FOLIOS_CONTIG
+
+#
+# LC_HAVE_GET_RANDOM_U32_BELOW
+#
+# Linux commit v6.1-13825-g3c202d14a9d7
+#   prandom: remove prandom_u32_max()
+#
+AC_DEFUN([LC_SRC_HAVE_GET_RANDOM_U32_BELOW], [
+	LB2_LINUX_TEST_SRC([get_random_u32_below], [
+		#include <linux/random.h>
+	],[
+		u32 rand32 = get_random_u32_below(99);
+		(void)rand32;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_GET_RANDOM_U32_BELOW], [
+	LB2_MSG_LINUX_TEST_RESULT([if get_random_u32_below()is available],
+	[get_random_u32_below], [
+		AC_DEFINE(HAVE_GET_RANDOM_U32_BELOW, 1,
+			[get_random_u32_below() is available])
+	],[
+		AC_DEFINE([get_random_u32_below(v)], [prandom_u32_max(v)],
+			[get_random_u32_below() is not available])
+	])
+]) # LC_HAVE_GET_RANDOM_U32_BELOW
+
+#
+# LC_HAVE_ACL_WITH_DENTRY
+#
+# Linux commit v6.1-rc1-2-g138060ba92b3
+#   fs: pass dentry to set acl method
+# Linux commit v6.1-rc1-4-g7420332a6ff4
+#   fs: add new get acl method
+#
+AC_DEFUN([LC_SRC_HAVE_ACL_WITH_DENTRY], [
+	LB2_LINUX_TEST_SRC([acl_with_dentry], [
+		#include <linux/fs.h>
+	],[
+		struct inode_operations *iops = NULL;
+		struct dentry *dentry = NULL;
+
+		iops->get_acl(NULL, dentry, 0);
+		(void)dentry;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_ACL_WITH_DENTRY], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'get_acl' and 'set_acl' use dentry argument],
+	[acl_with_dentry], [
+		AC_DEFINE(HAVE_ACL_WITH_DENTRY, 1,
+			['get_acl' and 'set_acl' use dentry argument])
+	])
+]) # LC_HAVE_ACL_WITH_DENTRY
+
+#
+# LC_IOP_GET_INODE_ACL
+#
+# linux kernel v6.1-rc1-3-gcac2f8b8d8
+#   fs: rename current get acl method
+#
+AC_DEFUN([LC_SRC_IOP_GET_INODE_ACL], [
+	LB2_LINUX_TEST_SRC([inode_ops_get_inode_acl], [
+		#include <linux/fs.h>
+	],[
+		struct inode_operations iop;
+		iop.get_inode_acl = NULL;
+	])
+])
+AC_DEFUN([LC_IOP_GET_INODE_ACL], [
+	LB2_MSG_LINUX_TEST_RESULT([if inode_operations has .get_inode_acl member function],
+	[inode_ops_get_inode_acl], [
+		AC_DEFINE(HAVE_IOP_GET_INODE_ACL, 1,
+			[inode_operations has .get_inode_acl member function])
+	])
+]) # LC_IOP_GET_INODE_ACL
+
+#
+# LC_HAVE_POSIX_ACL_TYPE
+#
+# Linux commit v6.1-rc1-15-ge4cc9163032f
+#   acl: add vfs_set_acl()
+#
+AC_DEFUN([LC_SRC_HAVE_POSIX_ACL_TYPE], [
+	LB2_LINUX_TEST_SRC([posix_acl_type], [
+		#include <linux/fs.h>
+		#include <linux/posix_acl_xattr.h>
+	],[
+		posix_acl_type(NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_POSIX_ACL_TYPE], [
+	LB2_MSG_LINUX_TEST_RESULT([if posix_acl_type() is available],
+	[posix_acl_type], [
+		AC_DEFINE(HAVE_POSIX_ACL_TYPE, 1,
+			[posix_acl_type() is available])
+	])
+]) # LC_HAVE_POSIX_ACL_TYPE
+
+#
+# LC_HAVE_FOLIO_MAPCOUNT
+#
+# linux kernel v6.1-rc4-186-gcb67f4282bf9
+#   mm,thp,rmap: simplify compound page mapcount handling
+#
+AC_DEFUN([LC_SRC_HAVE_FOLIO_MAPCOUNT], [
+	LB2_LINUX_TEST_SRC([folio_mapcount], [
+		#include <linux/mm.h>
+	],[
+		(void)folio_mapcount((const struct folio *)NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_FOLIO_MAPCOUNT], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'folio_mapcount()' is available],
+	[folio_mapcount], [
+		AC_DEFINE(HAVE_FOLIO_MAPCOUNT, 1,
+			['folio_mapcount()' is available])
+	])
+]) # LC_HAVE_FOLIO_MAPCOUNT
+
+#
+# LC_HAVE_U64_CAPABILITY
+#
+# linux kernel v6.2-13111-gf122a08b197d
+#   capability: just use a 'u64' instead of a 'u32[2]' array
+#
+AC_DEFUN([LC_SRC_HAVE_U64_CAPABILITY], [
+	LB2_LINUX_TEST_SRC([kernel_cap_t_has_u64_value], [
+		#include <linux/cred.h>
+		#include <linux/capability.h>
+	],[
+		kernel_cap_t cap __attribute__ ((unused));
+		cap.val = 0xffffffffffffffffull;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_U64_CAPABILITY], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'kernel_cap_t' has u64 val],
+	[kernel_cap_t_has_u64_value], [
+		AC_DEFINE(HAVE_U64_CAPABILITY, 1,
+			['kernel_cap_t' has u64 val])
+	])
+]) # LC_HAVE_U64_CAPABILITY
+
+#
+# LC_HAVE_MNT_IDMAP_ARG
+#
+# linux kernel v6.2-rc1-4-gb74d24f7a74f
+#   fs: port ->getattr() to pass mnt_idmap
+# linux kernel v6.2-rc1-3-gc1632a0f1120
+#   fs: port ->setattr() to pass mnt_idmap
+#
+AC_DEFUN([LC_SRC_HAVE_MNT_IDMAP_ARG], [
+	LB2_LINUX_TEST_SRC([inode_ops_getattr_has_mnt_idmap_argument], [
+		#include <linux/mount.h>
+		#include <linux/fs.h>
+	],[
+		struct inode_operations *iops = NULL;
+
+		iops->getattr((struct mnt_idmap *)NULL,	NULL, NULL, 0, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_MNT_IDMAP_ARG], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'inode_operations' members have mnt_idmap argument],
+	[inode_ops_getattr_has_mnt_idmap_argument], [
+		AC_DEFINE(HAVE_MNT_IDMAP_ARG, 1,
+			['inode_operations' members have mnt_idmap argument])
+		AC_DEFINE(HAVE_USER_NAMESPACE_ARG, 1,
+			[use mnt_idmap in place of user_namespace argument])
+		AC_DEFINE(HAVE_DQUOT_TRANSFER_WITH_USER_NS, 1,
+			[use mnt_idmap with dquot_transfer])
+	])
+]) # LC_HAVE_MNT_IDMAP_ARG
+
+#
+# LC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK
+#
+# This test is run early so HAVE_LINUX_FILELOCK_HEADER can be used
+# in other configure tests
+#
+# Linux commit v6.2-rc3-9-g5970e15dbcfe
+#   filelock: move file locking definitions to separate header file
+#
+AC_DEFUN([LC_SRC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK], [
+	LB2_LINUX_TEST_SRC([locks_lock_file_wait_in_filelock], [
+		#include <linux/filelock.h>
+	],[
+		locks_lock_file_wait(NULL, NULL);
+	])
+])
+AC_DEFUN([LC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'locks_lock_file_wait' exists in filelock.h],
+	[locks_lock_file_wait_in_filelock], [
+		AC_DEFINE(HAVE_LOCKS_LOCK_FILE_WAIT, 1,
+			[kernel has locks_lock_file_wait in filelock.h])
+		AC_DEFINE(HAVE_LINUX_FILELOCK_HEADER, 1,
+			[linux/filelock.h is present])
+		AC_DEFINE(HAVE_LM_GRANT_2ARGS, 1,
+			[lock_manager_operations.lm_grant takes two args])
+	])
+]) # LC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK
+
+#
+# LC_HAVE_FOLIO_BATCH_REINIT
+#
+# linux kernel v6.2-rc4-254-g811561288397
+#   mm: pagevec: add folio_batch_reinit()
+#
+AC_DEFUN([LC_SRC_HAVE_FOLIO_BATCH_REINIT], [
+	LB2_LINUX_TEST_SRC([folio_batch_reinit_exists], [
+		#include <linux/pagevec.h>
+	],[
+		struct folio_batch fbatch __attribute__ ((unused));
+
+		folio_batch_reinit(&fbatch);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_FOLIO_BATCH_REINIT], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'folio_batch_reinit' is available],
+	[folio_batch_reinit_exists], [
+		AC_DEFINE(HAVE_FOLIO_BATCH_REINIT, 1,
+			['folio_batch_reinit' is available])
+	])
+]) # LC_HAVE_FOLIO_BATCH_REINIT
+
+#
+# LC_HAVE_IOV_ITER_IOVEC
+#
+# linux kernel v6.3-rc4-32-g6eb203e1a868
+#   iov_iter: remove iov_iter_iovec()
+#
+AC_DEFUN([LC_SRC_HAVE_IOV_ITER_IOVEC], [
+	LB2_LINUX_TEST_SRC([iov_iter_iovec_exists], [
+		#include <linux/uio.h>
+	],[
+		struct iovec iov __attribute__ ((unused));
+		struct iov_iter i = { };
+
+		iov = iov_iter_iovec(&i);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_IOV_ITER_IOVEC], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'iov_iter_iovec' is available],
+	[iov_iter_iovec_exists], [
+		AC_DEFINE(HAVE_IOV_ITER_IOVEC, 1,
+			['iov_iter_iovec' is available])
+	])
+]) # LC_HAVE_IOV_ITER_IOVEC
+
+#
+# LC_HAVE_IOVEC_WITH_IOV_MEMBER
+#
+# linux kernel v6.3-rc4-34-g747b1f65d39a
+#   iov_iter: overlay struct iovec and ubuf/len
+# This renames iov_iter member iov to __iov and now __iov == __ubuf_iovec
+# And provides the iov_iter() accessor to return __iov or __ubuf_iovec
+#
+AC_DEFUN([LC_SRC_HAVE_IOVEC_WITH_IOV_MEMBER], [
+	LB2_LINUX_TEST_SRC([iov_iter_has___iov_member], [
+		#include <linux/uio.h>
+	],[
+		struct iov_iter iter = { };
+		size_t len __attribute__ ((unused));
+
+		len = iter.__iov->iov_len;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_IOVEC_WITH_IOV_MEMBER], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'iov_iter()' is available],
+	[iov_iter_has___iov_member], [
+		AC_DEFINE(HAVE___IOV_MEMBER, __iov,
+			['struct iov_iter' has '__iov' member])
+		AC_DEFINE(HAVE_ITER_IOV, 1,
+			[iter_iov() is available])
+	],[
+		AC_DEFINE(iter_iov(iter), (iter)->__iov,
+			['iov_iter()' provides iov])
+		AC_DEFINE(__iov, iov,
+			['struct iov_iter' has 'iov' member])
+	])
+]) # LC_HAVE_IOVEC_WITH_IOV_MEMBER
+
+#
+# LC_HAVE_CLASS_CREATE_MODULE_ARG
+#
+# linux kernel v6.3-rc1-13-g1aaba11da9aa
+#   driver core: class: remove module * from class_create()
+#
+AC_DEFUN([LC_SRC_HAVE_CLASS_CREATE_MODULE_ARG], [
+	LB2_LINUX_TEST_SRC([class_create_without_module_arg], [
+		#include <linux/device/class.h>
+	],[
+		struct class *class;
+
+		class = class_create("empty");
+		if (IS_ERR(class))
+			return PTR_ERR(class);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_CLASS_CREATE_MODULE_ARG], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'class_create' does not have module arg],
+	[class_create_without_module_arg], [
+		AC_DEFINE([ll_class_create(name)],
+			  [class_create((name))],
+			  ['class_create' does not have module arg])
+	],[
+		AC_DEFINE([ll_class_create(name)],
+			  [class_create(THIS_MODULE, (name))],
+			  ['class_create' expects module arg])
+	])
+]) # LC_HAVE_CLASS_CREATE_MODULE_ARG
+
+#
+# LC_EXPORTS_FILEMAP_SPLICE_READ
+#
+# linux kernel v6.4-rc2-29-gc6585011bc1d
+#   splice: Remove generic_file_splice_read()
+#
+AC_DEFUN([LC_EXPORTS_FILEMAP_SPLICE_READ], [
+LB_CHECK_EXPORT([filemap_splice_read], [mm/filemap.c],
+	[AC_DEFINE(HAVE_FILEMAP_SPLICE_READ, 1,
+			['filemap_splice_read' is exported])])
+]) # LC_EXPORTS_FILEMAP_SPLICE_READ
+
+#
+# LC_HAVE_ENUM_ITER_PIPE
+#
+# linux kernel v6.4-rc2-30-g3fc40265ae2b
+#   iov_iter: Kill ITER_PIPE
+#
+AC_DEFUN([LC_SRC_HAVE_ENUM_ITER_PIPE], [
+	LB2_LINUX_TEST_SRC([enum_iter_type_iter_pipe], [
+		#include <linux/uio.h>
+	],[
+		enum iter_type iter_type = ITER_PIPE;
+
+		(void)iter_type;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_ENUM_ITER_PIPE], [
+	LB2_MSG_LINUX_TEST_RESULT([if enum iter_type has member 'iter_pipe'],
+	[enum_iter_type_iter_pipe], [
+		AC_DEFINE(HAVE_ENUM_ITER_PIPE, 1,
+			[enum iter_type has member 'iter_pipe'])
+	])
+]) # LC_HAVE_ENUM_ITER_PIPE
+
+#
+# LC_HAVE_GET_USER_PAGES_WITHOUT_VMA
+#
+# linux kernel v6.4-rc2-30-g3fc40265ae2b
+#   iov_iter: Kill ITER_PIPE
+#
+AC_DEFUN([LC_SRC_HAVE_GET_USER_PAGES_WITHOUT_VMA], [
+	LB2_LINUX_TEST_SRC([get_user_pages_without_vma], [
+		#include <linux/mm.h>
+	],[
+		struct page *pages __attribute__ ((unused));
+
+		(void)get_user_pages(0, 0, 0, &pages);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_GET_USER_PAGES_WITHOUT_VMA], [
+	LB2_MSG_LINUX_TEST_RESULT([if get_user_pages removed 'vma' parameter],
+	[get_user_pages_without_vma], [
+		AC_DEFINE(HAVE_GET_USER_PAGES_WITHOUT_VMA, 1,
+			[get_user_pages removed 'vma' parameter])
+	])
+]) # LC_HAVE_GET_USER_PAGES_WITHOUT_VMA
+
+#
+# LC_HAVE_BIO_ADD_FOLIO
+#
+# linux kernel v6.4-rc4-431-gbdadc6d83156
+#   scatterlist: add sg_set_folio()
+#
+AC_DEFUN([LC_SRC_HAVE_BIO_ADD_FOLIO], [
+	LB2_LINUX_TEST_SRC([bio_add_folio], [
+		#include <linux/bio.h>
+	],[
+		struct bio *bio = NULL;
+		struct folio *folio = NULL;
+		bool okay = bio_add_folio(bio, folio, PAGE_SIZE, 0);
+
+		if (okay)
+			return okay;
+		return false;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_BIO_ADD_FOLIO], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'bio_add_folio()' is available],
+	[bio_add_folio], [
+		AC_DEFINE(HAVE_BIO_ADD_FOLIO, 1,
+			['bio_add_folio()' is available])
+	],[],[module])
+]) # LC_HAVE_BIO_ADD_FOLIO
+
+#
+# LC_HAVE_SG_SET_FOLIO
+#
+# linux kernel v6.4-rc4-431-gbdadc6d83156
+#   scatterlist: add sg_set_folio()
+#
+AC_DEFUN([LC_SRC_HAVE_SG_SET_FOLIO], [
+	LB2_LINUX_TEST_SRC([sg_set_folio], [
+		#include <linux/scatterlist.h>
+	],[
+		struct scatterlist *sg = NULL;
+		struct folio *folio = NULL;
+
+		sg_set_folio(sg, folio, PAGE_SIZE, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_SG_SET_FOLIO], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'sg_set_folio()' is available],
+	[sg_set_folio], [
+		AC_DEFINE(HAVE_SG_SET_FOLIO, 1,
+			['sg_set_folio()' is available])
+	])
+]) # LC_HAVE_SG_SET_FOLIO
+
+#
+# LC_HAVE_STRUCT_PAGEVEC
+#
+# linux kernel v6.4-rc4-438-g1e0877d58b1e
+#   mm: remove struct pagevec
+#
+AC_DEFUN([LC_SRC_HAVE_STRUCT_PAGEVEC], [
+	LB2_LINUX_TEST_SRC([struct_pagevec_exists], [
+		#include <linux/pagevec.h>
+	],[
+		struct pagevec *pvec = NULL;
+		(void)pvec;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_STRUCT_PAGEVEC], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'struct pagevec' is available],
+	[struct_pagevec_exists], [
+		AC_DEFINE(HAVE_PAGEVEC, 1,
+			['struct pagevec' is available])
+	])
+]) # LC_HAVE_STRUCT_PAGEVEC
+
+#
+# LC_HAVE_FLUSH___WORKQUEUE
+#
+# linux kernel v6.5-rc1-7-g20bdedafd2f6
+#   workqueue: Warn attempt to flush system-wide workqueues.
+#
+AC_DEFUN([LC_SRC_HAVE_FLUSH___WORKQUEUE], [
+	LB2_LINUX_TEST_SRC([flush_scheduled_work_warning], [
+		#include <linux/workqueue.h>
+	],[
+		__flush_workqueue(system_wq);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_FLUSH___WORKQUEUE], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'flush_scheduled_work()' throws warning],
+	[flush_scheduled_work_warning], [
+		AC_DEFINE(HAVE_FLUSH___WORKQUEUE, 1,
+			['__flush_workqueue(system_wq)' is available])
+	])
+]) # LC_HAVE_FLUSH___WORKQUEUE
+
+#
+# LC_HAVE_INODE_GET_CTIME
+#
+# linux kernel v6.5-rc1-92-g13bc24457850
+#   fs: rename i_ctime field to __i_ctime
+#
+AC_DEFUN([LC_SRC_HAVE_INODE_GET_CTIME], [
+	LB2_LINUX_TEST_SRC([inode_get_ctime_exists], [
+		#include <linux/fs.h>
+	],[
+		struct inode *inode = NULL;
+		struct timespec64 ts __attribute__ ((unused));
+
+		ts = inode_get_ctime(inode);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_INODE_GET_CTIME], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'inode_get_ctime()' exists],
+	[inode_get_ctime_exists], [
+		AC_DEFINE(HAVE_INODE_GET_CTIME, 1,
+			['inode_get_ctime()' exists])
+	])
+]) # LC_HAVE_INODE_GET_CTIME
+
+#
+# LC_HAVE_COPY_FOLIO_FROM_ITER_ATOMIC
+#
+# Kernel 6.6 commit v6.5-rc3-3-g1b0306981e0f
+# iov_iter: replace iov_iter_copy_from_user_atomic() with iterator-advancing variant
+#
+AC_DEFUN([LC_SRC_HAVE_COPY_FOLIO_FROM_ITER_ATOMIC], [
+	LB2_LINUX_TEST_SRC([copy_folio_from_iter_atomic], [
+		#include <linux/uio.h>
+	],[
+		copy_folio_from_iter_atomic(NULL, 0, 0, NULL);
+	])
+])
+AC_DEFUN([LC_HAVE_COPY_FOLIO_FROM_ITER_ATOMIC], [
+	LB2_MSG_LINUX_TEST_RESULT([if have copy_folio_from_iter_atomic],
+	[copy_folio_from_iter_atomic], [
+		AC_DEFINE(HAVE_COPY_FOLIO_FROM_ITER_ATOMIC, 1,
+			['copy_folio_from_iter_atomic' exists])
+	])
+]) # LC_HAVE_COPY_FOLIO_FROM_ITER_ATOMIC
+
+#
+# LC_HAVE_MMAP_WRITE_TRYLOCK
+#
+# linux kernel v6.5-rc4-110-gcf95e337cb63
+#   mm: delete mmap_write_trylock() and vma_try_start_write()
+#
+AC_DEFUN([LC_SRC_HAVE_MMAP_WRITE_TRYLOCK], [
+	LB2_LINUX_TEST_SRC([mmap_write_trylock_removed], [
+		#include <linux/mmap_lock.h>
+	],[
+		struct mm_struct *mm = NULL;
+
+		(void)mmap_write_trylock(mm);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_MMAP_WRITE_TRYLOCK], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'mmap_write_trylock()' is available],
+	[mmap_write_trylock_removed], [
+		AC_DEFINE(HAVE_MMAP_WRITE_TRYLOCK, 1,
+			['mmap_write_trylock()' is available])
+	])
+]) # LC_HAVE_MMAP_WRITE_TRYLOCK
+
+#
+# LC_HAVE_GENERIC_FILEATTR_HAS_MASK_ARG
+#
+# linux kernel v6.5-rc1-95-g0d72b92883c6
+#   fs: pass the request_mask to generic_fillattr
+#
+AC_DEFUN([LC_SRC_HAVE_GENERIC_FILEATTR_HAS_MASK_ARG], [
+	LB2_LINUX_TEST_SRC([generic_fillattr_has_request_mask_arg], [
+		#include <linux/fs.h>
+	],[
+		struct inode *inode = NULL;
+		struct mnt_idmap *map = NULL;
+		struct kstat *kstat = NULL;
+
+		generic_fillattr(map, 0, inode, kstat);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_GENERIC_FILEATTR_HAS_MASK_ARG], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'generic_fillattr()' has request_mask argument],
+	[generic_fillattr_has_request_mask_arg], [
+		AC_DEFINE(HAVE_GENERIC_FILEATTR_HAS_MASK_ARG, 1,
+			['generic_fillattr()' has request_mask argument])
+		AC_DEFINE([RQMASK_ARG], [0,], [default request_mask argument])
+	], [
+		AC_DEFINE([RQMASK_ARG], [], [no request_mask argument needed])
+	])
+]) # LC_HAVE_GENERIC_FILEATTR_HAS_MASK_ARG
+
+#
+# LC_HAVE_GROUP_INFO_USAGE_AS_REFCOUNT
+#
+# Linux commit v6.6-rc2-11-gd77008421afd
+#  groups: Convert group_info.usage to refcount_t
+#
+AC_DEFUN([LC_SRC_HAVE_GROUP_INFO_USAGE_AS_REFCOUNT], [
+	LB2_LINUX_TEST_SRC([struct_group_info_usage_is_refcount_t], [
+		#include <linux/cred.h>
+	],[
+		struct group_info *group = NULL;
+
+		refcount_dec(&group->usage);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_GROUP_INFO_USAGE_AS_REFCOUNT], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'struct group_info.usage' is refcount_t],
+	[struct_group_info_usage_is_refcount_t], [
+		AC_DEFINE(HAVE_GROUP_INFO_USAGE_AS_REFCOUNT, 1,
+			['struct group_info.usage' is refcount_t])
+	])
+]) # LC_HAVE_GROUP_INFO_USAGE_AS_REFCOUNT
+
+#
+# LC_HAVE_NSPROXY_COUNT_AS_REFCOUNT
+#
+# Linux commit v6.5-rc2-20-g2ddd3cac1fa9
+#   nsproxy: Convert nsproxy.count to refcount_t
+#
+AC_DEFUN([LC_SRC_HAVE_NSPROXY_COUNT_AS_REFCOUNT], [
+	LB2_LINUX_TEST_SRC([struct_nsproxy_count_refcount_t], [
+		#include <linux/nsproxy.h>
+	],[
+		struct nsproxy *nsproxy = NULL;
+
+		refcount_dec(&nsproxy->count);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_NSPROXY_COUNT_AS_REFCOUNT], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'struct nsproxy.count' is refcount_t],
+	[struct_nsproxy_count_refcount_t], [
+		AC_DEFINE(HAVE_NSPROXY_COUNT_AS_REFCOUNT, 1,
+			['struct nsproxy.count' is refcount_t])
+	])
+]) # LC_HAVE_NSPROXY_COUNT_AS_REFCOUNT
+
+#
+# LC_HAVE_INODE_GET_MTIME_SEC
+#
+# Linux commit v6.6-rc5-1-g077c212f0344
+#   fs: new accessor methods for atime and mtime
+#
+# Linux commit v6.6-rc5-86-g12cd44023651
+#   fs: rename inode i_atime and i_mtime fields
+#
+AC_DEFUN([LC_SRC_HAVE_INODE_GET_MTIME_SEC], [
+	LB2_LINUX_TEST_SRC([inode_get_mtime_exists], [
+		#include <linux/fs.h>
+	],[
+		struct inode *inode = NULL;
+		time64_t sec __attribute__ ((unused));
+
+		sec = inode_get_mtime_sec(inode);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_INODE_GET_MTIME_SEC], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'inode_get_mtime()' exists],
+	[inode_get_mtime_exists], [
+		AC_DEFINE(HAVE_INODE_GET_MTIME_SEC, 1,
+			['inode_get_mtime()' exists])
+	])
+]) # LC_HAVE_INODE_GET_MTIME_SEC
+
+#
+# LC_HAVE_SHRINKER_ALLOC
+#
+# Linux commit v6.6-rc4-53-gc42d50aefd17
+#   mm: shrinker: add infrastructure for dynamically allocating shrinker
+#
+AC_DEFUN([LC_SRC_HAVE_SHRINKER_ALLOC], [
+	LB2_LINUX_TEST_SRC([shrinker_alloc_exists], [
+		#include <linux/shrinker.h>
+	],[
+		struct shrinker *shrink __attribute__ ((unused));
+
+		shrink = shrinker_alloc(0, "%s", "whoami");
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_SHRINKER_ALLOC], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'shrinker_alloc()' exists],
+	[shrinker_alloc_exists], [
+		AC_DEFINE(HAVE_SHRINKER_ALLOC, 1,
+			['shrinker_alloc()' exists])
+	])
+]) # LC_HAVE_SHRINKER_ALLOC
+
+#
+# LC_HAVE_DENTRY_D_CHILDREN
+#
+# Linux commit v6.7-rc1-3-gda549bdd15c2
+#   dentry: switch the lists of children to hlist
+#
+AC_DEFUN([LC_SRC_HAVE_DENTRY_D_CHILDREN], [
+	LB2_LINUX_TEST_SRC([dentry_d_children], [
+		#include <linux/dcache.h>
+	],[
+		struct dentry *dentry = NULL;
+
+		return hlist_empty(&dentry->d_children);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_DENTRY_D_CHILDREN], [
+	LB2_MSG_LINUX_TEST_RESULT([if sruct dentry has d_children member],
+	[dentry_d_children], [
+		AC_DEFINE(HAVE_DENTRY_D_CHILDREN, 1,
+			[sruct dentry has d_children member])
+	])
+]) # LC_HAVE_DENTRY_D_CHILDREN
+
+#
+# LC_HAVE_GENERIC_ERROR_REMOVE_FOLIO
+#
+# Linux commit v6.7-rc4-79-gaf7628d6ec19
+#   fs: convert error_remove_page to error_remove_folio
+#
+AC_DEFUN([LC_SRC_HAVE_GENERIC_ERROR_REMOVE_FOLIO], [
+	LB2_LINUX_TEST_SRC([generic_error_remove_folio], [
+		#include <linux/mm.h>
+	],[
+		struct address_space *mapping = NULL;
+		struct folio *folio = NULL;
+		int err = generic_error_remove_folio(mapping, folio);
+
+		(void) err;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_GENERIC_ERROR_REMOVE_FOLIO], [
+	LB2_MSG_LINUX_TEST_RESULT([if generic_error_remove_folio() exists],
+	[generic_error_remove_folio], [
+		AC_DEFINE(HAVE_GENERIC_ERROR_REMOVE_FOLIO, 1,
+			[generic_error_remove_folio() exists])
+	])
+]) # LC_HAVE_GENERIC_ERROR_REMOVE_FOLIO
+
+#
+# LC_HAVE_STRUCT_FILE_LOCK_CORE
+#
+# Linux commit v6.7-rc4-79-gaf7628d6ec19
+#   fs: convert error_remove_page to error_remove_folio
+#
+AC_DEFUN([LC_SRC_HAVE_STRUCT_FILE_LOCK_CORE], [
+	LB2_LINUX_TEST_SRC([struct_file_lock_core], [
+		#include <linux/filelock.h>
+	],[
+		struct file_lock_core *flc = NULL;
+
+		flc->flc_flags = 0;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_STRUCT_FILE_LOCK_CORE], [
+	LB2_MSG_LINUX_TEST_RESULT([if struct file_lock_core exists],
+	[struct_file_lock_core], [
+		AC_DEFINE(HAVE_STRUCT_FILE_LOCK_CORE, 1,
+			[struct file_lock_core exists])
+	])
+]) # LC_HAVE_STRUCT_FILE_LOCK_CORE
+
+#
+# LC_HAVE_CSUM_TYPE_BLK_INTEGRITY
+#
+# Linux commit v6.10-rc3-19-ge9f5f44ad372
+#   block: remove the blk_integrity_profile structure
+#
+AC_DEFUN([LC_SRC_HAVE_CSUM_TYPE_BLK_INTEGRITY], [
+	LB2_LINUX_TEST_SRC([csum_type_blk_integrity], [
+		#include <linux/blkdev.h>
+	],[
+		((struct blk_integrity *)0)->csum_type = 0;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_CSUM_TYPE_BLK_INTEGRITY], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'blk_integrity.csum_type' exists],
+	[csum_type_blk_integrity], [
+		AC_DEFINE(HAVE_CSUM_TYPE_BLK_INTEGRITY, 1,
+			[struct blk_integrity has csum_type field])
+	])
+]) # LC_HAVE_CSUM_TYPE_BLK_INTEGRITY
+
+#
+# LC_HAVE_FOLIO_MEMCG_LOCK_STATIC
+#
+# Linux commit v6.10-rc6-285-ge93d4166b40a8
+#   mm: memcg: put cgroup v1-specific code under a config option
+# Linux commit v6.12-rc6-127-ga29c0e4b2e867
+#  memcg-v1: remove memcg move locking code
+#
+AC_DEFUN([LC_SRC_HAVE_FOLIO_MEMCG_LOCK_STATIC],[
+	LB2_LINUX_TEST_SRC([folio_memcg_lock_static_inline], [
+		#include <linux/memcontrol.h>
+
+		static inline void folio_memcg_lock(struct folio *folio);
+	],[
+		folio_memcg_lock(NULL);
+	],[])
+])
+AC_DEFUN([LC_HAVE_FOLIO_MEMCG_LOCK_STATIC],[
+	LB2_MSG_LINUX_TEST_RESULT([if folio_memcg_lock() is static inline],
+	[folio_memcg_lock_static_inline], [
+		AC_DEFINE(HAVE_FOLIO_MEMCG_LOCK_STATIC, 1,
+			[folio_memcg_lock() is static inline])
+	])
+]) # LC_HAVE_FOLIO_MEMCG_LOCK_STATIC
+
+#
+# LC_HAVE_LINUX_UNALIGNED_HEADER
+#
+# Linux v6.12-rc1-3-g5f60d5f6bbc1
+#  move asm/unaligned.h to linux/unaligned.h
+#
+AC_DEFUN([LC_SRC_HAVE_LINUX_UNALIGNED_HEADER],[
+	LB2_LINUX_TEST_SRC([linux_unaligned_header], [
+		#include <linux/unaligned.h>
+	],[
+	],[])
+])
+AC_DEFUN([LC_HAVE_LINUX_UNALIGNED_HEADER],[
+	LB2_MSG_LINUX_TEST_RESULT([if linux/unaligned.h header is available],
+	[linux_unaligned_header], [
+		AC_DEFINE(HAVE_LINUX_UNALIGNED_HEADER, 1,
+			[linux/unaligned.h header is available])
+	])
+]) # LC_HAVE_LINUX_UNALIGNED_HEADER
+
+#
+# LC_HAVE_WRITE_BEGIN_FOLIO
+#
+# Linux v6.11-rc1-51-ga225800f322a
+#  fs: Convert aops->write_end to take a folio
+# Linux v6.11-rc1-52-g1da86618bdce
+#  fs: Convert aops->write_begin to take a folio
+#
+AC_DEFUN([LC_SRC_HAVE_WRITE_BEGIN_FOLIO],[
+	LB2_LINUX_TEST_SRC([write_begin_with_folio], [
+		#include <linux/fs.h>
+
+		static
+		int ll_write_begin(struct file *f, struct address_space *m,
+				   loff_t pos, unsigned len,
+				   struct folio **foliop, void **fsdata)
+		{
+			*foliop = NULL;
+			*fsdata = NULL;
+			return 0;
+		}
+
+		static
+		int ll_write_end(struct file *f, struct address_space *m,
+				 loff_t pos, unsigned len, unsigned copied,
+				 struct folio *folio, void *fsdata)
+		{
+			return 0;
+		}
+
+		const struct address_space_operations ll_aops = {
+			.write_begin	= ll_write_begin,
+			.write_end	= ll_write_end,
+		};
+	],[
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_WRITE_BEGIN_FOLIO],[
+	LB2_MSG_LINUX_TEST_RESULT([if write_begin() takes folio],
+	[write_begin_with_folio], [
+		AC_DEFINE(HAVE_WRITE_BEGIN_FOLIO, 1,
+			[write_begin() takes folio])
+	])
+]) # LC_HAVE_WRITE_BEGIN_FOLIO
+
+#
+# LC_HAVE_STRUCT_FILE_F_VERSION
+#
+# Linux v6.11-rc4-27-g11068e0b64cb
+#   fs: remove f_version
+#
+AC_DEFUN([LC_SRC_HAVE_STRUCT_FILE_F_VERSION], [
+	LB2_LINUX_TEST_SRC([struct_file_f_version], [
+		#include <linux/pagemap.h>
+	],[
+		struct file *file __attribute__ ((unused)) = NULL;
+
+		file->f_version = 0;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_STRUCT_FILE_F_VERSION], [
+	LB2_MSG_LINUX_TEST_RESULT([if struct file has f_version],
+	[struct_file_f_version], [
+		AC_DEFINE(HAVE_STRUCT_FILE_F_VERSION, 1,
+			[struct file has f_version])
+	])
+]) # LC_HAVE_STRUCT_FILE_F_VERSION
+
+#
+# LC_HAVE_PAGEERROR
+#
+# Linux v6.11-rc6-86-g09022bc196d2
+#   mm: remove PG_error
+#
+AC_DEFUN([LC_SRC_HAVE_PG_ERROR], [
+	LB2_LINUX_TEST_SRC([pg_error], [
+		#include <linux/pagemap.h>
+	],[
+		bool x __attribute__ ((unused)) = PageError(NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_PG_ERROR], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'PageError()' is available],
+	[pg_error], [
+		AC_DEFINE(HAVE_PG_ERROR, 1,
+			['PageError()()' is available])
+	],[
+		AC_DEFINE(PageError(pg), (0),
+			  ['PageError()' replacement])
+		AC_DEFINE(SetPageError(pg), ,
+			  ['SetPageError()' replacement])
+		AC_DEFINE(ClearPageError(pg), ,
+			  ['ClearPageError()' replacement])
+	])
+]) # LC_HAVE_PG_ERROR
+
+#
+# LC_HAVE_FOLIO_TEST_MLOCKED
+#
+# Linux v6.11-rc6-233-g99f86bbda317
+#   mm: remove PageMlocked
+#
+AC_DEFUN([LC_SRC_HAVE_FOLIO_TEST_MLOCKED], [
+	LB2_LINUX_TEST_SRC([folio_test_mlocked], [
+		#include <linux/pagemap.h>
+	],[
+		bool x __attribute__ ((unused)) = folio_test_mlocked(NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_FOLIO_TEST_MLOCKED], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'folio_test_mlocked()' is available],
+	[folio_test_mlocked], [
+		AC_DEFINE([folio_test_mlocked_page(pg)],
+			  [folio_test_mlocked(page_folio((pg)))],
+			  ['folio_test_mlocked()' is available])
+	],[
+		AC_DEFINE([folio_test_mlocked_page(pg)], [PageMlocked((pg))],
+			  ['folio_test_mlocked()' replacement])
+	])
+]) # LC_HAVE_FOLIO_TEST_MLOCKED
+
+#
+# LC_HAVE_PAGE_MAPCOUNT_IS_TYPE
+#
+# Linux v6.11-rc6-225-ge880034cf718
+#   mm: introduce page_mapcount_is_type()
+#
+AC_DEFUN([LC_SRC_HAVE_PAGE_MAPCOUNT_IS_TYPE], [
+	LB2_LINUX_TEST_SRC([page_mapcount_is_type], [
+		#include <linux/pagemap.h>
+	],[
+		bool x __attribute__ ((unused)) = page_mapcount_is_type(0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_PAGE_MAPCOUNT_IS_TYPE], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'page_mapcount_is_type()' is available],
+	[page_mapcount_is_type], [
+		AC_DEFINE(HAVE_PAGE_MAPCOUNT_IS_TYPE, 1,
+			['page_mapcount_is_type()' is available])
+	],[
+		AC_DEFINE(page_mapcount_is_type(count),
+			  (count < PAGE_MAPCOUNT_RESERVE + 1),
+			  [need 'page_mapcount_is_type()' replacement])
+	])
+]) # LC_HAVE_PAGE_MAPCOUNT_IS_TYPE
+
+#
+# LC_HAVE_MODULE_IMPORT_STRING_LITERAL
+#
+# Linux v6.13-rc1-2-gcdd30ebb1b9f
+#   module: Convert symbol namespace to string literal
+#
+AC_DEFUN([LC_SRC_HAVE_MODULE_IMPORT_STRING_LITERAL], [
+	LB2_LINUX_TEST_SRC([module_import_ns_uses_export_symbols], [
+		#include <linux/module.h>
+		#include <crypto/internal/cipher.h>
+
+		MODULE_IMPORT_NS(CRYPTO_INTERNAL);
+		u8 salt[16];
+	],[
+		(void)crypto_cipher_setkey(NULL, salt, sizeof(salt));
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_MODULE_IMPORT_STRING_LITERAL], [
+	LB2_MSG_LINUX_TEST_RESULT([if MODULE_IMPORT_NS() uses export symbols],
+	[module_import_ns_uses_export_symbols], [
+		AC_DEFINE(HAVE_MODULE_IMPORT_USES_EXPORT_SYMBOLS, 1,
+			[MODULE_IMPORT_NS() needs string literal])
+	], [
+		# convert CRYPTO_INTERNAL to a string literal for import
+		AC_DEFINE(CRYPTO_INTERNAL, __stringify(CRYPTO_INTERNAL),
+			[MODULE_IMPORT_NS() needs string literal])
+	])
+]) # LC_HAVE_MODULE_IMPORT_STRING_LITERAL
+
+#
+# LC_NEED_PAGEPRIVATE2
+#
+# Linux v6.12-rc1-5-gfd15ba4cb00a
+#   ceph: Remove call to PagePrivate2()
+#
+AC_DEFUN([LC_SRC_HAVE_PAGEPRIVATE2], [
+	LB2_LINUX_TEST_SRC([folio_test_private_2], [
+		#include <linux/mm.h>
+	],[
+		struct page *page = NULL;
+
+		ClearPagePrivate2(page);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_PAGEPRIVATE2], [
+	LB2_MSG_LINUX_TEST_RESULT([if PagePrivate2() is available],
+	[folio_test_private_2], [
+		AC_DEFINE(HAVE_PAGE_PRIVATE_2, 1,
+			[PagePrivate2() is available])
+	])
+]) # LC_HAVE_PAGEPRIVATE2
+
+#
+# LC_STRUCT_LSM_CONTEXT_EARLY
+#
+# Linux commit v6.13-rc1-1-g6fba89813ccf
+#   lsm: ensure the correct LSM context releaser
+#
+AC_DEFUN([LC_SRC_STRUCT_LSM_CONTEXT_EARLY], [
+	LB2_LINUX_TEST_SRC([struct_lsm_context], [
+		#include <linux/security.h>
+	],[
+		struct lsm_context ctx = {};
+
+		ctx.context = NULL;
+	],[-Werror])
+])
+AC_DEFUN([LC_STRUCT_LSM_CONTEXT_EARLY], [
+	LB2_MSG_LINUX_TEST_RESULT([if struct lsm_context is available],
+	[struct_lsm_context], [
+		AC_DEFINE(HAVE_STRUCT_LSM_CONTEXT, 1,
+			[struct lsm_context is available])
+	],[
+		AC_DEFINE(lsm_context, lsmcontext,
+			[struct lsm_context also known as struct lsmcontext in ubuntu kernels])
+	])
+]) # LC_STRUCT_LSM_CONTEXT_EARLY
+
+#
+# LC_HAVE_D_REVALIDATE_WITH_INODE_NAME
+#
+# Linux v6.13-rc1-7-g5be1fa8abd7b
+#   Pass parent directory inode and expected name to ->d_revalidate()
+#
+AC_DEFUN([LC_SRC_HAVE_D_REVALIDATE_WITH_INODE_NAME], [
+	LB2_LINUX_TEST_SRC([dentry_ops_d_revalidate_inode_name], [
+		#include <linux/dcache.h>
+	],[
+		struct dentry_operations *d_ops = NULL;
+		struct inode *inode = NULL;
+		struct qstr *qstr = NULL;
+		struct dentry *dentry = NULL;
+
+		(void)d_ops->d_revalidate(inode, qstr, dentry, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_D_REVALIDATE_WITH_INODE_NAME], [
+	LB2_MSG_LINUX_TEST_RESULT([if d_revalidate() takes inode, name],
+	[dentry_ops_d_revalidate_inode_name], [
+		AC_DEFINE(HAVE_D_REVALIDATE_WITH_INODE_NAME, 1,
+			[dentry operations d_revalidate() takes inode, name])
+	])
+]) # LC_HAVE_D_REVALIDATE_WITH_INODE_NAME
+
+#
+# LC_HAVE_GRAB_CACHE_PAGE_WRITE_BEGIN
+#
+# Linux v6.14-rc1-45-ge33ce6bd4ea2
+#   mm: Remove grab_cache_page_write_begin()
+#
+AC_DEFUN([LC_SRC_HAVE_GRAB_CACHE_PAGE_WRITE_BEGIN], [
+	LB2_LINUX_TEST_SRC([grab_cache_page_write_begin], [
+		#include <linux/pagemap.h>
+	],[
+		struct address_space *mapping = NULL;
+		pgoff_t index = 0;
+
+		(void)grab_cache_page_write_begin(mapping, index
+#ifdef HAVE_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS
+			, 0
+#endif
+			);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_GRAB_CACHE_PAGE_WRITE_BEGIN], [
+	LB2_MSG_LINUX_TEST_RESULT([if grab_cache_page_write_begin() is available],
+	[grab_cache_page_write_begin], [
+		AC_DEFINE(HAVE_GRAB_CACHE_PAGE_WRITE_BEGIN, 1,
+			[grab_cache_page_write_begin() is available])
+	], [
+		AC_DEFINE([grab_cache_page_write_begin(m, i)],
+			  [pagecache_get_page((m), (i), FGP_WRITEBEGIN, mapping_gfp_mask((m)))],
+			  [grab_cache_page_write_begin() is unavailable])
+	])
+]) # LC_HAVE_GRAB_CACHE_PAGE_WRITE_BEGIN
+
+#
+# LC_HAVE_WAIT_ON_PAGE_LOCKED
+#
+# Linux v6.14-rc1-61-gd96e2802a802
+#   mm: Remove wait_on_page_locked()
+#
+AC_DEFUN([LC_SRC_HAVE_WAIT_ON_PAGE_LOCKED], [
+	LB2_LINUX_TEST_SRC([wait_on_page_locked], [
+		#include <linux/pagemap.h>
+	],[
+		wait_on_page_locked((struct page *)NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_WAIT_ON_PAGE_LOCKED], [
+	LB2_MSG_LINUX_TEST_RESULT([if wait_on_page_locked() is available],
+	[wait_on_page_locked], [
+		AC_DEFINE(HAVE_WAIT_ON_PAGE_LOCKED, 1,
+			[wait_on_page_locked() is available])
+	], [
+		AC_DEFINE([wait_on_page_locked(page)],
+			[folio_wait_locked(page_folio((page)))],
+			[wait_on_page_locked() is unavailable])
+	])
+]) # LC_HAVE_WAIT_ON_PAGE_LOCKED
+
+#
+# LC_HAVE_HRTIMER_SETUP
+#
+# Linux v6.12-rc1-119-g908a1d775422
+#   hrtimers: Introduce hrtimer_setup() to replace hrtimer_init()
+#
+AC_DEFUN([LC_SRC_HAVE_HRTIMER_SETUP], [
+	LB2_LINUX_TEST_SRC([hrtimer_setup], [
+		#include <linux/hrtimer.h>
+
+		static enum hrtimer_restart fn(struct hrtimer *timer)
+		{ return HRTIMER_NORESTART; }
+	],[
+		struct hrtimer *timer = NULL;
+
+		hrtimer_setup(timer, fn, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_HRTIMER_SETUP], [
+	LB2_MSG_LINUX_TEST_RESULT([if hrtimer_setup() is available],
+	[hrtimer_setup], [
+		AC_DEFINE(HAVE_HRTIMER_SETUP, 1,
+			[hrtimer_setup() is available])
+	], [
+		AC_DEFINE([hrtimer_setup(t, f, c, m)],
+			  [(hrtimer_init((t), (c), (m)), (t)->function = (f))],
+			  [hrtimer_setup() is unavailable])
+	])
+]) # LC_HAVE_HRTIMER_SETUP
+
+#
+# LC_HAVE_IOPS_MKDIR_RETURNS_DENTRY
+#
+# Linux v6.14-rc4-9-g88d5baf69082
+#   Change inode_operations.mkdir to return struct dentry *
+#
+AC_DEFUN([LC_SRC_HAVE_IOPS_MKDIR_RETURNS_DENTRY], [
+	LB2_LINUX_TEST_SRC([iops_mkdir_returns_dentry], [
+		#include <linux/fs.h>
+	],[
+		struct inode_operations *iop = NULL;
+		struct dentry *din = NULL;
+		struct inode *parent = NULL;
+		umode_t mode = 0700;
+		struct dentry *dentry;
+
+		dentry = iop->mkdir(&nop_mnt_idmap, parent, din, mode);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_IOPS_MKDIR_RETURNS_DENTRY], [
+	LB2_MSG_LINUX_TEST_RESULT([if inode_operations.mkdir() returns dentry],
+	[iops_mkdir_returns_dentry], [
+		AC_DEFINE(HAVE_IOPS_MKDIR_RETURNS_DENTRY, 1,
+			[inode_operations.mkdir() returns dentry])
+	])
+]) # LC_HAVE_IOPS_MKDIR_RETURNS_DENTRY
+
+#
+# LC_HAVE_TRY_LOOKUP_NOPERM
+#
+# Linux commit v6.15-rc1-5-g06c567403ae5
+#   Use try_lookup_noperm() instead of d_hash_and_lookup() outside of VFS
+#
+AC_DEFUN([LC_SRC_HAVE_TRY_LOOKUP_NOPERM], [
+	LB2_LINUX_TEST_SRC([try_lookup_noperm], [
+		#include <linux/namei.h>
+	],[
+		const char *up = "..";
+		struct dentry *from = NULL;
+		struct dentry *dentry = try_lookup_noperm(&QSTR(up), from);
+
+		(void) dentry;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_TRY_LOOKUP_NOPERM], [
+	LB2_MSG_LINUX_TEST_RESULT([if try_lookup_noperm() is available],
+	[try_lookup_noperm], [
+		AC_DEFINE(HAVE_TRY_LOOKUP_NOPERM, 1,
+			[try_lookup_noperm() is available])
+	], [
+		AC_DEFINE([try_lookup_noperm(name, dentry)],
+			  [d_hash_and_lookup((dentry), (name))],
+			  [try_lookup_noperm() was d_hash_and_lookup()])
+		AC_DEFINE([lookup_noperm(qstr, dentry)],
+			  [lookup_one_len((qstr)->name, (dentry), (qstr)->len)],
+			  [lookup_noperm() was lookup_one_len()])
+	])
+]) # LC_HAVE_TRY_LOOKUP_NOPERM
+
+#
+# LC_HAVE_BLK_INTEGRITY_HAS_METADATA_SIZE
+#
+# Linux commit v6.16-rc1-1-gc6603b1d6556
+#     block: rename tuple_size field in blk_integrity_metadata_size
+#
+AC_DEFUN([LC_SRC_BLK_INTEGRITY_HAS_METADATA_SIZE],[
+	LB2_LINUX_TEST_SRC([blk_integrity_metadata_size], [
+		#include <linux/blkdev.h>
+	],[
+		struct blk_integrity *bi __attribute__ ((unused)) = NULL;
+
+		bi->metadata_size = 0;
+	],[-Werror])
+])
+AC_DEFUN([LC_BLK_INTEGRITY_HAS_METADATA_SIZE],[
+	LB2_MSG_LINUX_TEST_RESULT([if blk_integrity has metadata_size],
+	[blk_integrity_metadata_size], [
+		AC_DEFINE([get_metadata_size(bi)], [((bi)->metadata_size)],
+			  [Use metadata_size for metadata_size])
+	],[
+		AC_DEFINE([get_metadata_size(bi)], [((bi)->tuple_size)],
+			  [Use tuple_size for metadata_size])
+	])
+]) # LC_HAVE_BLK_INTEGRITY_HAS_METADATA_SIZE
+
+#
+# LC_HAVE_SET_DEFAULT_D_OP
+#
+# Linux commit v6.16-rc1-6-g05fb0e666495
+#     new helper: set_default_d_op()
+#
+AC_DEFUN([LC_SRC_HAVE_SET_DEFAULT_D_OP],[
+	LB2_LINUX_TEST_SRC([set_default_d_op], [
+		#include <linux/dcache.h>
+	],[
+		struct super_block *sb __attribute__ ((unused)) = NULL;
+
+		set_default_d_op(sb, (const struct dentry_operations *)NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_SET_DEFAULT_D_OP],[
+	LB2_MSG_LINUX_TEST_RESULT([if set_default_d_op exists],
+	[set_default_d_op], [
+		AC_DEFINE([HAVE_SET_DEFAULT_D_OP], 1,
+			  [set_default_d_op exists])
+	],[
+		AC_DEFINE([set_default_d_op(sb, ops)],
+			  [((sb)->s_d_op = (ops))],
+			  [set_default_d_op not available])
+	])
+]) # LC_HAVE_BLK_INTEGRITY_HAS_METADATA_SIZE
+
+#
+# LC_HAVE_FILE_KATTR
+#
+# Linux commit v6.16-rc1-8-gca115d7e7546
+#     tree-wide: s/struct fileattr/struct file_kattr/g
+#
+AC_DEFUN([LC_SRC_HAVE_FILE_KATTR],[
+	LB2_LINUX_TEST_SRC([struct_file_kattr], [
+		#include <linux/fileattr.h>
+	],[
+		struct file_kattr *ka __attribute__ ((unused)) = NULL;
+
+		ka->flags = 0;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_FILE_KATTR],[
+	LB2_MSG_LINUX_TEST_RESULT([if struct file_kattr exists],
+	[struct_file_kattr], [
+		AC_DEFINE([HAVE_FILE_KATTR], 1, [struct file_kattr exists])
+	],[
+		AC_DEFINE([file_kattr], [fileattr],
+			  [Use fileattr for struct file_kattr])
+	])
+]) # LC_HAVE_FILE_KATTR
+
+#
+# LC_HAVE_SIMPLE_DENTRY_OPERATIONS
+#
+# Linux commit v6.16-rc1-16-g0b136e7d18fa
+#     kill simple_dentry_operations
+#
+AC_DEFUN([LC_SRC_HAVE_SIMPLE_DENTRY_OPERATIONS],[
+	LB2_LINUX_TEST_SRC([simple_dentry_operations], [
+		#include <linux/fs.h>
+	],[
+		const struct dentry_operations *dop = &simple_dentry_operations;
+
+		(void)dop;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_SIMPLE_DENTRY_OPERATIONS],[
+	LB2_MSG_LINUX_TEST_RESULT([if simple_dentry_operations exists],
+	[simple_dentry_operations], [
+		AC_DEFINE([sb_dentry_not_cache(sb)],
+			  [((sb)->s_d_op = &simple_dentry_operations)],
+			  [Use simple_dentry_operations to not cache dentries])
+	],[
+		AC_DEFINE([sb_dentry_not_cache(sb)],
+			  [((sb)->s_d_flags |= DCACHE_DONTCACHE)],
+			  [Use simple_dentry_operations to not cache dentries])
+	])
+]) # LC_HAVE_SIMPLE_DENTRY_OPERATIONS
+
+#
+# LC_HAVE_WRITE_BEGIN_KIOCB
+#
+# Linux commit v6.16-rc1-20-ge9d8e2bf2320
+#   fs: change write_begin/write_end interface to take struct kiocb *
+#
+AC_DEFUN([LC_SRC_HAVE_WRITE_BEGIN_KIOCB],[
+	LB2_LINUX_TEST_SRC([write_begin_with_kiocb], [
+		#include <linux/fs.h>
+
+		static
+		int ll_write_begin(const struct kiocb *iocb,
+				   struct address_space *m,
+				   loff_t pos, unsigned len,
+				   struct folio **foliop, void **fsdata)
+		{
+			*foliop = NULL;
+			*fsdata = NULL;
+			return 0;
+		}
+
+		static
+		int ll_write_end(const struct kiocb *iocb,
+				 struct address_space *m,
+				 loff_t pos, unsigned len, unsigned copied,
+				 struct folio *folio, void *fsdata)
+		{
+			return 0;
+		}
+
+		const struct address_space_operations ll_aops = {
+			.write_begin	= ll_write_begin,
+			.write_end	= ll_write_end,
+		};
+	],[
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_WRITE_BEGIN_KIOCB],[
+	LB2_MSG_LINUX_TEST_RESULT([if write_begin() takes kiocb],
+	[write_begin_with_kiocb], [
+		AC_DEFINE(HAVE_WRITE_BEGIN_FOLIO, 1,
+			[write_begin() takes folio])
+		AC_DEFINE(HAVE_WRITE_BEGIN_KIOCB, 1,
+			[write_begin() takes struct kiocb])
+	])
+]) # LC_HAVE_WRITE_BEGIN_FOLIO
+
+#
+# LC_FS_STRUCT_HAS_SEQLOCK
+#
+# Linux commit v6.16-rc1-39-ga683a5b2ba23
+#     fold fs_struct->{lock,seq} into a seqlock
+#
+AC_DEFUN([LC_SRC_FS_STRUCT_HAS_SEQLOCK],[
+	LB2_LINUX_TEST_SRC([fs_struct_seqlock], [
+		#include <linux/fs_struct.h>
+	],[
+		struct fs_struct *fs = NULL;
+
+		write_seqlock(&fs->seq);
+		write_sequnlock(&fs->seq);
+	],[-Werror])
+])
+AC_DEFUN([LC_FS_STRUCT_HAS_SEQLOCK],[
+	LB2_MSG_LINUX_TEST_RESULT([if fs_struct has seqlock],
+	[fs_struct_seqlock], [
+		AC_DEFINE([fs_write_seqlock(fs)],
+			  [write_seqlock(&(fs)->seq)],
+			  [fs_struct has seqlock: write_seqlock])
+		AC_DEFINE([fs_write_sequnlock(fs)],
+			  [write_sequnlock(&(fs)->seq)],
+			  [fs_struct has seqlock: write_sequnlock])
+	], [
+		AC_DEFINE([fs_write_seqlock(fs)],
+			  [do { spin_lock(&(fs)->lock); \
+				write_seqcount_begin(&(fs)->seq); } while (0)],
+			  [fs_struct does not have seqlock: write_seqlock])
+		AC_DEFINE([fs_write_sequnlock(fs)],
+			  [do { write_seqcount_end(&(fs)->seq); \
+				spin_unlock(&(fs)->lock); } while (0)],
+			  [fs_struct does not have seqlock: write_sequnlock])
+	])
+]) # LC_FS_STRUCT_HAS_SEQLOCK
+
+#
+# LC_HAVE_NETIF_GET_FLAGS
+#
+# Linux commit v6.16-rc1-39-ga683a5b2ba23
+#     fold fs_struct->{lock,seq} into a seqlock
+#
+AC_DEFUN([LC_SRC_HAVE_NETIF_GET_FLAGS],[
+	LB2_LINUX_TEST_SRC([netif_get_flags], [
+		#include <linux/netdevice.h>
+	],[
+		(void)netif_get_flags((const struct net_device *)NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_NETIF_GET_FLAGS],[
+	LB2_MSG_LINUX_TEST_RESULT([if netif_get_flags exists],
+	[netif_get_flags], [
+		AC_DEFINE(HAVE_NETIF_GET_FLAGS, 1, [netif_get_flags exists])
+	], [
+		AC_DEFINE([netif_get_flags(dev)],
+			  [dev_get_flags((dev))],
+			  [netif_get_flags does not exist, use dev_get_flags])
+	])
+]) # LC_HAVE_NETIF_GET_FLAGS
+
+#
+# LC_HAVE_INODE_JUST_DROP
+#
+# Linux commit v6.17-rc1-37-gf99b3917789d
+#   fs: rename generic_delete_inode() and generic_drop_inode()
+#
+AC_DEFUN([LC_SRC_HAVE_INODE_JUST_DROP],[
+	LB2_LINUX_TEST_SRC([inode_just_drop], [
+		#include <linux/fs.h>
+	],[
+		(void)inode_just_drop((struct inode *)NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_INODE_JUST_DROP],[
+	LB2_MSG_LINUX_TEST_RESULT([if netif_get_flags exists],
+	[inode_just_drop], [
+		AC_DEFINE(HAVE_INODE_JUST_DROP, 1, [inode_just_drop() exists])
+	])
+]) # LC_HAVE_INODE_JUST_DROP
+
+#
+# LC_HAVE_MEMDESC_FLAGS_T
+#
+# Linux commit v6.17-rc4-147-g53fbef56e07d
+#   mm: introduce memdesc_flags_t
+#
+AC_DEFUN([LC_SRC_HAVE_MEMDESC_FLAGS_T],[
+	LB2_LINUX_TEST_SRC([page_flags_is_memdesc_flags_t], [
+		#include <linux/mm_types.h>
+	],[
+		struct page *page = NULL;
+
+		unsigned long flags = page->flags.f;
+		(void)flags;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_MEMDESC_FLAGS_T],[
+	LB2_MSG_LINUX_TEST_RESULT([if page->flags is struct],
+	[page_flags_is_memdesc_flags_t], [
+		AC_DEFINE(HAVE_MEMDESC_FLAGS_T, 1, [page->flags is struct])
+		AC_DEFINE([PAGE_FLAGS(page)], [((page)->flags.f)],
+			  [struct page.flags as unsigned long])
+	], [
+		AC_DEFINE([PAGE_FLAGS(page)], [((page)->flags)],
+			  [struct page.flags as unsigned long])
+	])
+]) # LC_HAVE_MEMDESC_FLAGS_T
+
+#
+# LC_HAVE_DENTRY__D_NAME
+#
+# Linux commit v6.17-rc4-6-g180a9cc3fd6a
+#   make it easier to catch those who try to modify ->d_name
+#
+AC_DEFUN([LC_SRC_HAVE_DENTRY__D_NAME],[
+	LB2_LINUX_TEST_SRC([dentry_member__d_name], [
+		#include <linux/dcache.h>
+	],[
+		struct dentry *dentry = NULL;
+
+		dentry->__d_name.hash = 0;
+		(void)dentry;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_DENTRY__D_NAME],[
+	LB2_MSG_LINUX_TEST_RESULT([if dentry->__d_name exists],
+	[dentry_member__d_name], [
+		AC_DEFINE(HAVE_DENTRY__D_NAME, 1, [dentry->__d_name exists])
+	], [
+		AC_DEFINE([__d_name], [d_name],
+			  [dentry->__d_name is not available use d_name])
+	])
+]) # LC_HAVE_DENTRY__D_NAME
+
+# v6.17-rc4-90-g2f7d98f10b8f
+#   Have cc(1) catch attempts to modify ->f_path
+#
+# LC_HAVE_FILE__F_PATH
+#
+# Linux commit v6.17-rc4-6-g180a9cc3fd6a
+#   make it easier to catch those who try to modify ->d_name
+#
+AC_DEFUN([LC_SRC_HAVE_FILE__F_PATH],[
+	LB2_LINUX_TEST_SRC([file_member__f_path], [
+		#include <linux/dcache.h>
+	],[
+		struct dentry *dentry = NULL;
+
+		dentry->__d_name.hash = 0;
+		(void)dentry;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_FILE__F_PATH],[
+	LB2_MSG_LINUX_TEST_RESULT([if file->__f_path exists],
+	[file_member__f_path], [
+		AC_DEFINE(HAVE_FILE__F_PATH, 1, [file->__f_path exists])
+	], [
+		AC_DEFINE([__f_path], [f_path],
+			  [file->__f_path is not available use f_path])
+	])
+]) # LC_HAVE_FILE__F_PATH
+
+#
+## LC_HAVE_VFS_MKDIR_DELEGATE
+#
+# Linux commit v6.18-rc1-6-ge12d203b8c880
+#   vfs: allow mkdir to wait for delegation break on parent
+#
+AC_DEFUN([LC_SRC_HAVE_VFS_MKDIR_DELEGATE],[
+	LB2_LINUX_TEST_SRC([vfs_mkdir_delegate], [
+		#include <linux/fs.h>
+	],[
+		struct mnt_idmap *idmap = NULL;
+		struct inode *dir = NULL;
+		struct dentry *dentry = NULL;
+		umode_t mode = 0;
+		struct delegated_inode *di = NULL;
+		struct dentry *result = vfs_mkdir(idmap, dir, dentry, mode, di);
+
+		(void)result;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_VFS_MKDIR_DELEGATE],[
+	LB2_MSG_LINUX_TEST_RESULT([if vfs_mkdir() takes delegate],
+	[vfs_mkdir_delegate], [
+		AC_DEFINE(HAVE_VFS_MKDIR_DELEGATE, 1,
+			  [vfs_mkdir() takes delegate])
+	])
+]) # LC_HAVE_VFS_MKDIR_DELEGATE
+
+#
+## LC_HAVE_INODE_STATE_READ
+#
+# Linux commit v6.18-rc1-7-gd8753f788ab49
+#   fs: provide accessors for ->i_state
+#
+AC_DEFUN([LC_SRC_HAVE_INODE_STATE_READ],[
+	LB2_LINUX_TEST_SRC([inode_state_read], [
+		#include <linux/fs.h>
+	],[
+		struct inode *inode = NULL;
+		enum inode_state_flags_enum state = inode_state_read(inode);
+
+		(void)state;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_INODE_STATE_READ],[
+	LB2_MSG_LINUX_TEST_RESULT([if inode_state_read() exists],
+	[inode_state_read], [
+		AC_DEFINE(HAVE_INODE_STATE_READ, 1,
+			  [inode_state_read() exists])
+	], [
+		AC_DEFINE([inode_state_read(inode)], [((inode)->i_state)],
+			  [inode_state_read() does not exist, provide one])
+	])
+]) # LC_HAVE_INODE_STATE_READ
+
+#
+## LC_HAVE_VFS_CREATE_DELEGATE
+#
+# Linux commit v6.18-rc1-10-gc826229c6a82f
+#   vfs: make vfs_create break delegations on parent directory
+#
+AC_DEFUN([LC_SRC_HAVE_VFS_CREATE_DELEGATE],[
+	LB2_LINUX_TEST_SRC([vfs_create_delegate], [
+		#include <linux/fs.h>
+	],[
+		struct mnt_idmap *idmap = NULL;
+		struct dentry *dentry = NULL;
+		umode_t mode = 0;
+		struct delegated_inode *di = NULL;
+		int rc = vfs_create(idmap, dentry, mode, di);
+		(void)rc;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_VFS_CREATE_DELEGATE],[
+	LB2_MSG_LINUX_TEST_RESULT([if vfs_create() takes delegate],
+	[vfs_create_delegate], [
+		AC_DEFINE(HAVE_VFS_CREATE_DELEGATE, 1,
+			  [vfs_create() takes delegate])
+	])
+]) # LC_HAVE_VFS_CREATE_DELEGATE
+
+#
+## LC_HAVE_ILOOKUP5_NOWAIT_ISNEW
+#
+# Linux commit v6.18-rc1-20-ga27628f436343
+#   fs: rework I_NEW handling to operate without fences
+#
+AC_DEFUN([LC_SRC_HAVE_ILOOKUP5_NOWAIT_ISNEW],[
+	LB2_LINUX_TEST_SRC([ilookup5_nowait_isnew], [
+		#include <linux/fs.h>
+
+		static int test(struct inode *inode, void *data) { return 0; }
+	],[
+		struct super_block *sb = NULL;
+		bool isnew;
+		struct inode *node = ilookup5_nowait(sb, 0, test, NULL, &isnew);
+
+		(void)node;
+		(void)isnew;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_ILOOKUP5_NOWAIT_ISNEW],[
+	LB2_MSG_LINUX_TEST_RESULT([if ilookup5_nowait() takes isnew],
+	[ilookup5_nowait_isnew], [
+		AC_DEFINE(HAVE_ILOOKUP5_NOWAIT_ISNEW, 1,
+			  [ilookup5_nowait() takes isnew])
+	])
+]) # LC_HAVE_ILOOKUP5_NOWAIT_ISNEW
+
+#
+# LC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER
+#
+# Linux commit v6.19-rc1-31-g6cbfdf89470ef
+#  posix_acl: make posix_acl_to_xattr() alloc the buffer
+#
+AC_DEFUN([LC_SRC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER],[
+	LB2_LINUX_TEST_SRC([posix_acl_to_xattr], [
+		#include <linux/posix_acl_xattr.h>
+	],[
+		struct posix_acl *acl = NULL;
+		size_t acl_sz;
+		void *value = posix_acl_to_xattr(&init_user_ns, acl, &acl_sz,
+						 GFP_NOFS);
+
+		(void)value;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER],[
+	LB2_MSG_LINUX_TEST_RESULT([if posix_acl_to_xattr() returns allocated buffer],
+	[posix_acl_to_xattr], [
+		AC_DEFINE(HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER, 1,
+			  [posix_acl_to_xattr() returns allocated buffer])
+	], [
+		AC_DEFINE([old_posix_acl_to_xattr(ns, acl, buf, sz)],
+			  [posix_acl_to_xattr(ns, acl, buf, sz)],
+			  [real->posix_acl_to_xattr() ])
+	])
+]) # LC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER
+
+#
+# LC_PROG_LINUX
+#
+# Lustre linux kernel checks
+#
+AC_DEFUN([LC_PROG_LINUX_SRC], [
+	AS_IF([test "x$enable_gss" != xno], [
+		LB2_SRC_CHECK_CONFIG_IM([CRYPTO_MD5])
+		LB2_SRC_CHECK_CONFIG_IM([CRYPTO_SHA1])
+		LB2_SRC_CHECK_CONFIG_IM([CRYPTO_SHA256])
+		LB2_SRC_CHECK_CONFIG_IM([CRYPTO_SHA512])
+	])
+	AS_IF([test "x$enable_server" != xno], [
+		LC_SRC_CONFIG_QUOTA
+		LC_SRC_STACK_SIZE
+	])
+	LC_SRC_CONFIG_FHANDLE
+	LC_SRC_POSIX_ACL_CONFIG
+	LC_SRC_CONFIG_XARRAY_MULTI
+
+	# 5.0
+	LC_SRC_GENL_FAMILY_HAS_RESV_START_OP
+
+	# 5.1
+	LC_SRC_HAVE_BVEC_ITER_ALL
+
+	# 5.2
+	LC_SRC_KEYRING_SEARCH_4ARGS
+
+	# 5.3
+	LC_SRC_BIO_BI_PHYS_SEGMENTS
+	LC_SRC_LM_COMPARE_OWNER_EXISTS
+
+	# 5.5
+	LC_SRC_FSCRYPT_DIGESTED_NAME
+
+	# 5.7
+	LC_SRC_FSCRYPT_DUMMY_CONTEXT_ENABLED
+
+	# 5.8
+	LC_SRC_HAVE_PRANDOM_HEADER
+	LC_SRC_HAVE_KTHREAD_USE_MM
+
+	# 5.9
+	LC_SRC_FSCRYPT_FNAME_ALLOC_BUFFER
+	LC_SRC_FSCRYPT_SET_CONTEXT
+	LC_SRC_FSCRYPT_NOKEY_NAME
+	LC_SRC_FSCRYPT_SET_TEST_DUMMY_ENC_CHAR_ARG
+	LC_SRC_FSCRYPT_DUMMY_POLICY
+	LC_SRC_HAVE_ITER_FILE_SPLICE_WRITE
+
+	# 5.10
+	LC_SRC_HAVE_BDI_DEBUG_STATS
+	LC_SRC_FSCRYPT_IS_NOKEY_NAME
+	LC_SRC_FSCRYPT_PREPARE_READDIR
+
+	# 5.11
+	LC_SRC_SET_POSIX_ACL_USER_NS
+	LC_SRC_BI_BDEV
+	LC_SRC_BIO_SET_DEV
+
+	# 5.12
+	LC_SRC_HAVE_USER_NAMESPACE_ARG
+
+	# 5.13
+	LC_SRC_HAVE_ACCOUNT_PAGE_DIRTIED
+	LC_SRC_HAVE_COPY_PAGE_FROM_ITER_ATOMIC
+	LC_SRC_HAVE_FILEATTR_GET
+
+	# 5.15
+	LC_SRC_HAVE_GET_ACL_RCU_ARG
+	LC_SRC_HAVE_FAULT_IN_IOV_ITER_READABLE
+
+	# 5.16
+	LC_SRC_HAVE_SECURITY_DENTRY_INIT_WITH_XATTR_NAME_ARG
+	LC_SRC_FOLIO_MEMCG_LOCK
+	LC_SRC_HAVE___FILEMAP_GET_FOLIO
+	LC_SRC_HAVE_KIOCB_COMPLETE_2ARGS
+
+	# 5.17
+	LC_SRC_HAVE_INVALIDATE_FOLIO
+	LC_SRC_HAVE_DIRTY_FOLIO
+
+	# 5.18
+	LC_SRC_HAVE_ALLOC_INODE_SB
+
+	# 5.19
+	LC_SRC_HAVE_ADDRESS_SPACE_OPERATIONS_READ_FOLIO
+	LC_SRC_HAVE_READ_CACHE_FOLIO_FILLER_WITH_FILE
+	LC_SRC_HAVE_ADDRESS_SPACE_OPERATIONS_RELEASE_FOLIO
+	LC_SRC_HAVE_LSMCONTEXT_INIT
+	LC_SRC_SECURITY_DENTRY_INIT_SECURTY_WITH_CTX
+	LC_SRC_HAVE_FILEMAP_GET_FOLIOS
+
+	# 6.0
+	LC_SRC_HAVE_NO_LLSEEK
+	LC_SRC_DQUOT_TRANSFER_WITH_USER_NS
+	LC_SRC_HAVE_ADDRESS_SPACE_OPERATIONS_MIGRATE_FOLIO
+	LC_SRC_REGISTER_SHRINKER_FORMAT_NAMED
+	LC_SRC_HAVE_VFS_SETXATTR_NON_CONST_VALUE
+	LC_SRC_HAVE_IOV_ITER_GET_PAGES_ALLOC2
+	LC_SRC_HAVE_USER_BACKED_ITER
+	LC_SRC_HAVE_IOV_ITER_IS_ALIGNED
+
+	# 6.1
+	LC_SRC_HAVE_GET_RANDOM_U32_AND_U64
+	LC_SRC_NFS_FILLDIR_USE_CTX_RETURN_BOOL
+	LC_SRC_HAVE_FILEMAP_GET_FOLIOS_CONTIG
+	LC_SRC_IOP_GET_INODE_ACL
+	LC_SRC_HAVE_POSIX_ACL_TYPE
+
+	# 6.2
+	LC_SRC_HAVE_GET_RANDOM_U32_BELOW
+	LC_SRC_HAVE_ACL_WITH_DENTRY
+	LC_SRC_HAVE_FOLIO_MAPCOUNT
+
+	# 6.3
+	LC_SRC_HAVE_MNT_IDMAP_ARG
+	LC_SRC_HAVE_U64_CAPABILITY
+	LC_SRC_HAVE_FOLIO_BATCH_REINIT
+
+	# 6.4
+	LC_SRC_HAVE_IOV_ITER_IOVEC
+	LC_SRC_HAVE_IOVEC_WITH_IOV_MEMBER
+	LC_SRC_HAVE_CLASS_CREATE_MODULE_ARG
+
+	# 6.5
+	LC_SRC_HAVE_ENUM_ITER_PIPE
+	LC_SRC_HAVE_GET_USER_PAGES_WITHOUT_VMA
+	LC_SRC_HAVE_FOLIO_BATCH
+	LC_SRC_HAVE_BIO_ADD_FOLIO
+	LC_SRC_HAVE_SG_SET_FOLIO
+	LC_SRC_HAVE_STRUCT_PAGEVEC
+
+	# 6.6
+	LC_SRC_HAVE_FLUSH___WORKQUEUE
+	LC_SRC_HAVE_INODE_GET_CTIME
+	LC_SRC_HAVE_COPY_FOLIO_FROM_ITER_ATOMIC
+	LC_SRC_HAVE_MMAP_WRITE_TRYLOCK
+	LC_SRC_HAVE_GENERIC_FILEATTR_HAS_MASK_ARG
+
+	# 6.7
+	LC_SRC_HAVE_GROUP_INFO_USAGE_AS_REFCOUNT
+	LC_SRC_HAVE_NSPROXY_COUNT_AS_REFCOUNT
+	LC_SRC_HAVE_INODE_GET_MTIME_SEC
+	LC_SRC_HAVE_SHRINKER_ALLOC
+
+	# 6.8
+	LC_SRC_HAVE_DENTRY_D_CHILDREN
+	LC_SRC_HAVE_GENERIC_ERROR_REMOVE_FOLIO
+	LC_SRC_LSMCONTEXT_HAS_ID
+
+	# 6.9
+	LC_SRC_HAVE_STRUCT_FILE_LOCK_CORE
+
+	# 6.11
+	LC_SRC_HAVE_CSUM_TYPE_BLK_INTEGRITY
+
+	# 6.11
+	LC_SRC_HAVE_FOLIO_MEMCG_LOCK_STATIC
+
+	# 6.12
+	LC_SRC_HAVE_LINUX_UNALIGNED_HEADER
+	LC_SRC_HAVE_WRITE_BEGIN_FOLIO
+	LC_SRC_HAVE_STRUCT_FILE_F_VERSION
+	LC_SRC_HAVE_PG_ERROR
+	LC_SRC_HAVE_FOLIO_TEST_MLOCKED
+	LC_SRC_HAVE_PAGE_MAPCOUNT_IS_TYPE
+
+	# 6.13
+	LC_SRC_HAVE_MODULE_IMPORT_STRING_LITERAL
+	LC_SRC_HAVE_PAGEPRIVATE2
+
+	# 6.14
+	LC_SRC_HAVE_D_REVALIDATE_WITH_INODE_NAME
+
+	# 6.15
+	LC_SRC_HAVE_GRAB_CACHE_PAGE_WRITE_BEGIN
+	LC_SRC_HAVE_WAIT_ON_PAGE_LOCKED
+	LC_SRC_HAVE_HRTIMER_SETUP
+	LC_SRC_HAVE_IOPS_MKDIR_RETURNS_DENTRY
+
+	# 6.16
+	LC_SRC_HAVE_TRY_LOOKUP_NOPERM
+
+	# 6.17
+	LC_SRC_BLK_INTEGRITY_HAS_METADATA_SIZE
+	LC_SRC_HAVE_SET_DEFAULT_D_OP
+	LC_SRC_HAVE_FILE_KATTR
+	LC_SRC_HAVE_SIMPLE_DENTRY_OPERATIONS
+	LC_SRC_HAVE_WRITE_BEGIN_KIOCB
+	LC_SRC_FS_STRUCT_HAS_SEQLOCK
+	LC_SRC_HAVE_NETIF_GET_FLAGS
+
+	# 6.18
+	LC_SRC_HAVE_INODE_JUST_DROP
+	LC_SRC_HAVE_MEMDESC_FLAGS_T
+	LC_SRC_HAVE_DENTRY__D_NAME
+	LC_SRC_HAVE_FILE__F_PATH
+
+	# 6.19
+	LC_SRC_HAVE_VFS_MKDIR_DELEGATE
+	LC_SRC_HAVE_INODE_STATE_READ
+	LC_SRC_HAVE_VFS_CREATE_DELEGATE
+	LC_SRC_HAVE_ILOOKUP5_NOWAIT_ISNEW
+
+	# 7.0
+	LC_SRC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER
+])
+
+AC_DEFUN([LC_PROG_LINUX_RESULTS], [
+	AS_IF([test "x$enable_gss" != xno], [
+		LB2_TEST_CHECK_CONFIG_IM([CRYPTO_MD5], [],
+			[AC_MSG_WARN(
+			[kernel MD5 support is recommended by using GSS.])])
+		LB2_TEST_CHECK_CONFIG_IM([CRYPTO_SHA1], [],
+			[AC_MSG_WARN(
+			[kernel SHA1 support is recommended by using GSS.])])
+		LB2_TEST_CHECK_CONFIG_IM([CRYPTO_SHA256], [],
+			[AC_MSG_WARN(
+			[kernel SHA256 support is recommended by using GSS.])])
+		LB2_TEST_CHECK_CONFIG_IM([CRYPTO_SHA512], [],
+			[AC_MSG_WARN(
+			[kernel SHA512 support is recommended by using GSS.])])
+	])
+	AS_IF([test "x$enable_server" != xno], [
+		LC_CONFIG_QUOTA
+		LC_STACK_SIZE
+	])
+	LC_CONFIG_FHANDLE
+	LC_POSIX_ACL_CONFIG
+	LC_CONFIG_XARRAY_MULTI
+
+	# 5.0
+	LC_GENL_FAMILY_HAS_RESV_START_OP
+
+	# 5.1
+	LC_HAVE_BVEC_ITER_ALL
+
+	# 5.2
+	LC_KEYRING_SEARCH_4ARGS
+
+	# 5.3
+	LC_BIO_BI_PHYS_SEGMENTS
+	LC_HAVE_FLUSH_DELAYED_FPUT
+	LC_LM_COMPARE_OWNER_EXISTS
+
+	# 5.5
+	LC_FSCRYPT_DIGESTED_NAME
+
+	# 5.7
+	LC_FSCRYPT_DUMMY_CONTEXT_ENABLED
+
+	# 5.8
+	LC_HAVE_PRANDOM_HEADER
+	LC_HAVE_KTHREAD_USE_MM
+
+	# 5.9
+	LC_HAVE_ITER_FILE_SPLICE_WRITE
+
+	# 5.9
+	LC_FSCRYPT_FNAME_ALLOC_BUFFER
+	LC_FSCRYPT_SET_CONTEXT
+	LC_FSCRYPT_D_REVALIDATE
+	LC_FSCRYPT_NOKEY_NAME
+	LC_FSCRYPT_SET_TEST_DUMMY_ENC_CHAR_ARG
+	LC_FSCRYPT_DUMMY_POLICY
+
+	# 5.10
+	LC_HAVE_BDI_DEBUG_STATS
+	LC_FSCRYPT_IS_NOKEY_NAME
+	LC_FSCRYPT_PREPARE_READDIR
+
+	# 5.11
+	LC_SET_POSIX_ACL_USER_NS
+	LC_BI_BDEV
+	LC_BIO_SET_DEV
+
+	# 5.12
+	LC_HAVE_USER_NAMESPACE_ARG
+
+	# 5.13
+	LC_HAVE_ACCOUNT_PAGE_DIRTIED
+	LC_HAVE_FILEATTR_GET
+	LC_HAVE_COPY_PAGE_FROM_ITER_ATOMIC
+
+	# 5.15
+	LC_HAVE_GET_ACL_RCU_ARG
+	LC_HAVE_FAULT_IN_IOV_ITER_READABLE
+
+	# 5.16
+	LC_HAVE_SECURITY_DENTRY_INIT_WITH_XATTR_NAME_ARG
+	LC_FOLIO_MEMCG_LOCK
+	LC_HAVE___FILEMAP_GET_FOLIO
+	LC_HAVE_KIOCB_COMPLETE_2ARGS
+	LC_FOLIO_MEMCG_LOCK_EXPORTED
+	LC_EXPORTS_DELETE_FROM_PAGE_CACHE
+
+	# 5.17
+	LC_HAVE_INVALIDATE_FOLIO
+	LC_HAVE_DIRTY_FOLIO
+
+	# 5.18
+	LC_HAVE_ALLOC_INODE_SB
+
+	# 5.19
+	LC_HAVE_ADDRESS_SPACE_OPERATIONS_READ_FOLIO
+	LC_HAVE_READ_CACHE_FOLIO_FILLER_WITH_FILE
+	LC_HAVE_ADDRESS_SPACE_OPERATIONS_RELEASE_FOLIO
+	LC_HAVE_LSMCONTEXT_INIT
+	LC_SECURITY_DENTRY_INIT_SECURTY_WITH_CTX
+	LC_HAVE_FILEMAP_GET_FOLIOS
+
+	# 6.0
+	LC_HAVE_NO_LLSEEK
+	LC_DQUOT_TRANSFER_WITH_USER_NS
+	LC_HAVE_ADDRESS_SPACE_OPERATIONS_MIGRATE_FOLIO
+	LC_REGISTER_SHRINKER_FORMAT_NAMED
+	LC_HAVE_VFS_SETXATTR_NON_CONST_VALUE
+	LC_HAVE_IOV_ITER_GET_PAGES_ALLOC2
+	LC_HAVE_USER_BACKED_ITER
+	LC_HAVE_IOV_ITER_IS_ALIGNED
+
+	# 6.1
+	LC_HAVE_GET_RANDOM_U32_AND_U64
+	LC_NFS_FILLDIR_USE_CTX_RETURN_BOOL
+	LC_HAVE_FILEMAP_GET_FOLIOS_CONTIG
+	LC_IOP_GET_INODE_ACL
+	LC_HAVE_POSIX_ACL_TYPE
+
+	# 6.2
+	LC_HAVE_GET_RANDOM_U32_BELOW
+	LC_HAVE_ACL_WITH_DENTRY
+	LC_HAVE_FOLIO_MAPCOUNT
+
+	# 6.3
+	LC_HAVE_MNT_IDMAP_ARG
+	LC_HAVE_U64_CAPABILITY
+	LC_HAVE_FOLIO_BATCH_REINIT
+
+	# 6.4
+	LC_HAVE_IOV_ITER_IOVEC
+	LC_HAVE_IOVEC_WITH_IOV_MEMBER
+	LC_HAVE_CLASS_CREATE_MODULE_ARG
+
+	# 6.5
+	LC_HAVE_ENUM_ITER_PIPE
+	LC_HAVE_GET_USER_PAGES_WITHOUT_VMA
+	LC_HAVE_FOLIO_BATCH
+	LC_HAVE_BIO_ADD_FOLIO
+	LC_HAVE_SG_SET_FOLIO
+	LC_HAVE_STRUCT_PAGEVEC
+	LC_EXPORTS_FILEMAP_SPLICE_READ
+
+	# 6.6
+	LC_HAVE_FLUSH___WORKQUEUE
+	LC_HAVE_INODE_GET_CTIME
+	LC_HAVE_COPY_FOLIO_FROM_ITER_ATOMIC
+	LC_HAVE_MMAP_WRITE_TRYLOCK
+	LC_HAVE_GENERIC_FILEATTR_HAS_MASK_ARG
+
+	# 6.7
+	LC_HAVE_GROUP_INFO_USAGE_AS_REFCOUNT
+	LC_HAVE_NSPROXY_COUNT_AS_REFCOUNT
+	LC_HAVE_INODE_GET_MTIME_SEC
+	LC_HAVE_SHRINKER_ALLOC
+
+	# 6.8
+	LC_HAVE_DENTRY_D_CHILDREN
+	LC_HAVE_GENERIC_ERROR_REMOVE_FOLIO
+	LC_LSMCONTEXT_HAS_ID
+
+	# 6.9
+	LC_HAVE_STRUCT_FILE_LOCK_CORE
+
+	# 6.11
+	LC_HAVE_CSUM_TYPE_BLK_INTEGRITY
+
+	# 6.11
+	LC_HAVE_FOLIO_MEMCG_LOCK_STATIC
+
+	# 6.12
+	LC_HAVE_LINUX_UNALIGNED_HEADER
+	LC_HAVE_WRITE_BEGIN_FOLIO
+	LC_HAVE_STRUCT_FILE_F_VERSION
+	LC_HAVE_PG_ERROR
+	LC_HAVE_FOLIO_TEST_MLOCKED
+	LC_HAVE_PAGE_MAPCOUNT_IS_TYPE
+
+	# 6.13
+	LC_HAVE_MODULE_IMPORT_STRING_LITERAL
+	LC_HAVE_PAGEPRIVATE2
+
+	# 6.14
+	LC_HAVE_D_REVALIDATE_WITH_INODE_NAME
+
+	# 6.15
+	LC_HAVE_GRAB_CACHE_PAGE_WRITE_BEGIN
+	LC_HAVE_WAIT_ON_PAGE_LOCKED
+	LC_HAVE_HRTIMER_SETUP
+	LC_HAVE_IOPS_MKDIR_RETURNS_DENTRY
+
+	# 6.16
+	LC_HAVE_TRY_LOOKUP_NOPERM
+
+	# 6.17
+	LC_BLK_INTEGRITY_HAS_METADATA_SIZE
+	LC_HAVE_SET_DEFAULT_D_OP
+	LC_HAVE_FILE_KATTR
+	LC_HAVE_SIMPLE_DENTRY_OPERATIONS
+	LC_HAVE_WRITE_BEGIN_KIOCB
+	LC_FS_STRUCT_HAS_SEQLOCK
+	LC_HAVE_NETIF_GET_FLAGS
+
+	# 6.18
+	LC_HAVE_INODE_JUST_DROP
+	LC_HAVE_MEMDESC_FLAGS_T
+	LC_HAVE_DENTRY__D_NAME
+	LC_HAVE_FILE__F_PATH
+
+	# 6.19
+	LC_HAVE_VFS_MKDIR_DELEGATE
+	LC_HAVE_INODE_STATE_READ
+	LC_HAVE_VFS_CREATE_DELEGATE
+	LC_HAVE_ILOOKUP5_NOWAIT_ISNEW
+
+	# 7.0
+	LC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER
+])
+
+#
+# LC_PROG_LINUX
+#
+# Lustre linux kernel checks
+#
+AC_DEFUN([LC_PROG_LINUX], [
+	AC_MSG_NOTICE([Lustre kernel checks
+==============================================================================])
+
+	LC_CONFIG_PINGER
+	LC_CONFIG_CHECKSUM
+	LC_CONFIG_FLOCK
+	LC_CONFIG_LRU_RESIZE
+	LC_CONFIG_GSS
+
+	LC_GLIBC_SUPPORT_FHANDLES
+	LC_GLIBC_SUPPORT_COPY_FILE_RANGE
+	LC_OPENSSL_SSK
+	LC_OPENSSL_GETSEPOL
+
+	# 5.2 - Check export
+	LC_ACCOUNT_PAGE_DIRTIED
+
+	# 6.0 - Check export
+	LC_HAVE_ADD_TO_PAGE_CACHE_LOCKED
+
+]) # LC_PROG_LINUX
+
+#
+# LC_CONFIG_CLIENT
+#
+# Check whether to build the client side of Lustre
+#
+AC_DEFUN([LC_CONFIG_CLIENT], [
+AC_MSG_CHECKING([whether to build Lustre client support])
+AC_ARG_ENABLE([client],
+	AS_HELP_STRING([--disable-client],
+		[disable Lustre client support]),
+	[], [enable_client="yes"])
+AC_MSG_RESULT([$enable_client])
+]) # LC_CONFIG_CLIENT
+
+#
+# --enable-mpitests
+#
+AC_DEFUN([LB_CONFIG_MPITESTS], [
+AC_ARG_ENABLE([mpitests],
+	AS_HELP_STRING([--enable-mpitests=<yes|no|mpicc wrapper>],
+		       [include mpi tests]), [
+		enable_mpitests="yes"
+		case $enableval in
+		yes)
+			MPICC_WRAPPER="mpicc"
+			MPI_BIN=$(eval which $MPICC_WRAPPER 2>/dev/null | xargs -r dirname)
+			;;
+		no)
+			enable_mpitests="no"
+			MPI_BIN=""
+			;;
+		*)
+			MPICC_WRAPPER=$enableval
+			MPI_BIN=$(eval echo $MPICC_WRAPPER | xargs -r dirname)
+			;;
+		esac
+	], [
+		enable_mpitests="yes"
+		MPICC_WRAPPER="mpicc"
+		MPI_BIN=$(eval which $MPICC_WRAPPER 2>/dev/null | xargs -r dirname)
+	])
+
+	if test "x$enable_mpitests" != "xno"; then
+		oldcc=$CC
+		CC=$MPICC_WRAPPER
+		AC_CACHE_CHECK([whether mpitests can be built],
+		lb_cv_mpi_tests, [AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+			#include <mpi.h>
+			int main(void) {
+				int flag;
+				MPI_Initialized(&flag);
+				return 0;
+			}
+		])], [lb_cv_mpi_tests="yes"], [lb_cv_mpi_tests="no"])
+		])
+		enable_mpitests=$lb_cv_mpi_tests
+		CC=$oldcc
+	fi
+	AC_SUBST(MPI_BIN)
+	AC_SUBST(MPICC_WRAPPER)
+]) # LB_CONFIG_MPITESTS
+
+#
+# LC_ENABLE_QUOTA
+#
+# whether to enable quota support global control
+#
+AC_DEFUN([LC_ENABLE_QUOTA], [
+AC_MSG_CHECKING([whether to enable quota support global control])
+AC_ARG_ENABLE([quota],
+	AS_HELP_STRING([--enable-quota],
+		[enable quota support]),
+	[], [enable_quota="yes"])
+AS_IF([test "x$enable_quota" = xyes],
+	[AC_MSG_RESULT([yes])],
+	[AC_MSG_RESULT([no])])
+]) # LC_ENABLE_QUOTA
+
+#
+# LC_QUOTA
+#
+AC_DEFUN([LC_QUOTA], [
+#check global
+LC_ENABLE_QUOTA
+#check for utils
+AS_IF([test "x$enable_quota" != xno -a "x$enable_utils" != xno], [
+	AC_CHECK_HEADER([sys/quota.h],
+		[AC_DEFINE(HAVE_SYS_QUOTA_H, 1,
+			[Define to 1 if you have <sys/quota.h>.])],
+		[AC_MSG_ERROR([did not find <sys/quota.h> on your system])])
+])
+]) # LC_QUOTA
+
+#
+# LC_CONFIG_CRYPTO
+#
+# Check whether to enable Lustre client crypto
+#
+AC_DEFUN([LC_CONFIG_CRYPTO], [
+AC_MSG_CHECKING([whether to enable Lustre client crypto])
+AC_ARG_ENABLE([crypto],
+	AS_HELP_STRING([--enable-crypto=yes|no|in-kernel],
+		[enable Lustre client crypto (default is yes), use 'in-kernel' to force use of in-kernel fscrypt instead of embedded llcrypt]),
+	[], [enable_crypto="auto"])
+AS_IF([test "x$enable_crypto" != xno -a "x$enable_dist" = xno], [
+      AS_IF([test "x$enable_crypto" = xin-kernel -o "x$enable_modules" = xno -a "x$enable_dist" = xno], [
+	LB_CHECK_CONFIG_IM([FS_ENCRYPTION], [
+		AC_DEFINE(HAVE_LUSTRE_CRYPTO, 1, [Enable Lustre client crypto])
+		LC_FSCRYPT_SUPPORT
+		AS_IF([test "x$has_fscrypt_support" != xyes], [
+			AC_DEFINE(CONFIG_LL_ENCRYPTION, 1,
+				  [Enable Lustre client crypto via embedded llcrypt])
+			AC_DEFINE(HAVE_FSCRYPT_DUMMY_CONTEXT_ENABLED, 1,
+				  [embedded llcrypt uses llcrypt_dummy_context_enabled()])
+			enable_crypto="embedded-llcrypt"
+			enable_llcrypt=yes
+		],[
+			AC_MSG_RESULT("Enable Lustre client crypto via in-kernel fscrypt")
+			enable_crypto="in-kernel"
+		])
+	],[
+		AC_MSG_WARN(Lustre client crypto cannot be enabled because of lack of encryption support in your kernel.)
+		enable_crypto=no
+	])
+      ],[
+	AC_DEFINE(HAVE_LUSTRE_CRYPTO, 1, [Enable Lustre client crypto])
+	AC_DEFINE(CONFIG_LL_ENCRYPTION, 1,
+		  [Enable Lustre client crypto via embedded llcrypt])
+	AC_DEFINE(HAVE_FSCRYPT_DUMMY_CONTEXT_ENABLED, 1,
+		  [embedded llcrypt uses llcrypt_dummy_context_enabled()])
+	enable_crypto="embedded-llcrypt"
+	enable_llcrypt=yes
+      ])
+      AS_IF([test "x$enable_dist" != xno], [
+	     enable_crypto=yes
+	     enable_llcrypt=yes])
+],[enable_llcrypt="no"])
+AC_MSG_RESULT([$enable_crypto])
+]) # LC_CONFIG_CRYPTO
+
+#
+# LC_CONFIGURE
+#
+# other configure checks
+#
+AC_DEFUN([LC_CONFIGURE], [
+AC_MSG_NOTICE([Lustre core checks
+==============================================================================])
+
+# maximum MDS thread count
+LC_MDS_MAX_THREADS
+
+# lustre/utils/gss/gss_util.c
+# lustre/utils/llog_reader.c
+# lustre/utils/libiam.c
+AC_CHECK_HEADERS([netdb.h endian.h])
+
+# lustre/utils/llverfs.c lustre/utils/libmount_utils_ldiskfs.c
+AS_IF([test "x$enable_utils" = xyes -a "x$enable_ldiskfs" = xyes], [
+	PKG_CHECK_MODULES([EXT2FS], [ext2fs >= 1.47.3-wc2])
+])
+
+# lustre/tests/statx_test.c
+AC_CHECK_FUNCS([statx])
+
+# lustre/utils/lfs.c
+AS_IF([test "$enable_dist" = "no"], [
+		AC_CHECK_LIB([z], [crc32], [
+				 AC_CHECK_HEADER([zlib.h], [], [
+						 AC_MSG_ERROR([zlib.h not found.])])
+				 ], [
+				 AC_MSG_ERROR([
+		zlib library not found. Please install zlib development package.])
+		])
+])
+
+SELINUX=""
+
+AC_CHECK_LIB([selinux], [is_selinux_enabled],
+	[AC_CHECK_HEADERS([selinux/selinux.h],
+			[SELINUX="-lselinux"
+			AC_DEFINE([HAVE_SELINUX], 1,
+				[support for selinux ])],
+			[AC_MSG_WARN([
+
+No libselinux-devel package found, unable to build selinux enabled tools
+])
+])],
+	[AC_MSG_WARN([
+
+No selinux package found, unable to build selinux enabled tools
+])
+])
+AC_SUBST(SELINUX)
+
+AC_CHECK_LIB([keyutils], [add_key])
+
+# Super safe df
+AC_MSG_CHECKING([whether to report minimum OST free space])
+AC_ARG_ENABLE([mindf],
+	AS_HELP_STRING([--enable-mindf],
+		[Make statfs report the minimum available space on any single OST instead of the sum of free space on all OSTs]),
+	[], [enable_mindf="no"])
+AC_MSG_RESULT([$enable_mindf])
+AS_IF([test "$enable_mindf" = "yes"], [
+	AC_DEFINE([MIN_DF], 1, [Report minimum OST free space])
+	AC_SUBST(ENABLE_MINDF, yes)
+], [
+	AC_SUBST(ENABLE_MINDF, no)
+])
+
+AC_MSG_CHECKING([whether to randomly failing memory alloc])
+AC_ARG_ENABLE([fail_alloc],
+	AS_HELP_STRING([--disable-fail-alloc],
+		[disable randomly alloc failure]),
+	[], [enable_fail_alloc="yes"])
+AC_MSG_RESULT([$enable_fail_alloc])
+AS_IF([test "x$enable_fail_alloc" != xno], [
+	AC_DEFINE([RANDOM_FAIL_ALLOC], 1, [enable randomly alloc failure])
+	AC_SUBST(ENABLE_FAIL_ALLOC, yes)
+], [
+	AC_SUBST(ENABLE_FAIL_ALLOC, no)
+])
+
+AC_MSG_CHECKING([whether to check invariants (expensive cpu-wise)])
+AC_ARG_ENABLE([invariants],
+	AS_HELP_STRING([--enable-invariants],
+		[enable invariant checking (cpu intensive)]),
+	[], [enable_invariants="no"])
+AC_MSG_RESULT([$enable_invariants])
+AS_IF([test "x$enable_invariants" = xyes], [
+	AC_DEFINE([CONFIG_LUSTRE_DEBUG_EXPENSIVE_CHECK], 1,
+		  [enable invariant checking])
+	AC_SUBST(ENABLE_INVARIANTS, yes)
+], [
+	AC_SUBST(ENABLE_INVARIANTS, no)
+])
+
+AC_MSG_CHECKING([whether to enable page state tracking])
+AC_ARG_ENABLE([pgstate-track],
+	AS_HELP_STRING([--enable-pgstate-track],
+		[enable page state tracking]),
+	[], [enable_pgstat_track="no"])
+AC_MSG_RESULT([$enable_pgstat_track])
+AS_IF([test "x$enable_pgstat_track" = xyes], [
+	AC_DEFINE([CONFIG_DEBUG_PAGESTATE_TRACKING], 1,
+		  [enable page state tracking code])
+	AC_SUBST(ENABLE_PGSTAT_TRACK, yes)
+], [
+	AC_SUBST(ENABLE_PGSTAT_TRACK, no)
+])
+
+PKG_PROG_PKG_CONFIG
+AC_MSG_CHECKING([systemd unit file directory])
+AC_ARG_WITH([systemdsystemunitdir],
+	[AS_HELP_STRING([--with-systemdsystemunitdir=DIR],
+		[Directory for systemd service files])],
+	[], [with_systemdsystemunitdir=auto])
+AS_IF([test "x$with_systemdsystemunitdir" = "xyes" -o "x$with_systemdsystemunitdir" = "xauto"],
+	[def_systemdsystemunitdir=$($PKG_CONFIG --variable=systemdsystemunitdir systemd)
+	AS_IF([test "x$def_systemdsystemunitdir" = "x"],
+		[AS_IF([test "x$with_systemdsystemunitdir" = "xyes"],
+		[AC_MSG_ERROR([systemd support requested but pkg-config unable to query systemd package])])
+		with_systemdsystemunitdir=no],
+	[with_systemdsystemunitdir="$def_systemdsystemunitdir"])])
+AS_IF([test "x$with_systemdsystemunitdir" != "xno"],
+	[AC_SUBST([systemdsystemunitdir], [$with_systemdsystemunitdir])])
+AC_MSG_RESULT([$with_systemdsystemunitdir])
+
+AC_MSG_CHECKING([bash-completion directory])
+AC_ARG_WITH([bash-completion-dir],
+	AS_HELP_STRING([--with-bash-completion-dir[=PATH]],
+		[Install the bash auto-completion script in this directory.]),
+	[],
+	[with_bash_completion_dir=yes])
+AS_IF([test "x$with_bash_completion_dir" = "xyes"], [
+	BASH_COMPLETION_DIR="`pkg-config --variable=completionsdir bash-completion`"
+	AS_IF([test "x$BASH_COMPLETION_DIR" = "x"], [
+		[BASH_COMPLETION_DIR="/usr/share/bash-completion/completions"]
+	])
+], [
+	BASH_COMPLETION_DIR="$with_bash_completion_dir"
+])
+AC_SUBST([BASH_COMPLETION_DIR])
+AC_MSG_RESULT([$BASH_COMPLETION_DIR])
+
+AC_MSG_CHECKING([for release ID])
+AC_ARG_WITH([release_id],
+	AS_HELP_STRING([--with-release-id=id],
+		[Specify release ID: (default=1)]),
+	[],
+	[with_release_id=1])
+AS_IF([test "x$with_release_id" = "xyes" -o "x$with_release_id" = "x"], [
+	RELEASE_ID=1
+], [
+	RELEASE_ID=$with_release_id
+])
+AC_SUBST([RELEASE_ID])
+AC_MSG_RESULT([$RELEASE_ID])
+]) # LC_CONFIGURE
+
+#
+# LC_CONDITIONALS
+#
+# AM_CONDITIONALS for lustre
+#
+AC_DEFUN([LC_CONDITIONALS], [
+AM_CONDITIONAL(MPITESTS, test x$enable_mpitests = xyes, Build MPI Tests)
+AM_CONDITIONAL(CLIENT, test x$enable_client = xyes)
+AM_CONDITIONAL(SERVER, test x$enable_server = xyes)
+AM_CONDITIONAL(SPLIT, test x$enable_split = xyes)
+AM_CONDITIONAL(EXT2FS_DEVEL, test x$ac_cv_header_ext2fs_ext2fs_h = xyes)
+AM_CONDITIONAL(GSS, test x$enable_gss = xyes)
+AM_CONDITIONAL(GSS_KEYRING, test x$enable_gss_keyring = xyes)
+AM_CONDITIONAL(GSS_SSK, test x$enable_ssk = xyes)
+AM_CONDITIONAL(LIBPTHREAD, test x$enable_libpthread = xyes)
+AM_CONDITIONAL(HAVE_SYSTEMD, test "x$with_systemdsystemunitdir" != "xno")
+AM_CONDITIONAL(ENABLE_BASH_COMPLETION, test "x$with_bash_completion_dir" != "xno")
+AM_CONDITIONAL(XATTR_HANDLER, test "x$lb_cv_compile_xattr_handler_flags" = xyes)
+AM_CONDITIONAL(SELINUX, test "$SELINUX" = "-lselinux")
+AM_CONDITIONAL(GETSEPOL, test x$enable_getsepol = xyes &&
+                         test x$config_getsepol = xyes)
+AM_CONDITIONAL(LLCRYPT, test x$enable_llcrypt = xyes)
+AM_CONDITIONAL(LIBAIO, test x$enable_libaio = xyes)
+]) # LC_CONDITIONALS
+
+#
+# LC_CONFIG_FILES
+#
+# files that should be generated with AC_OUTPUT
+#
+AC_DEFUN([LC_CONFIG_FILES],
+[AC_CONFIG_FILES([
+lustre/conf/Makefile
+lustre/conf/resource/Makefile
+lustre/kernel_patches/targets/6.12-rhel10.1.target
+lustre/kernel_patches/targets/6.12-rhel10.0.target
+lustre/kernel_patches/targets/5.14-rhel9.7.target
+lustre/kernel_patches/targets/5.14-rhel9.6.target
+lustre/kernel_patches/targets/5.14-rhel9.5.target
+lustre/kernel_patches/targets/5.14-rhel9.4.target
+lustre/kernel_patches/targets/5.14-rhel9.3.target
+lustre/kernel_patches/targets/5.14-rhel9.2.target
+lustre/kernel_patches/targets/5.14-rhel9.1.target
+lustre/kernel_patches/targets/5.14-rhel9.0.target
+lustre/kernel_patches/targets/4.18-rhel8.10.target
+lustre/kernel_patches/targets/4.18-rhel8.9.target
+lustre/kernel_patches/targets/4.18-rhel8.8.target
+lustre/kernel_patches/targets/4.18-rhel8.7.target
+lustre/kernel_patches/targets/4.18-rhel8.6.target
+lustre/kernel_patches/targets/4.18-rhel8.5.target
+lustre/kernel_patches/targets/4.18-rhel8.4.target
+lustre/kernel_patches/targets/4.18-rhel8.3.target
+lustre/kernel_patches/targets/4.18-rhel8.2.target
+lustre/kernel_patches/targets/4.18-rhel8.1.target
+lustre/kernel_patches/targets/4.18-rhel8.target
+lustre/kernel_patches/targets/3.10-rhel7.9.target
+lustre/kernel_patches/targets/3.10-rhel7.8.target
+lustre/kernel_patches/targets/3.10-rhel7.7.target
+lustre/kernel_patches/targets/3.10-rhel7.6.target
+lustre/kernel_patches/targets/3.10-rhel7.5.target
+lustre/kernel_patches/targets/4.14-rhel7.5.target
+lustre/kernel_patches/targets/4.14-rhel7.6.target
+lustre/kernel_patches/targets/4.12-sles12sp4.target
+lustre/kernel_patches/targets/4.12-sles12sp5.target
+lustre/kernel_patches/targets/4.12-sles15sp1.target
+lustre/kernel_patches/targets/5.3-sles15sp2.target
+lustre/kernel_patches/targets/5.3-sles15sp3.target
+lustre/kernel_patches/targets/5.14-sles15sp4.target
+lustre/kernel_patches/targets/5.14-sles15sp5.target
+lustre/kernel_patches/targets/6.4-sles15sp6.target
+lustre/kernel_patches/targets/6.4-sles15sp7.target
+lustre/kernel_patches/targets/3.x-fc18.target
+lustre/kernel_patches/targets/5.10-oe2203.target
+lustre/kernel_patches/targets/5.10-oe2203sp1.target
+lustre/kernel_patches/targets/5.10-oe2203sp2.target
+lustre/scripts/Makefile
+lustre/scripts/systemd/Makefile
+lustre/tests/Makefile
+lustre/tests/mpi/Makefile
+lustre/tests/iabf/Makefile
+lustre/utils/Makefile
+lustre/utils/gss/Makefile
+])
+]) # LC_CONFIG_FILES

@@ -1,0 +1,57 @@
+.TH LLAPI_LAYOUT_FILE_COMP_DEL 3 2024-08-27 "Lustre User API" "Lustre Library Functions"
+.SH NAME
+llapi_layout_file_comp_del \- delete the specified layout component from an existing file.
+.SH SYNOPSIS
+.nf
+.B #include <lustre/lustreapi.h>
+.PP
+.BI "int llapi_layout_file_comp_del(const char *" path ",
+.BI "                               uint32_t "id ", uint32_t "flags );
+.fi
+.SH DESCRIPTION
+Deletes the layout component(s) specified by
+.I id
+or
+.I flags
+from an existing file. The
+.I id
+must be a real unique component ID, when
+.I flags
+is specified,
+.I id
+must be set to zero.
+Available
+.IR flags
+are:
+.PP
+.BR LCME_FL_INIT:
+Instantiated components in the layout.
+.PP
+.BR LCME_FL_NEG|LCME_FL_INIT:
+Uninstantiated components in the layout.
+.SH RETURN VALUES
+Returns 0 on success, or -1 if an error occurred (in which case, errno is
+set appropriately).
+.SH ERRORS
+.TP 15
+.B EINVAL
+An invalid argument was specified.
+.TP
+.B ENOENT
+.I path
+doesn't exist or the specified component isn't found in file.
+.SH AVAILABILITY
+.B llapi_layout_file_comp_del()
+is part of the
+.BR lustre (7)
+user application interface library since release 2.10.0
+.\" Added in commit v2_9_55_0-18-gc4702b7443
+.SH SEE ALSO
+.BR llapi_layout_alloc (3),
+.BR llapi_layout_comp_id_get (3),
+.BR llapi_layout_comp_use_id (3),
+.BR llapi_layout_file_comp_add (3),
+.BR llapi_layout_file_open (3),
+.BR llapi_layout_get_by_path (3),
+.BR llapi_layout (7),
+.BR lustreapi (7)

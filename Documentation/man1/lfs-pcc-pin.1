@@ -1,0 +1,59 @@
+.TH LFS-PCC-PIN 1 2026-03-19 "Lustre" "Lustre User Utilities"
+.SH NAME
+lfs-pcc-pin,lfs-pcc-unpin \- set or clear pcc pin flag on Lustre file
+.SH SYNOPSIS
+.SY
+.BR "lfs pcc pin " [ --id | -i
+.IR ID "] " FILE " [" FILE ...]
+.SY
+.BR "lfs pcc unpin " [ --id | -i
+.IR ID "] " FILE " [" FILE ...]
+.YS
+.SH DESCRIPTION
+Set/Clear flag on a lustre file so that it cannot or can be removed from local
+cache storage by
+.BR lpcc_purge .
+.SH OPTIONS
+.TP
+.BR -i ", " --id
+The ARCHIVE
+.I ID
+to be pinned or un-pinned.
+If
+.I ID
+is not specified, use the first archive attached to the mounted
+filesystem by default.
+.SH EXAMPLES
+Set PCC pin flag on file
+.B /mnt/lustre/file
+for archive ID
+.B 2
+so that once copied to local cache, it will not be removed automatically by
+.BR lpcc_purge :
+.EX
+.B $ lfs pcc pin -i 2 /mnt/lustre/file
+.EE
+Clear PCC pin flag on file
+.B /mnt/lustre/file
+for archived ID
+.B 2
+so that if it is in local cache storage, it can be removed automatically by
+.BR lpcc_purge :
+.EX
+.B $ lfs pcc unpin -i 2 /mnt/lustre/file
+.EE
+.SH AVAILABILITY
+The
+.B lfs pcc pin
+command is part of the
+.BR lustre (7)
+filesystem package since release 2.17.0.
+.\" Added in commit v2_16_50-187-gaae909cf8f
+.SH SEE ALSO
+.BR lfs (1),
+.BR lfs-pcc (1),
+.BR lfs-pcc-attach (1),
+.BR lfs-pcc-detach (1),
+.BR lfs-pcc-state (1),
+.BR llapi_pcc_attach (3),
+.BR mdt.enable_pin_gid (4)

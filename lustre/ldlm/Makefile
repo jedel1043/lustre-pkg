@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# This file is part of Lustre, http://www.lustre.org/
+#
+# This is included by ptlrpc
+#
+
+ldlm_objs := l_lock.o ldlm_lock.o
+ldlm_objs += ldlm_resource.o ldlm_lib.o
+ldlm_objs += ldlm_plain.o ldlm_extent.o
+ldlm_objs += ldlm_request.o ldlm_lockd.o
+ldlm_objs += ldlm_flock.o ldlm_inodebits.o
+ldlm_objs += ldlm_pool.o ldlm_reclaim.o
+ldlm_objs += ldlm_cache_policy.o

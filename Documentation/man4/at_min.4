@@ -1,0 +1,91 @@
+.TH AT_MIN 4 2026-03-31 Lustre "Lustre Kernel Interfaces"
+.SH NAME
+at_min \- minimum seconds for RPC adaptive timeout estimate
+.SH SYNOPSIS
+.SY
+.BI "lctl get_param *." FSNAME "*.at_min"
+.SY
+.BI "lctl get_param at_min"
+.SY
+.BI "lctl set_param *." FSNAME "*.at_min=" TIMEOUT_MIN_SECONDS
+.SY
+.BI "lctl set_param at_min=" TIMEOUT_MIN_SECONDS
+.YS
+.SS PROPERTIES
+.TP
+.B Access Permissions
+.br
+.BR 644 " | " -rw-r--r--
+.TP
+.B Scope
+.br
+Global and per import and target device
+.TP
+.B Config
+.br
+Always present
+.TP
+.B Default
+.br
+.RB at_min= 5
+.TP
+.B Valid Range
+.br
+.RB at_min= 1
+.br
+.RB at_min= at_max
+.SH DESCRIPTION
+The
+.B at_min
+parameter sets the lower limit on the service time estimate to
+.IR TIMEOUT_MIN_SECONDS .
+Together with
+.BR at_max (4),
+this sets the range within which client RPC timeouts are estimated.
+The client will always wait at least
+.B at_min
+seconds for an RPC to timeout before it resends it.
+This avoids aggressively resending an RPC when a server is busy and the
+client has not received any RPC replies recently with an updated service time.
+.PP
+If, for some reason (usually due to temporary network outages or sudden spikes
+in load immediately after mount),
+the adaptive timeout value is too short and clients time out their RPCs,
+you can increase the minimum value to compensate for this.
+.PP
+It is preferred to set
+.B at_min
+as a per-target tunable using the
+.BI *. FSNAME - TARGET *.at_min
+parameter instead of the global parameter. This avoids issues if a single
+client mounts two separate filesystems with different at_min tunable settings.
+.SH MODULES
+This parameter is in the following modules:
+.EX
+.B at_min
+.B mdc.*.at_min
+.B mdt.*.at_min
+.B mgc.*.at_min
+.B mgs.*.at_min
+.B obdfilter.at_min
+.B osc.at_min
+.EE
+.SH EXAMPLES
+Permanently increase the minimum timeout on nodes of the testfs filesystem:
+.EX
+.RB mgs# " lctl set_param -P *.testfs*.at_min=15"
+.EE
+.SH AVAILABILITY
+.B at_min
+is part of the
+.BR lustre (7)
+filesystem package since release 1.6.4,
+.\" commit 1.6.0-1416-gde3c3fdf25
+but the per-subsystem tunables are only present since release 2.16.0.
+.\" commit v2_15_58-111-g0f2bc318d7
+.SH SEE ALSO
+.BR at_early_margin (4),
+.BR at_extra (4),
+.BR at_history (4),
+.BR at_max (4),
+.BR ldlm_enqueue_min (4)

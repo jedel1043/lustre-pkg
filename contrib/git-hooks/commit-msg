@@ -1,0 +1,406 @@
+#!/bin/bash
+#
+# A hook script to check the commit log message to ensure that it has
+# a well-formed commit summary and body, a valid Signed-off-by: line,
+# and a Gerrit Change-Id: line (added automatically if missing).
+#
+# Called by git-commit with one argument, the name of the file
+# that has the commit message.  The hook should exit with non-zero
+# status after issuing an appropriate message if it wants to stop the
+# commit.  The hook is allowed to edit the commit message file.
+#
+# Should be installed as .git/hooks/commit-msg.
+#
+
+init() {
+	set -a
+	readonly ORIGINAL="$1"
+	readonly REVISED="$(mktemp "$ORIGINAL.XXXXXX")"
+	readonly SAVE="$(basename $ORIGINAL).$(date +%Y%m%d.%H%M%S)"
+	readonly BUILD_PARAMS="Build-Parameters:"
+	readonly CHANGEID="Change-Id:"
+	readonly COVERITY="CoverityID:"
+	readonly FIXES="Fixes:"
+	readonly LINUX_COMMIT="Linux-commit:"
+	readonly LUSTRE_CHANGE="Lustre-change:"
+	readonly LUSTRE_COMMIT="Lustre-commit:"
+	readonly SIGNOFF="Signed-off-by:"
+	readonly TEST_PARAMS="Test-Parameters:"
+	readonly TEST_PARAMS2="Test-parameters:"
+	readonly EMAILS=$(echo \
+			Acked-by \
+			Tested-by \
+			Reported-by \
+			Reviewed-by \
+			CC \
+		| tr ' ' '|')
+
+	# allow temporary override for rare cases (e.g. merge commits)
+	readonly WIDTH_SUM=${WIDTH_SUM:-62}
+	readonly WIDTH_REG=${WIDTH_REG:-70}
+	readonly JIRA_FMT_A="^[A-Z]\{2,9\}-[0-9]\{1,5\} [-a-z0-9]\{2,11\}: "
+	readonly JIRA_FMT_B="^[A-Z]\{2,9\}-[0-9]\{1,5\} "
+	readonly GERRIT_URL="https://review.whamcloud.com"
+
+	# Identify a name followed by an email address.
+	#
+	readonly EMAILPAT=$'[ \t]*[-._ [:alnum:]]* <[^@ \t>]+@[a-zA-Z0-9.-]+\.[a-z]+>'
+
+	HAS_ERROR=false
+	HAS_SUMMARY=false
+	HAS_LAST_BLANK=false
+	HAS_BODY=false
+	HAS_SIGNOFF=false
+	HAS_CHANGEID=false
+	NEEDS_FIRST_LINE=true
+
+	IS_WRAPPING_UP=false
+
+	LINE=""
+	NUM=0
+	set +a
+}
+
+# die: commit-msg fatal error: script error or empty input message
+# All output redirected to stderr.
+#
+die() {
+	echo "commit-msg fatal error:  $*"
+	test -f "$REVISED" && rm -f "$REVISED"
+	exit 1
+} 1>&2
+
+# Called when doing the final "wrap up" clause because we've found
+# one of the tagged lines that belongs in the final section.
+#
+function ck_wrapup_started() {
+	$IS_WRAPPING_UP && return
+
+	$HAS_LAST_BLANK	|| error "blank line must preceed signoff section"
+	$HAS_SUMMARY	|| error "missing commit summary line."
+	$HAS_BODY	|| error "missing commit description."
+
+	HAS_LAST_BLANK=false
+	IS_WRAPPING_UP=true
+}
+
+function ck_is_ascii() {
+	LANG=C
+	[[ "${LINE//[![:alnum:][:blank:][:punct:]]/}" == "$LINE" ]] ||
+		error "non-printable characters in '$LINE'"
+}
+
+function ck_wrapup() {
+	ck_wrapup_started
+	ck_is_ascii
+}
+
+function do_signoff() {
+	ck_wrapup_started
+	# Signed-off-by: First Last <email@host.domain>
+	local txt=$(echo "${LINE#*: }" | grep -E "${EMAILPAT}")
+	if (( ${#txt} == 0 )); then
+		error "$SIGNOFF line needs full name and email address"
+	else
+		HAS_SIGNOFF=true # require at least one
+	fi
+}
+
+function do_changeid() {
+	ck_wrapup
+	$HAS_CHANGEID && error "multiple $CHANGEID lines not allowed"
+
+	# Change-Id: I1234567890123456789012345678901234567890
+	# capital "I" plus 40 hex digits
+	#
+	local txt=$(echo "$LINE" | grep "^$CHANGEID I[0-9a-fA-F]\{40\}\$")
+	(( ${#txt} > 0 )) ||
+		error "has invalid $CHANGEID line for Gerrit tracking"
+
+	HAS_CHANGEID=true
+}
+
+function do_buildparams() {
+	ck_wrapup
+
+	grep -Eq "\<client|\<server|arch=|distro=" <<< $LINE ||
+		error "only {client,server}{distro,arch}= supported"
+}
+
+function do_coverity() {
+	local cid=$(awk '{ print $2 }' <<<$LINE)
+
+	[[ x${cid}x =~ x[0-9]{6,7}x ]] ||
+		error "invalid $COVERITY CID, want 'nncidnn (\"issue type\")'"
+	[[ "$LINE" =~ \ \(\".*\"\) ]] ||
+		error "invalid $COVERITY type, want 'nncidnn (\"issue type\")'"
+}
+
+function do_testparams() {
+	ck_wrapup
+
+	grep -q mdsfilesystemtype <<< $LINE &&
+		error "mdsfilesystemtype is deprecated, use fstype"
+}
+
+function do_fixes() {
+	ck_wrapup
+
+	local commit=$(awk '{ print $2 }' <<<$LINE)
+
+	git describe --tags $commit 2>&1 | grep "[Nn]ot a valid" &&
+		error "invalid $FIXES hash, want '<10hex> (\"summary line\")'"
+	[[ "$LINE" =~ \ \(\".*\"\) ]] ||
+		error "invalid $FIXES summary, want '<10hex> (\"summary line\")'"
+}
+
+# All "emails" lines specify a person and email address
+#
+function do_emails() {
+	ck_wrapup_started
+	local txt=$(echo "${LINE#*: }" | grep -E "${EMAILPAT}")
+	(( ${#txt} == 0 )) && error "${LINE%: *} invalid name and email"
+}
+
+# All "change" lines specify a Gerrit URL
+#
+function do_lustre_change() {
+	local url="${LINE#*change: }"
+
+	ck_is_ascii
+	[[ $url =~ $GERRIT_URL/[0-9][0-9][0-9] ]] ||
+		error "bad Gerrit URL, use '$GERRIT_URL/nnnnn' format"
+}
+
+# All "commit" lines specify a commit hash, but the commit may be in
+# another repo, so the hash can't be directly verified
+#
+function do_lustre_commit() {
+	local val=${LINE#*commit: }
+
+	ck_is_ascii
+	if [[ $val =~ TBD ]]; then
+		val=${val#TBD (from }
+		val=${val%)}
+	fi
+
+	[[ $val =~ [g-zG-Z] ]] && error "bad commit hash '$val', non-hex chars"
+	(( ${#val} == 40 )) || error "bad commit hash '$val', not 40 chars"
+}
+
+function do_default_line() {
+	$IS_WRAPPING_UP && {
+		error "invalid signoff section line"
+		return
+	}
+	if ${NEEDS_FIRST_LINE}; then
+		HAS_JIRA_COMPONENT=$(echo "$LINE" | grep "$JIRA_FMT_A")
+
+		if (( ${#HAS_JIRA_COMPONENT} == 0 )); then
+			HAS_JIRA=$(echo "$LINE" | grep "$JIRA_FMT_B")
+			if (( ${#HAS_JIRA} > 0 )); then
+				error "has no component in summary."
+			else
+				error "missing JIRA ticket number."
+			fi
+		elif (( ${#LINE} > WIDTH_SUM )); then
+			error "summary longer than $WIDTH_SUM columns."
+		else
+			HAS_SUMMARY=true
+		fi
+		NEEDS_FIRST_LINE=false
+
+	elif (( ${#LINE} > WIDTH_REG )) && ! [[ $LINE =~ http ]]; then
+		# ignore long lines containing URLs
+		error "has line longer than $WIDTH_REG columns."
+	elif ! $HAS_BODY && ! $HAS_LAST_BLANK; then
+		error "has no blank line after summary."
+	else
+		HAS_BODY=true
+	fi
+	HAS_LAST_BLANK=false
+	ck_is_ascii
+}
+
+# Add a new unique Change-Id
+#
+new_changeid() {
+	local NEWID=$({
+			git var GIT_AUTHOR_IDENT
+			git var GIT_COMMITTER_IDENT
+			git write-tree
+			git rev-parse HEAD 2>/dev/null
+			grep -v "^$SIGNOFF" "$ORIGINAL" | git stripspace -s
+		} | git hash-object --stdin)
+	(( ${#NEWID} > 0 )) ||
+		die "git hash-object failed for $CHANGEID:"
+
+	echo "$CHANGEID I$NEWID"
+}
+
+# A commit message error was encountered.
+# All output redirected to stderr.
+#
+error() {
+	(( ${#LINE} > 0 )) && echo "line $NUM: $LINE"
+	echo "error: commit message $*"
+	HAS_ERROR=true
+} 1>&2
+
+short() {
+	echo "Run '$0 --help' for longer commit message help." 1>&2
+
+	mv "$ORIGINAL" "$SAVE" &&
+		echo "$0: saved original commit comment to $SAVE" 1>&2
+}
+
+usage() {
+	cat << USAGE
+
+Normally '$0' is invoked automatically by "git commit".
+
+See https://wiki.whamcloud.com/display/PUB/Commit+Comments
+for full details.  A good example of a valid commit comment is:
+
+    LU-nnnnn component: short description of change under 64 columns
+
+    The "component:" should be a lower-case single-word subsystem of the
+    Lustre code best covering the patch.  Example components include:
+        llite, lov, lmv, osc, mdc, ldlm, lnet, ptlrpc, mds, oss, osd,
+        ldiskfs, libcfs, socklnd, o2iblnd, recovery, quota, grant,
+        build, tests, docs. This list is not exhaustive, but a guideline.
+
+    The comment body should explan the change being made.  This can be
+    as long as needed.  Please include details of the problem that was
+    solved (including error messages that were seen), a good high-level
+    description of how it was solved, and which parts of the code were
+    changed (including important functions that were changed, if this
+    is useful to understand the patch, and for easier searching).
+    Performance patches should quanify the improvements being seen.
+    Wrap lines at/under $WIDTH_REG columns.  Only ASCII text allowed.
+
+    Optionally, if the patch is backported from master, include links
+    to the original patch to simplify tracking it across branches/repos:
+
+    $LUSTRE_CHANGE $GERRIT_URL/nnnn
+    $LUSTRE_COMMIT 40-char-git-hash-of-patch-on-master
+    or
+    $LUSTRE_COMMIT TBD (from 40-char-hash-of-unlanded-patch)
+
+    Finish the comment with a blank line followed by the signoff section.
+    The "$CHANGEID" line should only be present when updating a previous
+    commit/submission.  Keep the same $CHANGEID for ported patches. It
+    will automatically be added by the Git commit-msg hook if missing.
+
+    $BUILD_PARAMS extra build options, see https://build.whamcloud.com/
+    $TEST_PARAMS extra test options, see https://wiki.whamcloud.com/x/dICC
+    $FIXES 12-char-hash ("commit summary line of original broken patch")
+    $SIGNOFF Your Real Name <your_email@domain.name>
+    $CHANGEID Ixxxx(added automatically if missing)xxxx
+
+    The "signoff section" may optionally include other reviewer lines:
+	$(for T in $(tr '|' ' ' <<< "$EMAILS"); do		\
+		echo "    $T: Some Person <email@example.com>";	\
+	done)
+    {Organization}-bug-id: associated external change identifier
+USAGE
+}
+
+[[ "$1" == "--help" ]] && init && usage && exit 0
+
+init ${1+"$@"}
+exec 3< "$ORIGINAL" 4> "$REVISED" || exit 1
+
+while IFS= read -u3 LINE; do
+	((NUM += 1))
+	case "$LINE" in
+	$BUILD_PARAMS* )	do_buildparams ;;
+	$CHANGEID* )		do_changeid ;;
+	$COVERITY* )		do_coverity ;;
+	$FIXES* )		do_fixes ;;
+	$LINUX_COMMIT* )	do_lustre_commit ;;
+	$LUSTRE_CHANGE* )	do_lustre_change ;;
+	$LUSTRE_COMMIT* )	do_lustre_commit ;;
+	$SIGNOFF* )		do_signoff ;;
+	$TEST_PARAMS* )		do_testparams ;;
+	$TEST_PARAMS2* )	do_testparams ;;
+
+	"")
+		HAS_LAST_BLANK=true
+
+		# Do not emit blank lines before summary line or after
+		# the tag lines have begun.
+		#
+		${NEEDS_FIRST_LINE} || ${IS_WRAPPING_UP} && continue
+		;;
+
+	\#*)
+		continue ## ignore and suppress comments
+		;;
+
+	"diff --git a/"* )
+		# Beginning of uncommented diffstat from "commit -v".  If
+		# there are diff and index lines, skip the rest of the input:
+		#   diff --git a/build/commit-msg b/build/commit-msg
+		#   index 80a3442..acb4c50 100755
+		#   deleted file mode 100644
+		#   old mode 100644
+		# If a "diff --git" line is not followed by one of these
+		# lines, do the default line processing on both lines.
+		#
+		IFS= read -u3 INDEX || break
+		((NUM += 1))
+		case "$INDEX" in
+		"index "[0-9a-fA-F]*) break ;;
+		"deleted file mode "*) break  ;;
+		"old mode "*) break ;;
+		"new file mode "*) break ;;
+		esac
+		LINE=${LINE}$'\n'${INDEX}
+		do_default_line
+		;;
+
+	*)
+		if [[ "$LINE" =~ ^($EMAILS): ]]; then
+			do_emails
+
+		elif [[ "$LINE" =~ ^[A-Z][A-Za-z0-9_-]*-bug-id: ]]; then
+			# Allow arbitrary external bug identifiers for tracking.
+			#
+			ck_wrapup
+
+		else
+			do_default_line
+		fi
+		;;
+	esac
+
+	echo "$LINE" >&4
+done
+
+(( NUM <= 0 )) && die "empty commit message"
+
+unset LINE
+$HAS_SIGNOFF || error "missing valid $SIGNOFF: line."
+
+if $HAS_ERROR && [[ -z "$SKIP" ]]; then
+	exec 3<&- 4>&-
+	short
+	rm "$REVISED"
+	exit 1
+fi
+
+$HAS_CHANGEID || new_changeid >&4
+exec 3<&- 4>&-
+
+mv "$REVISED" "$ORIGINAL"
+
+## Local Variables:
+## Mode: shell-script
+## sh-basic-offset:          8
+## sh-indent-after-do:       8
+## sh-indentation:           8
+## sh-indent-for-case-label: 0
+## sh-indent-for-case-alt:   8
+## indent-tabs-mode:         t
+## End:

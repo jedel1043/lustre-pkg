@@ -1,0 +1,106 @@
+.TH LLAPI_HSM_STATE_SET 3 2024-08-27 "Lustre User API" "Lustre Library Functions"
+.SH NAME
+llapi_hsm_state_set, llapi_hsm_state_set_fd \- set HSM flags for a file on Lustre filesystem
+.SH SYNOPSIS
+.nf
+.B #include <lustre/lustreapi.h>
+.PP
+.BI "int llapi_hsm_state_set(const char *" path ", __u64 " setmask ",
+.BI "                        __u64 " clearmask ", __u32 " archive_id ");"
+.PP
+.BI "int llapi_hsm_state_set_fd(int " fd ", __u64 " setmask ",
+.BI "                           __u64 " clearmask ", __u32 " archive_id ");"
+.fi
+.SH DESCRIPTION
+.B llapi_hsm_state_set()
+.B llapi_hsm_state_set_fd()
+sets, clears HSM flags and modifies archive ID for file pointed by
+.I path
+or
+.IR fd .
+.TP 20
+.I setmask
+Mask of flags to be added.
+.TP
+.I clearmask
+Mask of flags to be removed.
+.TP
+.I archive_id
+Archive ID (greater than 0) used for this file. Use 0 if you do not want to
+change it.
+.PP
+See
+.BR llapi_hsm_state_get (3)
+for available flags.
+.SH RETURN VALUES
+.B llapi_hsm_state_set()
+and
+.B llapi_hsm_state_set_fd()
+return:
+.TP 7
+0
+on success
+.TP
+!= 0
+on failure,
+.I errno
+is set appropriately.
+.SH ERRORS
+.TP 15
+.B -ENOMEM
+failed to allocate memory.
+.TP
+.B -ENAMETOOLONG
+.I path
+was too long.
+.TP
+.B -ENOENT
+.I path
+does not point to a file or a directory.
+.TP
+.B -ENOTTY
+.I path
+does not point to a Lustre filesystem.
+.TP
+.B -EINVAL
+Provided masks resulted in an incompatible set of flags.
+.SH EXAMPLES
+.nf
+#include <stdlib.h>
+#include <stdio.h>
+#include <errno.h>
+\&
+#include <lustre/lustreapi.h>
+\&
+int main(int argc, char **argv)
+{
+	int rc;
+\&
+	if (argc < 2) {
+		fprintf(stderr, "usage: prog FILEPATH\\n");
+		exit(1);
+	}
+\&
+	rc = llapi_hsm_state_set(argv[1], HS_DIRTY|HS_NORELEASE, 0, 0);
+	if (rc != 0) {
+		fprintf(stderr, "Can't change hsm flags for %s: %s\\n",
+			argv[1], strerror(errno = -rc));
+		exit(rc);
+	}
+\&
+	exit(0);
+}
+.fi
+.SH AVAILABILITY
+.B llapi_hsm_state_set
+and
+.B llapi_hsm_state_set_fd
+are part of the
+.BR lustre (7)
+user application interface library since release 2.4.0
+.\" Added in commit 2.3.53-7-gf715e4e298
+.SH SEE ALSO
+.BR llapi_hsm_state_get (3),
+.BR llapi_hsm_state_get_fd (3),
+.BR lustre (7),
+.BR lustreapi (7)

@@ -1,0 +1,241 @@
+.TH LFS-MIRROR-EXTEND 1 2025-07-11 Lustre "Lustre User Utilities"
+.SH NAME
+lfs-mirror-extend \- add mirror(s) to an existing file
+.SH SYNOPSIS
+.SY "lfs mirror extend"
+.RB [ --bandwidth | --bandwidth-limit | "-W \fIBANDWIDTH_MB" [ MG ]]
+.RB [ --fid | -F " [" --lustre-dir = \fILUSTRE_MOUNT_POINT ]]
+.RB [ --mirror-count | -N [[ = ] \fIMIRROR_COUNT ]]
+.RB [ --no-verify "] [" --non-direct | -D ]
+.RB [ --stats | --stats-interval = \fISECONDS ]
+.RI [ SETSTRIPE_OPTIONS
+.RB "| " -f
+.IR VICTIM_FILE ]
+.I FILES_FROM
+.YS
+.SH DESCRIPTION
+This command adds mirror(s) to existing file(s) specified by
+.IR FILES_FROM .
+.P
+The file(s) to be extended can already be a mirrored file,
+or just a regular non-mirrored file.
+If it's a non-mirrored file,
+then the command will convert it to a mirrored file.
+.P
+.I FILES_FROM
+may be:
+.TP
+.IR FILENAME " [" FILENAME " ...]"
+File names are listed on command line.
+Multiple file names are separated by space char.
+.TP
+.BR -0 ", " --null
+Read file names from stdin by default. Each file name is followed by a NUL char.
+Usually is used after a pipeline from
+.B lfs find --print0
+command.
+.TP
+.BR --files-from = \fILIST_FILE
+Read file names from file
+.IR LIST_FILE .
+One line for each file name.
+If
+.I LIST_FILE
+is
+.RB ' - ',
+read from stdin.
+If
+.B --null
+is specified at the same time,
+file names are separated by a NUL char.
+.TP
+.I SETSTRIPE_OPTIONS
+specify the specific layout for the mirror.
+These are the same options that are used by
+.BR lfs-setstripe (1).
+If
+.I SETSTRIPE_OPTIONS
+are not specified,
+then the stripe options inherited from the previous component will be used.
+If
+.I VICTIM_FILE
+is specified and exists, then the command will merge the layout from that
+file as a mirror added to the mirrored file.
+After the command is finished, the victim file will be removed.
+.SH OPTIONS
+.TP
+.BR --chunk-size = \fISIZE_MB
+The buffer chunk size in MB used to transfer data. It is 1 (MB) by default.
+But if
+.BR --aio-tasks =0,
+the default value is 64 (MB).
+.TP
+.BR -F ", " --fid
+FID(s) are provided from command
+.RI line/stdin/ LIST_FILE
+instead of file path(s). Option
+.BR --lustre-dir =\c
+.I LUSTRE_MOUNT_POINT
+must be specified at the same time.
+.TP
+.BR -f ", " --file " " \fIVICTIM_FILE
+First, the contents of
+.I VICTIM_FILE
+will be verified to be the same as
+.IR FILENAME .
+If they are, the layout of
+.I VICTIM_FILE
+will be merged as a mirror added to the mirrored file.
+Otherwise the layout of
+.I VICTIM_FILE
+will be unchanged.
+However,
+.BR --no-verify
+can be specified to override this check.
+Once the command is complete
+.I VICTIM_FILE
+will be removed.
+This option cannot be specified with
+.IR SETSTRIPE_OPTIONS .
+.TP
+.BR -N ", " --mirror-count [[ = ] \fIMIRROR_COUNT ]
+Specifies that the next
+.I MIRROR_COUNT
+mirrors will have the following layout. This option can be repeated multiple
+times to separate mirrors that have different layouts. The
+.I MIRROR_COUNT
+argument is optional and will default to 1 if not specified.
+This lets a single mirror be specified easily with
+.BR -N .
+The
+.BR --mirror-count | -N
+option itself is also optional, and if not specified only 1 mirror will be
+created.
+The
+.I MIRROR_COUNT
+can be specified with a preceding '=' to indicate the number of
+.B total
+mirrors desired for the layout, such as
+.BI --mirror-count== TOTAL_MIRROR_COUNT
+or
+.B -N=\c
+.IR TOTAL_MIRROR_COUNT .
+This will create mirrors until the total
+number of mirrors in the layout is at least
+.IR TOTAL_MIRROR_COUNT .
+This also means that if there are already at least
+.I TOTAL_MIRROR_COUNT
+mirrors in the layout then no new mirrors will be created.
+.TP
+.BR --no-verify
+This option indicates not to verify the mirror(s) from victim file(s) in case
+the victim file(s) contains the same data as the original mirrored file. This
+option can save siginificant time on file comparison if the file size is large,
+but it should only be used when the file contents are known to be the same.
+.TP
+.BR --non-direct , -D
+Use buffered, not
+.BR O_DIRECT ,
+read and write operations when migrating a file.
+This adds CPU and memory overhead for the data copy between kernel and
+userspace buffers, but avoids synchronous read and write operations
+that may slow down small file operations.
+.br
+This option cannot be used on encrypted files when the encryption key is not
+available. It will result in
+.B -ENOKEY
+being returned.
+.TP
+.BR --stats
+This option enables progress updates every 5 seconds, in YAML format.
+.TP
+.BR --stats-interval =\fISTATS_INTERVAL
+This option enables progress updates every
+.I STATS_INTERVAL
+seconds, in YAML format.
+.TP
+.BR -W ", " --bandwidth " " \fIBANDWIDTH_MB [ MG ]
+Limit the read and write bandwidth a mirror extend consumes to no more than
+.I BANDWIDTH_MB
+MiB/s. An optional suffix can be used to specify units in
+.BR M ebibytes
+or
+.BR G ibibytes
+per second.
+.SH EXAMPLES
+Add 2 mirrors to /mnt/lustre/file1. If file1 is a non-mirrored file, then the
+command will convert it to a mirrored file first and then add mirrors. Each
+mirror has the same default striping pattern with
+.I STRIPE_COUNT
+and
+.I STRIPE_SIZE
+inherited from filesystem-wide default values, and OST
+.I POOL_NAME
+inherited from parent directory:
+.RS
+.EX
+.B # lfs mirror extend -N2 /mnt/lustre/file1
+.EE
+.RE
+.PP
+Add 3 PFL mirrors to /mnt/lustre/file1. Each mirror has the same specified PFL
+layout:
+.RS
+.EX
+.B # lfs mirror extend -N3 -E 1M -c 1 -E 32M -c 4 -S 16M -E eof -c -1 \
+/mnt/lustre/file1
+.EE
+.RE
+.PP
+Add 3 plain layout mirrors to /mnt/lustre/file1. The first mirror has a single
+stripe and 4MB stripe size. The second mirror has two stripes and locates on
+OSTs with indices 2 and 3 allocated from the
+.B flash
+OST pool.
+It also has 4MB stripe size inherited from the first mirror.
+The third mirror has two stripes and 4MB stripe size inherited from the previous
+mirror, and also has inherited OST
+.I POOL_NAME
+from parent directory:
+.RS
+.EX
+.B # lfs mirror extend -N -c 1 -S 4M -N -c 2 -o 2,3 -p flash \
+-N -p none /mnt/lustre/file1
+.EE
+.RE
+.PP
+Add 5 PFL mirrors to /mnt/lustre/file1. The first and second mirrors have the
+same PFL layout. All of the components are allocated from the flash OST pool.
+The last three mirrors have the same PFL layout. All of these components have a
+stripe size of 16MB and use OSTs in the archive pool:
+.RS
+.EX
+.B # lfs mirror extend -N2 -E 4M -c 2 --pool flash -E eof -c 4 -N3 -E 16M -c 4 \
+-S 16M --pool archive -E eof -c -1 /mnt/lustre/file1
+.EE
+.RE
+.PP
+Merge the layouts from /mnt/lustre/file2 and /mnt/lustre/file3, which contain
+the same data as /mnt/lustre/file1, use the layouts as mirrors and add them to
+/mnt/lustre/file1 without verification:
+.RS
+.EX
+.B # lfs mirror extend --no-verify -N -f /mnt/lustre/file2 -N -f \
+/mnt/lustre/file3 /mnt/lustre/file1
+.EE
+.RE
+.SH AVAILABILITY
+The
+.B lfs mirror extend
+command is part of the
+.BR lustre (7)
+filesystem package since release 2.11.0
+.\" Added in commit v2_10_55_0-55-g125f98fb5c
+.SH SEE ALSO
+.BR lfs (1),
+.BR lfs-mirror-create (1),
+.BR lfs-mirror-delete (1),
+.BR lfs-mirror-resync (1),
+.BR lfs-mirror-split (1),
+.BR lfs-mirror-verify (1),
+.BR lfs-setstripe (1)

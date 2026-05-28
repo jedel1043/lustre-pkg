@@ -1,0 +1,69 @@
+commit 31e1dbf5a16d19ac34a95f6ccd4a815e10306cef
+Author:     Zhou Bowen <bwzhou@clusterfs.com>
+AuthorDate: Tue May 20 09:07:37 2008 +0000
+
+ldiskfs: add max_dir_size tunable directory limit
+
+Add a parameter max_dir_size_kb to limit the maximum directory size.
+This allows sites to limit very large directories to avoid issues
+with userspace tools like "ls" that cannot handle millions of files
+in a directory efficiently.
+
+The max_dir_size tunable is kept for compatibility with kernels < 3.6
+when the 'max_dir_size_kb' parameter was added to upstream ext4.
+
+Linux-commit: df981d03eeff7971ac7e6ff37000bfa702327ef1
+
+Bugzilla-ID: b=13285
+Signed-off-by: Zhou Bowen <bwzhou@clusterfs.com>
+Reviewed-by: Sergey Glushchenko <deen@clusterfs.com>
+Reviewed-by: Andreas Dilger <adilger@clusterfs.com>
+
+---
+ fs/ext4/sysfs.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/fs/ext4/sysfs.c b/fs/ext4/sysfs.c
+index 2aeff069..17c391ec 100644
+--- a/fs/ext4/sysfs.c
++++ b/fs/ext4/sysfs.c
+@@ -218,6 +218,8 @@ EXT4_ATTR_OFFSET(mb_group_prealloc, 0644, clusters_in_group,
+ EXT4_ATTR_OFFSET(mb_best_avail_max_trim_order, 0644, mb_order,
+ 		 ext4_sb_info, s_mb_best_avail_max_trim_order);
+ EXT4_RW_ATTR_SBI_UI(inode_goal, s_inode_goal);
++EXT4_RW_ATTR_SBI_UI(max_dir_size, s_max_dir_size_kb);
++EXT4_RW_ATTR_SBI_UI(max_dir_size_kb, s_max_dir_size_kb);
+ EXT4_RW_ATTR_SBI_UI(mb_stats, s_mb_stats);
+ EXT4_RW_ATTR_SBI_UI(mb_max_to_scan, s_mb_max_to_scan);
+ EXT4_RW_ATTR_SBI_UI(mb_min_to_scan, s_mb_min_to_scan);
+@@ -267,6 +269,8 @@ static struct attribute *ext4_attrs[] = {
+ 	ATTR_LIST(sra_exceeded_retry_limit),
+ 	ATTR_LIST(inode_readahead_blks),
+ 	ATTR_LIST(inode_goal),
++	ATTR_LIST(max_dir_size),
++	ATTR_LIST(max_dir_size_kb),
+ 	ATTR_LIST(mb_stats),
+ 	ATTR_LIST(mb_max_to_scan),
+ 	ATTR_LIST(mb_min_to_scan),
+@@ -392,6 +396,9 @@ static ssize_t ext4_generic_attr_show(struct ext4_attr *a,
+ 	case attr_pointer_ui:
+ 		if (a->attr_ptr == ptr_ext4_super_block_offset)
+ 			return sysfs_emit(buf, "%u\n", le32_to_cpup(ptr));
++		if (strcmp("max_dir_size", a->attr.name) == 0)
++			return sysfs_emit(buf, "%u\n",
++					  (*((unsigned int *) ptr)) << 10);
+ 		return sysfs_emit(buf, "%u\n", *((unsigned int *) ptr));
+ 	case attr_pointer_ul:
+ 		return sysfs_emit(buf, "%lu\n", *((unsigned long *) ptr));
+@@ -471,6 +478,8 @@ static ssize_t ext4_generic_attr_store(struct ext4_attr *a,
+ 		ret = kstrtouint(skip_spaces(buf), 0, &t);
+ 		if (ret)
+ 			return ret;
++		if (strcmp("max_dir_size", a->attr.name) == 0)
++			t >>= 10;
+ 		if (a->attr_ptr == ptr_ext4_super_block_offset)
+ 			*((__le32 *) ptr) = cpu_to_le32(t);
+ 		else
+-- 
+2.34.1
+

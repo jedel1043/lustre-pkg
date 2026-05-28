@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# This file is part of Lustre, http://www.lustre.org/
+#
+
+obj-m += lquota.o
+
+qmt-objs := \
+	qmt_dev.o \
+	qmt_entry.o \
+	qmt_handler.o \
+	qmt_lqa.o \
+	qmt_lock.o \
+	qmt_pool.o
+
+qsd-objs := \
+	qsd_config.o \
+	qsd_entry.o \
+	qsd_handler.o \
+	qsd_lib.o \
+	qsd_lock.o \
+	qsd_reint.o \
+	qsd_request.o \
+	qsd_writeback.o
+
+quota-objs := \
+	lproc_quota.o \
+	lquota_disk.o \
+	lquota_entry.o \
+	lquota_lib.o
+
+lquota-objs := \
+	$(qsd-objs) \
+	$(qmt-objs) \
+	$(quota-objs)

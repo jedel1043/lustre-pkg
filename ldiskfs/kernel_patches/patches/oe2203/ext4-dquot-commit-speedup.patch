@@ -1,0 +1,39 @@
+commit dad25f258e50895b4bd5fce30765599a7a490aa0
+Author:     Andrew Perepechko <andrew.perepechko@hpe.com>
+AuthorDate: Wed Jul 11 16:32:33 2018 +0300
+LU-12353 ldiskfs: speedup quota journalling
+
+ldiskfs_mark_dquot_dirty() need not call
+ldiskfs_write_dquot() if the dquot is already
+dirty since we are guaranteed that another
+thread is already writing the dquot and
+will update the buffer with the latest
+dquot data.
+
+Signed-off-by: Andrew Perepechko <c17827@cray.com>
+Cray-bug-id: LUS-5342
+Reviewed-by: Wang Shilong <wshilong@whamcloud.com>
+Reviewed-by: Hongchao Zhang <hongchao@whamcloud.com>
+Reviewed-by: Andreas Dilger <adilger@whamcloud.com>
+Change-Id: Ia65c5987bbb0d6d2ac94c5499cb8b51edc3c49c3
+Reviewed-on: https://review.whamcloud.com/34992
+---
+ fs/ext4/super.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/fs/ext4/super.c b/fs/ext4/super.c
+index 59d219a..4af616e 100644
+--- a/fs/ext4/super.c
++++ b/fs/ext4/super.c
+@@ -6409,6 +6409,8 @@ static int ext4_mark_dquot_dirty(struct dquot *dquot)
+ 	/* Are we journaling quotas? */
+ 	if (ext4_has_feature_quota(sb) ||
+ 	    sbi->s_qf_names[USRQUOTA] || sbi->s_qf_names[GRPQUOTA]) {
++		if (test_bit(DQ_MOD_B, &dquot->dq_flags))
++			return 0;
+ 		dquot_mark_dquot_dirty(dquot);
+ 		return ext4_write_dquot(dquot);
+ 	} else {
+-- 
+2.33.0
+

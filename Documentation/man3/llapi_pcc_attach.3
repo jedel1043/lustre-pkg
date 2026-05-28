@@ -1,0 +1,81 @@
+.TH LLAPI_PCC_ATTACH 3 2024-08-28 "Lustre User API" "Lustre Library Functions"
+.SH NAME
+llapi_pcc_attach, llapi_pcc_attach_fid, llapi_pcc_attach_fid_str \- attach a file into PCC
+.SH SYNOPSIS
+.nf
+.B #include <lustre/lustreapi.h>
+.PP
+.BI "int llapi_pcc_attach(const char *" path ", __u32 " id ,
+.BI "                     enum lu_pcc_type " type );
+.PP
+.BI "int llapi_pcc_attach_fid(const char *" mntpath ", const struct lu_fid *" fid ,
+.BI "                         __u32 " id ", enum lu_pcc_type " type );
+.PP
+.BI "int llapi_pcc_attach_fid_str(const char *" mntpath ", const char *" fidstr ,
+.BI "                             __u32 " id ", enum lu_pcc_type " type );
+.fi
+.SH DESCRIPTION
+The function
+.BR llapi_pcc_attach() ,
+.B llapi_pcc_attach_fid()
+and
+.B llapi_pcc_attach_fid_str()
+tries to attach the file referenced by
+.IR path ,
+.IR fid ,
+or
+.IR fidstr
+into PCC backend. PCC provides a group of local caches and works in two modes:
+RW-PCC enables a read-write cache on the local SSDs of a single client; RO-PCC
+provides a read-only cache on the local SSDs of multiple clients. For RW-PCC,
+the argument
+.I id
+is the archive ID of the copytool agent running on this client. By default,
+RO-PCC attach ID is setting same with RW-PCC attach ID for a PCC backend if it
+is also used as read-only caching. The attach mode is specified by
+.I type
+argument, which is a
+.B enum lu_pcc_type
+data structure, which contains the following values:
+.nf
+.LP
+	LU_PCC_NONE
+	LU_PCC_READWRITE
+	LU_PCC_READONLY
+.fi
+.TP
+LU_PCC_NONE
+means that the file is not cached on PCC.
+.TP
+LU_PCC_READWRITE
+means RW-PCC mode.
+.TP
+LU_PCC_READONLY
+means RO-PCC mode.
+.SH RETURN VALUES
+.B llapi_pcc_attach()
+return 0 on success or a negative errno value on failure.
+.SH ERRORS
+.TP 15
+.B -ENOMEM
+Insufficient memory to complete operation.
+.TP
+.B -EFAULT
+Memory region is not properly mapped.
+.TP
+.B -EINVAL
+One or more invalid arguments are given.
+.TP
+.B -EOPNOTSUPP
+PCC attach operation is not supported.
+.SH AVAILABILITY
+.BR llapi_pcc_attach() ,
+.B llapi_pcc_attach_fid()
+and
+.B llapi_pcc_attach_fid_str()
+are part of the
+.BR lustre (7)
+user application interface library since release 2.13.0
+.\" Added in commit v2_12_53-113-gf172b11688
+.SH SEE ALSO
+.BR lustreapi (7)

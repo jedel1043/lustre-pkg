@@ -1,0 +1,65 @@
+.TH LLSTAT 8 2024-08-28 Lustre "Lustre Configuration Utilities"
+.SH NAME
+llstat \- print Lustre statistics
+.SH SYNOPSIS
+.SY llstat
+.RB [ -c ]
+.RB [ -g ]
+.RB [ -i
+.IR INTERVAL ]
+.I STATS_FILE
+.YS
+.SH DESCRIPTION
+.B llstat
+can display statistics from any of several lustre stats files that
+share a common format, updated every
+.I INTERVAL
+seconds.
+Use control-C to stop statistics printing.
+.SH OPTIONS
+.TP
+.B -c
+Clear the stats file first.
+.TP
+.BI -i " INTERVAL"
+Polling period in seconds.
+.TP
+.B -g
+Graphable output format.
+.TP
+.B -h
+Display help information.
+.TP
+.I STATS_FILE
+Either the full path to a stats file, or the shorthand:
+.I mds
+or
+.IR ost .
+.SH FILES
+.EX
+llite.*.stats
+lwp.*.stats
+mdc.*.stats
+obdfilter.*.stats
+osc.*.stats
+osd-ldiskfs.*.stats
+osp.*.stats
+ldlm.services.*.stats
+mds.MDS.*.stats
+ost.OSS.*.stats
+.EE
+.SH EXAMPLES
+To monitor the OST RPC stats every second:
+.RS
+.EX
+.B # llstat -i 1 ost
+.EE
+.RE
+.SH AVAILABILITY
+.B llstat
+is part of the
+.BR lustre (7)
+filesystem package since release 0.8.0
+.\" Added in commit 0.7.1-38-g576c9a8212
+.SH SEE ALSO
+.BR lljobstat (8)

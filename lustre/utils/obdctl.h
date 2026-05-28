@@ -1,0 +1,207 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) 2002, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Use is subject to license terms.
+ *
+ * Copyright (c) 2012, 2017, Intel Corporation.
+ */
+/*
+ * This file is part of Lustre, http://www.lustre.org/
+ */
+
+#ifndef _OBDCTL_H_
+#define _OBDCTL_H_
+
+#ifdef HAVE_SERVER_SUPPORT
+#include <linux/lustre/lustre_barrier_user.h>
+#endif
+
+#define PATH_FORMAT "/etc/lustre/mount.%s.params"
+
+/* ptlctl.a */
+int ptl_initialize(int argc, char **argv);
+int jt_ptl_network(int argc, char **argv);
+int jt_ptl_list_nids(int argc, char **argv);
+int jt_ptl_which_nid(int argc, char **argv);
+int jt_ptl_print_interfaces(int argc, char **argv);
+int jt_ptl_add_interface(int argc, char **argv);
+int jt_ptl_del_interface(int argc, char **argv);
+int jt_ptl_print_peers(int argc, char **argv);
+int jt_ptl_add_peer(int argc, char **argv);
+int jt_ptl_del_peer(int argc, char **argv);
+int jt_ptl_print_connections(int argc, char **argv);
+int jt_ptl_disconnect(int argc, char **argv);
+int jt_ptl_push_connection(int argc, char **argv);
+int jt_ptl_ping(int argc, char **argv);
+int jt_ptl_mynid(int argc, char **argv);
+int jt_ptl_add_route(int argc, char **argv);
+int jt_ptl_del_route(int argc, char **argv);
+int jt_ptl_notify_router(int argc, char **argv);
+int jt_ptl_print_routes(int argc, char **argv);
+int jt_ptl_fail_nid(int argc, char **argv);
+int jt_ptl_testprotocompat(int argc, char **argv);
+int jt_ptl_drop_add(int argc, char **argv);
+int jt_ptl_drop_del(int argc, char **argv);
+int jt_ptl_drop_reset(int argc, char **argv);
+int jt_ptl_drop_list(int argc, char **argv);
+int jt_ptl_delay_add(int argc, char **argv);
+int jt_ptl_delay_del(int argc, char **argv);
+int jt_ptl_delay_reset(int argc, char **argv);
+int jt_ptl_delay_list(int argc, char **argv);
+
+/* debug.c */
+int dbg_initialize(int argc, char **argv);
+int jt_dbg_filter(int argc, char **argv);
+int jt_dbg_show(int argc, char **argv);
+int jt_dbg_list(int argc, char **argv);
+int jt_dbg_debug_kernel(int argc, char **argv);
+int jt_dbg_debug_daemon(int argc, char **argv);
+int jt_dbg_debug_file(int argc, char **argv);
+int jt_dbg_clear_debug_buf(int argc, char **argv);
+int jt_dbg_mark_debug_buf(int argc, char **argv);
+int jt_dbg_modules(int argc, char **argv);
+
+/* obd.c */
+int do_disconnect(char *func, int verbose);
+int obd_initialize(int argc, char **argv);
+void obd_finalize(int argc, char **argv);
+
+
+int jt_opt_device(int argc, char **argv);
+int jt_opt_threads(int argc, char **argv);
+int jt_opt_net(int argc, char **argv);
+
+int jt_obd_get_device();
+int jt_obd_device(int argc, char **argv);
+int jt_obd_detach(int argc, char **argv);
+int jt_obd_cleanup(int argc, char **argv);
+int jt_obd_no_transno(int argc, char **argv);
+int jt_obd_set_readonly(int argc, char **argv);
+int jt_obd_abort_recovery(int argc, char **argv);
+int jt_obd_abort_recovery_mdt(int argc, char **argv);
+int jt_device_list(int argc, char **argv);
+int jt_obd_create(int argc, char **argv);
+int jt_obd_test_create(int argc, char **argv);
+int jt_obd_test_mkdir(int argc, char **argv);
+int jt_obd_test_destroy(int argc, char **argv);
+int jt_obd_test_rmdir(int argc, char **argv);
+int jt_obd_test_lookup(int argc, char **argv);
+int jt_obd_test_setxattr(int argc, char **argv);
+int jt_obd_test_md_getattr(int argc, char **argv);
+
+int jt_obd_setattr(int argc, char **argv);
+int jt_obd_test_setattr(int argc, char **argv);
+int jt_obd_destroy(int argc, char **argv);
+int jt_obd_getattr(int argc, char **argv);
+int jt_obd_test_getattr(int argc, char **argv);
+int jt_obd_test_brw(int argc, char **argv);
+int jt_replace_nids(int arc, char **argv);
+int jt_obd_activate(int argc, char **argv);
+int jt_obd_deactivate(int argc, char **argv);
+int jt_obd_recover(int argc, char **argv);
+int jt_obd_mdc_lookup(int argc, char **argv);
+int jt_get_version(int argc, char **argv);
+int jt_lcfg_clear(int argc, char **argv);
+int jt_lcfg_fork(int argc, char **argv);
+int jt_lcfg_erase(int argc, char **argv);
+int jt_get_obj_version(int argc, char **argv);
+
+int jt_llog_catlist(int argc, char **argv);
+int jt_llog_info(int argc, char **argv);
+int jt_llog_print(int argc, char **argv);
+int jt_llog_cancel(int argc, char **argv);
+int jt_llog_remove(int argc, char **argv);
+int jt_llog_check(int argc, char **argv);
+
+struct lustre_cfg;
+int lcfg_ioctl(char * func, int dev_id, struct lustre_cfg *lcfg);
+int lcfg_mgs_ioctl(const char *func, int dev_id, struct lustre_cfg *lcfg);
+int parse_devname(char *func, char *name, int dev_id);
+const char *jt_cmdname(const char *func);
+
+/* lustre_param.c */
+struct param_opts;
+struct param;
+struct param_dir;
+int jt_clean_path(struct param_opts *popt, char *path);
+int jt_lcfg_getparam(int argc, char **argv);
+int jt_lcfg_setparam(int argc, char **argv);
+int jt_lcfg_listparam(int argc, char **argv);
+int jt_lcfg_setparam_client(int argc, char **argv, struct param_opts *popt);
+int jt_lctl_findparam(int argc, char **argv);
+int jt_lctl_helpparam(int argc, char **argv);
+
+/* lustre_cfg.c */
+int lcfg_set_devname(char *name);
+char *lcfg_get_devname(void);
+int jt_lcfg_device(int argc, char **argv);
+int jt_lcfg_attach(int argc, char **argv);
+int jt_lcfg_setup(int argc, char **argv);
+int jt_lcfg_add_uuid(int argc, char **argv);
+int jt_lcfg_del_uuid(int argc, char **argv);
+int jt_lcfg_del_mount_option(int argc, char **argv);
+int jt_lcfg_set_timeout(int argc, char **argv);
+int jt_lcfg_add_conn(int argc, char **argv);
+int jt_lcfg_del_conn(int argc, char **argv);
+int jt_lcfg_param(int argc, char **argv);
+int jt_lcfg_confparam(int argc, char **argv);
+int jt_lcfg_applyyaml(int argc, char **argv);
+int jt_lcfg_setparam_perm(int argc, char **argv, struct param_opts *popt);
+int yaml_get_limit_uid(const char *config);
+
+int jt_pool_cmd(int argc, char **argv);
+int jt_del_ost(int argc, char **argv);
+#ifdef HAVE_SERVER_SUPPORT
+int jt_barrier_freeze(int argc, char **argv);
+int jt_barrier_thaw(int argc, char **argv);
+int __jt_barrier_stat(const char *fsname, struct barrier_ctl *bc);
+int jt_barrier_stat(int argc, char **argv);
+int jt_barrier_rescan(int argc, char **argv);
+int jt_snapshot_create(int argc, char **argv);
+int jt_snapshot_destroy(int argc, char **argv);
+int jt_snapshot_modify(int argc, char **argv);
+int jt_snapshot_list(int argc, char **argv);
+int jt_snapshot_mount(int argc, char **argv);
+int jt_snapshot_umount(int argc, char **argv);
+int lctl_lqa_new(int argc, char **argv);
+int lctl_lqa_add(int argc, char **argv);
+int lctl_lqa_rem(int argc, char **argv);
+int lctl_lqa_del(int argc, char **argv);
+int lctl_lqa_list(int argc, char **argv);
+#endif /* HAVE_SERVER_SUPPORT */
+int jt_nodemap_activate(int argc, char **argv);
+int jt_nodemap_new(int argc, char **argv);
+int jt_nodemap_del(int argc, char **argv);
+int jt_nodemap_modify(int argc, char **argv);
+int jt_nodemap_add_offset(int argc, char **argv);
+int jt_nodemap_del_offset(int argc, char **argv);
+int jt_nodemap_add_range(int argc, char **argv);
+int jt_nodemap_test_nid(int argc, char **argv);
+int jt_nodemap_del_range(int argc, char **argv);
+int jt_nodemap_add_idmap(int argc, char **argv);
+int jt_nodemap_del_idmap(int argc, char **argv);
+int jt_nodemap_test_id(int argc, char **argv);
+int jt_nodemap_set_fileset(int argc, char **argv);
+int jt_nodemap_fileset_add(int argc, char **argv);
+int jt_nodemap_fileset_del(int argc, char **argv);
+int jt_nodemap_fileset_modify(int argc, char **argv);
+int jt_nodemap_banlist_add(int argc, char **argv);
+int jt_nodemap_banlist_del(int argc, char **argv);
+int jt_nodemap_set_sepol(int argc, char **argv);
+int jt_nodemap_set_cap(int argc, char **argv);
+int jt_nodemap_info(int argc, char **argv);
+int jt_changelog_register(int argc, char **argv);
+int jt_changelog_deregister(int argc, char **argv);
+int jt_pcc_add(int argc, char **argv);
+int jt_pcc_del(int argc, char **argv);
+int jt_pcc_clear(int argc, char **argv);
+int jt_pcc_list(int argc, char **argv);
+
+#ifdef HAVE_SERVER_SUPPORT
+/* lustre_lfsck.c */
+int jt_lfsck_start(int argc, char **argv);
+int jt_lfsck_stop(int argc, char **argv);
+int jt_lfsck_query(int argc, char **argv);
+#endif /* HAVE_SERVER_SUPPORT */
+
+#endif

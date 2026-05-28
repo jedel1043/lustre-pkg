@@ -1,0 +1,11 @@
+/Makefile.in
+/Makefile
+/createmany-mpi
+/mdsrate
+/parallel_grouplock
+/rr_alloc
+/write_append_truncate
+/write_disjoint
+/cascading_rw
+/createmany_mpi
+/*.log

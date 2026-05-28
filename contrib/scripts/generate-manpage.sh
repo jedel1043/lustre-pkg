@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+
+# Generate a man page with section-specific content
+
+show_usage() {
+	cat >&2 <<EOF
+Usage: $0 [-o OUTPUT_FILE] COMMAND_NAME {1-8}
+       $0 [-o OUTPUT_FILE] --param MODULE.PARAM
+EOF
+}
+
+PATH=$(dirname $0)/../../lustre/utils:$PWD/lustre/utils:$PATH
+PARAM=0
+for arg in "$@"; do
+	shift
+	case "$arg" in
+		-o)
+			OUTPUT="$1"
+			shift
+			;;
+		-p|--param)
+			SECTION=4
+			PARAM=1
+			;;
+		*)
+			set -- "$@" "$arg"
+			;;
+	esac
+done
+if (( $# < 1 )); then
+	echo "Error: Missing parameters" >&2
+	show_usage
+	exit 1
+elif (( $# > 2 )); then
+	echo "Error: Too many arguments" >&2
+	show_usage
+	exit 1
+fi
+NAME="$1"
+[[ -n "$SECTION" ]] || SECTION="$2"
+[[ -n "$OUTPUT" ]] || OUTPUT="Documentation/man$SECTION/${NAME//.\*}.$SECTION"
+
+# Validate section number
+if ! [[ "$SECTION" =~ ^[1-8]$ ]]; then
+	echo "Error: Section must be between 1 and 8" >&2
+	show_usage
+	exit 1
+fi
+
+# Check if Documentation/man$SECTION folder exists when using default output path
+if [[ "$OUTPUT" == Documentation/man$SECTION/* ]]; then
+	if [[ ! -d "Documentation/man$SECTION" ]]; then
+		echo "Error: Documentation/man$SECTION directory missing." >&2
+		echo "Please create it first or specify output filename." >&2
+		exit 1
+	fi
+fi
+
+# Don't overwrite non-empty files
+if [[ -s $OUTPUT ]]; then
+	echo "error: $OUTPUT exists. If you want to recreate it, remove first."
+	exit 1
+fi
+
+DATE=$(date +"%F")
+
+# Section-specific content
+case $SECTION in
+	1)
+	DESC="Lustre User Utilities"
+	;;
+	2)
+	DESC="Lustre System Calls"
+	;;
+	3)
+	DESC="Lustre Library Functions"
+	;;
+	4)
+	DESC="Lustre Kernel Interfaces"
+	;;
+	5)
+	DESC="Lustre File Formats"
+	;;
+	6)
+	DESC="Lustre Games???"
+	;;
+	7)
+	DESC="Lustre Miscellaneous Information"
+	;;
+	8)
+	DESC="Lustre Configuration Utilities"
+	;;
+esac
+
+case $SECTION in
+	1|8)
+	SYNOPSIS=$(cat <<EOF
+.SY "${NAME//_/ }"
+...
+.YS
+EOF
+	)
+	printf -v OPTIONS "\n.SH OPTIONS\n"
+	printf -v EXAMPLES "\n.SH EXAMPLES\n"
+	printf -v SEE_ALSO ".RB lfs (1),\n.RB lctl (8)"
+	;;
+	2|3)
+	SYNOPSIS=$(cat <<EOF
+.nf
+.B #include
+.PP
+.BI "RETURN_TYPE $NAME( ... );
+.fi
+EOF
+	)
+	printf -v EXIT_STATUS "\n.SH EXIT_STATUS\n"
+	printf -v RETURN_VALUE "\n.SH RETURN_VALUE\n"
+	printf -v ERRORS "\n.SH ERRORS\n"
+	printf -v SEE_ALSO ".RB liblustreapi (3)\n"
+	;;
+	4)
+	if (( PARAM )); then
+		opts="--only-name --dshbak --no-links"
+		which lctl
+		PARAM=($(lctl find_param $opts ${NAME//./[.]?[^.]*[.]}))
+		[[ -n "$PARAM" ]] || {
+			opts+=" --module"
+			PARAM=($(lctl find_param $opts ${NAME//./[.]?[^.]*[.]}))
+		}
+		[[ -n "$PARAM" ]] || {
+			echo "Error: Parameter $NAME not found" >&2
+			exit 1
+		}
+		NAMEDESC=$(git grep "PARM_DESC.${PARAM##*.}," |
+			   sed -e 's/.*, \"//' -e 's/\");$//')
+		printf -v FILES "\n.SH MODULES
+This parameter is in the following modules:
+.EX
+$(lctl find_param $opts ${NAME//./[.]?[^.]*[.]} | awk '{print ".B "$1}')
+.EE"
+		# actual path
+		DEFAULT=($(lctl get_param -n $PARAM))
+		printf -v SYNOPSIS ".SY \"lctl get_param $PARAM\"
+.SY
+.RI \"lctl set_param $PARAM=\" $DEFAULT
+.YS
+.SS PROPERTIES
+.TP
+.B Access Permissions
+.br
+.BR $(stat -c "%a \" | \" %A" $(lctl find_param ${opts} --path $NAME | head -1))
+[
+.PP
+param resets upon write
+.br
+]
+.TP
+.B Scope
+.br
+Per-Device | Global
+.TP
+.B Config
+.br
+Always present on (client | MDS | OSS) | present if ...
+.TP
+.B Default
+.br
+.RB $PARAM= $DEFAULT
+.br
+.TP
+.B Valid Range
+.br
+.RB $PARAM= MINIMUM_VALUE
+.br
+.RB $PARAM= MAXIMUM_VALUE
+"
+	fi
+
+	EXAMPLE=".RB \"mds# \" \"lctl set_param $(lctl get_param $PARAM 2> /dev/null)\""
+	printf -v EXAMPLES "\n.SH EXAMPLES\n.EX\n$EXAMPLE\n.EE"
+	DIRS=(lustre/ lnet/ libcfs/)
+	OPTS="--reverse --pretty='format:%(describe:abbrev=10,tags=true)'"
+	COMMIT=($(git log -S ${PARAM#*.} $OPTS -- "${DIRS[@]}"))
+	R=($(sed -e 's/[a-z]*//g' -e 's/_/ /g' -e 's/[-~][0-9-]*//' <<<$COMMIT))
+	RELEASE=${R[0]}.$((R[1]+1)).0
+	printf -v SEE_ALSO ".BR lctl-get_param (8),\n.BR lctl-set_param (8)\n"
+	;;
+esac
+
+# Generate the man page
+cat > "$OUTPUT" <<EOF
+.TH ${NAME^^} $SECTION $DATE Lustre "$DESC"
+.SH NAME
+${NAME//.\*} \-$NAMEDESC
+.SH SYNOPSIS
+$SYNOPSIS$CONFIGURATION
+.SH DESCRIPTION
+$OPTIONS$EXIT_STATUS$RETURN_VALUE$ERRORS$ENVIRONMENT$FILES$ATTRIBUTES$VERSIONS$HISTORY$NOTES$CAVEATS$BUGS$EXAMPLES
+.SH AVAILABILITY
+.B $NAME
+is part of the
+.BR lustre (7)
+filesystem package since release $RELEASE.
+.\" Added in commit $COMMIT
+.SH SEE ALSO
+$SEE_ALSO
+EOF
+
+echo "Generated man page: $OUTPUT"

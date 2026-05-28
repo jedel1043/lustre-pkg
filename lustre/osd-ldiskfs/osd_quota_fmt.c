@@ -1,0 +1,334 @@
+// SPDX-License-Identifier: GPL-2.0
+
+/*
+ * Copyright (c) 2012, 2016, Intel Corporation.
+ * Use is subject to license terms.
+ */
+
+/*
+ * This file is part of Lustre, http://www.lustre.org/
+ *
+ * Lustre administrative quota format.
+ * from linux/fs/quota_v2.c
+ */
+
+#include "osd_internal.h"
+#include "osd_quota_fmt.h"
+
+typedef char *dqbuf_t;
+
+static const union
+{
+	struct lustre_disk_dqblk_v2 r1;
+} emptydquot = { .r1 = { 0 } };
+
+static inline dqbuf_t getdqbuf(void)
+{
+	dqbuf_t buf = kmalloc(LUSTRE_DQBLKSIZE, GFP_NOFS);
+	if (!buf)
+		CWARN("Not enough memory for quota buffers.\n");
+	return buf;
+}
+
+static inline void freedqbuf(dqbuf_t buf)
+{
+	kfree(buf);
+}
+
+/**
+ * quota_read_blk() - Read the @blk into @buf.
+ * @env: Lustre environment
+ * @obj: OSD object
+ * @type: quota type
+ * @blk: Block number
+ * @buf: Pointer to buffer of read quota block [out]
+ *
+ * Return:
+ * * %0 on success
+ * * %negative on failure
+ */
+static ssize_t quota_read_blk(const struct lu_env *env,
+			      struct osd_object *obj,
+			      int type, uint blk, dqbuf_t buf)
+{
+	ssize_t ret;
+	struct super_block *sb = obj->oo_inode->i_sb;
+
+	ENTRY;
+
+	memset(buf, 0, LUSTRE_DQBLKSIZE);
+	LASSERTF((type == USRQUOTA || type == GRPQUOTA || type == PRJQUOTA),
+		 "type=%d\n", type);
+
+	ret = sb->s_op->quota_read(sb, type, buf, LUSTRE_DQBLKSIZE,
+				   blk << LUSTRE_DQBLKSIZE_BITS);
+
+	/* Reading past EOF just returns a block of zeros */
+	if (ret == -EBADR)
+		ret = 0;
+
+	RETURN(ret);
+}
+
+/**
+ * find_block_dqentry() - Find entry in block by given @dqid in the leaf block
+ *                        @blk
+ * @env: Lustre environment
+ * @obj: OSD object
+ * @type: quota type
+ * @dqid: Quota ID
+ * @blk: Block number
+ * @it: Quota valid entry [out]
+ *
+ * Return:
+ * * %positive the offset of the entry in file
+ * * %0 entry not found
+ * * %negative unexpected failure
+ */
+static loff_t find_block_dqentry(const struct lu_env *env,
+				 struct osd_object *obj, int type,
+				 qid_t dqid, uint blk,
+				 struct osd_it_quota *it)
+{
+	dqbuf_t buf;
+	struct lustre_disk_dqblk_v2 *ddquot;
+	int dqblk_sz;
+	loff_t ret;
+	int i;
+
+	ENTRY;
+
+	buf = getdqbuf();
+	ddquot = (struct lustre_disk_dqblk_v2 *)GETENTRIES(buf);
+	dqblk_sz = sizeof(struct lustre_disk_dqblk_v2);
+	if (!buf)
+		RETURN(-ENOMEM);
+	ret = quota_read_blk(env, obj, type, blk, buf);
+	if (ret < 0) {
+		CERROR("%s: cannot read quota tree block %u: rc = %lld\n",
+		       osd_obj2dev(obj)->od_svname, blk, ret);
+		GOTO(out_buf, ret);
+	}
+
+	if (dqid) {
+		for (i = 0; i < LUSTRE_DQSTRINBLK &&
+			    le32_to_cpu(ddquot[i].dqb_id) != dqid; i++)
+			continue;
+	} else { /* ID 0 as a bit more complicated searching... */
+		for (i = 0; i < LUSTRE_DQSTRINBLK; i++)
+			if (!le32_to_cpu(ddquot[i].dqb_id) &&
+			    memcmp((char *)&emptydquot, (char *)&ddquot[i],
+				   dqblk_sz))
+				break;
+	}
+	if (i == LUSTRE_DQSTRINBLK) {
+		CDEBUG(D_QUOTA, "Quota for id %u not found.\n", dqid);
+		ret = 0;
+		GOTO(out_buf, ret);
+	} else {
+		ret = (blk << LUSTRE_DQBLKSIZE_BITS) +
+		      sizeof(struct lustre_disk_dqdbheader) + i * dqblk_sz;
+
+		if (it) {
+			it->oiq_blk[LUSTRE_DQTREEDEPTH] = blk;
+			it->oiq_offset = ret;
+			it->oiq_id = dqid;
+			it->oiq_index[LUSTRE_DQTREEDEPTH] = i;
+		} else {
+			ret = 0;
+		}
+	}
+out_buf:
+	freedqbuf(buf);
+	RETURN(ret);
+}
+
+/**
+ * find_tree_dqentry() - Find entry for given @dqid in the tree block @blk
+ * @env: Lustre environment
+ * @obj: OSD object
+ * @type: quota type
+ * @dqid: Quota ID
+ * @blk: Block number
+ * @depth: Quota depth
+ * @it: Quota valid entry [out]
+ *
+ * Return:
+ * * %positive offset of the entry in file
+ * * %0 entry not found
+ * * %negative unexpected failure
+ */
+loff_t find_tree_dqentry(const struct lu_env *env,
+			 struct osd_object *obj, int type,
+			 qid_t dqid, uint blk, int depth,
+			 struct osd_it_quota *it)
+{
+	dqbuf_t buf;
+	loff_t ret;
+	u32 *ref;
+
+	ENTRY;
+
+	buf = getdqbuf();
+	if (!buf)
+		RETURN(-ENOMEM);
+	ref = (u32 *)buf;
+	ret = quota_read_blk(env, obj, type, blk, buf);
+	if (ret < 0) {
+		CERROR("%s: cannot read quota tree block %u: rc = %lld\n",
+		       osd_obj2dev(obj)->od_svname, blk, ret);
+		GOTO(out_buf, ret);
+	}
+	ret = 0;
+	blk = le32_to_cpu(ref[GETIDINDEX(dqid, depth)]);
+	if (!blk)               /* No reference? */
+		GOTO(out_buf, ret);
+
+	if (depth < LUSTRE_DQTREEDEPTH - 1)
+		ret = find_tree_dqentry(env, obj, type, dqid, blk,
+					depth + 1, it);
+	else
+		ret = find_block_dqentry(env, obj, type, dqid, blk, it);
+
+	if (it && ret > 0) {
+		it->oiq_blk[depth + 1] = blk;
+		it->oiq_index[depth] = GETIDINDEX(dqid, depth);
+	}
+
+out_buf:
+	freedqbuf(buf);
+	RETURN(ret);
+}
+
+/**
+ * walk_block_dqentry() - Search from @index within the leaf block @blk, and
+ *                        fill the @it with the first valid entry.
+ * @env: Lustre environment
+ * @obj: OSD object
+ * @type: quota type
+ * @blk: Block number
+ * @index: Start index
+ * @it: Quota valid entry [out]
+ *
+ * Return:
+ * * %positive no valid entry found
+ * * %0 entry found
+ * * %negative on unexpected failure
+ */
+int walk_block_dqentry(const struct lu_env *env, struct osd_object *obj,
+		       int type, uint blk, uint index,
+		       struct osd_it_quota *it)
+{
+	struct lustre_disk_dqdbheader *dqhead;
+	int i, dqblk_sz;
+	struct lustre_disk_dqblk_v2 *ddquot;
+	struct osd_quota_leaf *leaf;
+	dqbuf_t buf;
+	loff_t ret = 0;
+
+	ENTRY;
+	/* check if the leaf block has been processed before */
+	list_for_each_entry(leaf, &it->oiq_list, oql_link) {
+		if (leaf->oql_blk == blk)
+			RETURN(1);
+	}
+
+	buf = getdqbuf();
+	dqhead = (struct lustre_disk_dqdbheader *)buf;
+	dqblk_sz = sizeof(struct lustre_disk_dqblk_v2);
+	if (!buf)
+		RETURN(-ENOMEM);
+	ret = quota_read_blk(env, obj, type, blk, buf);
+	if (ret < 0) {
+		CERROR("%s: cannot read quota tree block %u: rc = %lld\n",
+		       osd_obj2dev(obj)->od_svname, blk, ret);
+		GOTO(out_buf, ret);
+	}
+	ret = 1;
+
+	if (!le16_to_cpu(dqhead->dqdh_entries))
+		GOTO(out_buf, ret);
+
+	ddquot = (struct lustre_disk_dqblk_v2 *)GETENTRIES(buf);
+	LASSERT(index < LUSTRE_DQSTRINBLK);
+	for (i = index; i < LUSTRE_DQSTRINBLK; i++) {
+		/* skip empty entry */
+		if (!memcmp((char *)&emptydquot,
+			    (char *)&ddquot[i], dqblk_sz))
+			continue;
+
+		it->oiq_blk[LUSTRE_DQTREEDEPTH] = blk;
+		it->oiq_id = le32_to_cpu(ddquot[i].dqb_id);
+		it->oiq_offset = (blk << LUSTRE_DQBLKSIZE_BITS) +
+				  sizeof(struct lustre_disk_dqdbheader) +
+				  i * dqblk_sz;
+		it->oiq_index[LUSTRE_DQTREEDEPTH] = i;
+		ret = 0;
+		break;
+	}
+
+out_buf:
+	freedqbuf(buf);
+	RETURN(ret);
+}
+
+/**
+ * walk_tree_dqentry() - Search from @index within the tree block @blk, and
+ *                       fill the @it with the first valid entry.
+ * @env: Lustre environment
+ * @obj: OSD object
+ * @type: quota type
+ * @blk: Block number
+ * @depth: Quota depth
+ * @index: Start index
+ * @it: Quota valid entry [out]
+ *
+ * Return:
+ * * %positive no valid entry found
+ * * %0 entry found
+ * * %negative unexpected failure
+ */
+int walk_tree_dqentry(const struct lu_env *env, struct osd_object *obj,
+		      int type, uint blk, int depth, uint index,
+		      struct osd_it_quota *it)
+{
+	dqbuf_t	buf;
+	loff_t ret;
+	u32 *ref;
+
+	ENTRY;
+
+	buf = getdqbuf();
+	if (!buf)
+		RETURN(-ENOMEM);
+	ref = (u32 *)buf;
+	ret = quota_read_blk(env, obj, type, blk, buf);
+	if (ret < 0) {
+		CERROR("%s: cannot read quota tree block %u: rc = %lld\n",
+		       osd_obj2dev(obj)->od_svname, blk, ret);
+		goto out_buf;
+	}
+	ret = 1;
+
+	for (; index <= 0xff; index++) {
+		blk = le32_to_cpu(ref[index]);
+		if (!blk)       /* No reference */
+			continue;
+
+		if (depth < LUSTRE_DQTREEDEPTH - 1)
+			ret = walk_tree_dqentry(env, obj, type, blk,
+						depth + 1, 0, it);
+		else
+			ret = walk_block_dqentry(env, obj, type, blk, 0, it);
+
+		if (ret <= 0)
+			break;
+	}
+
+	it->oiq_blk[depth + 1] = blk;
+	it->oiq_index[depth] = index;
+
+out_buf:
+	freedqbuf(buf);
+	RETURN(ret);
+}

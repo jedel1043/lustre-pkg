@@ -1,0 +1,753 @@
+.TH LFS-SETSTRIPE 1 2017-08-23 "Lustre" "Lustre Utilities"
+.SH NAME
+lfs-setstripe \- set striping pattern of a file or directory default
+.SH SYNOPSIS
+.B lfs setstripe \fR[\fISTRIPE_OPTIONS\fR] \fIDIRECTORY\fR|\fIFILENAME\fR
+.br
+.B lfs setstripe -E \fICOMP_END\fR [\fISTRIPE_OPTIONS\fR] ... \
+\fIDIRECTORY\fR|\fIFILENAME\fR
+.br
+.B lfs setstripe --comp-add -E \fICOMP_END\fR [\fISTRIPE_OPTIONS\fR] ... \
+\fIFILENAME\fR
+.br
+.B lfs setstripe --comp-del \fR[\fB-I \fICOMP_ID\fR|\
+\fB--comp-flags=\fICOMP_FLAGS\fR] \fIFILENAME\fR
+.br
+.B lfs setstripe --comp-set \fR[\fB-I \fICOMP_ID\fR|\
+\fB--comp-flags=\fICOMP_FLAGS\fR] \fIFILENAME\fR
+.br
+.B lfs setstripe -N\fR[\fIMIRROR_COUNT\fR] \fR[\fISTRIPE_OPTIONS\fR] \fIDIRECTORY\fR|\fIFILENAME\fR
+.br
+.B lfs setstripe -d \fR\fIDIRECTORY\fR
+.br
+.B lfs setstripe --yaml=\fR\fIYAML_TEMPLATE_FILE.LYL\fR \fIFILENAME\fR
+.br
+.B lfs setstripe --copy=\fR\fISOURCE_TEMPLATE_FILE\fR \fIFILENAME\fR
+.br
+.B lfs setstripe --foreign\fR[\fB=\fR\fIFOREIGN_TYPE\fR] \
+\fR[\fB--flags=\fR\fIHEX\fR] \fB--xattr=\fR\fILAYOUT_STRING\fR \fIFILENAME\fR
+.SH DESCRIPTION
+.nh
+.ad l
+The
+.B lfs setstripe
+command is used to create a new
+.I FILENAME
+in a Lustre filesystem with the specified layout, or to specify the default
+layout for new files created in
+.IR DIRECTORY ,
+or anywhere in the filesystem if
+.I DIRECTORY
+is the filesystem root and no other layout takes precedence.
+.PP
+Files with composite layouts allow different
+.I STRIPE_OPTIONS
+to be specified for non-overlapping extents of the file. Files will
+inherit options not explicitly specified on the command line either from
+the default layout on the parent directory, or from the filesystem-wide
+default. New subdirectories created under root directory will not explicitly
+copy the default layout at creation time, but will implicitly inherit the
+default layout at runtime. The default layout set on a non-root directory
+will be copied to any new subdirectories created within that directory
+at the time they are created.
+Setstripe can be restricted to privileged users
+.RB (with CAP_SYS_RESOURCE ,
+see
+.BR setcap (8))
+by setting the parameter
+.BR llite.*.enable_setstripe_gid=0 ,
+to an administrator group (e.g.
+.BR wheel )
+by using its numeric group ID, or
+.B -1
+to permit all users this functionality (the default).
+.TP
+.B lfs setstripe \fR[\fISTRIPE_OPTIONS\fR ...] \fIDIRECTORY\fR|\fIFILENAME\fR
+Create a new
+.I FILENAME
+with specified plain layout using the specified
+.IR STRIPE_OPTIONS ,
+or replace the default file layout on an existing
+.IR DIRECTORY .
+.TP
+.B lfs setstripe -E \fIEND_OFFSET\fR [\fISTRIPE_OPTIONS\fR] ... \
+\fIDIRECTORY\fR|\fIFILENAME\fR
+.br
+Create a new composite
+.I FILENAME
+with one or more component layouts (where \fIEND_OFFSET\fR marks the end of the
+current component), or set or replace the default file layout on an existing
+.IR DIRECTORY.
+.TP
+.B lfs setstripe --component-add -E \fIEND_OFFSET\fR [\fISTRIPE_OPTIONS\fR] \
+... \fIFILENAME\fR
+.br
+Add one or more components after the last component of an existing composite
+file that does not yet have a component at
+.BR eof .
+.TP
+.B lfs setstripe --comp-del \fR[\fB-I \fICOMP_ID\fR | \
+\fB--comp-flags \fICOMP_FLAGS\fR] \fIFILENAME\fR
+Remove the component(s) specified by component ID or flags from
+.IR FILENAME .
+.TP
+.B lfs setstripe --comp-set \fR[\fB-I \fICOMP_ID\fR | \
+\fB--comp-flags \fICOMP_FLAGS\fR] \fIFILENAME\fR
+Set or clear
+.I COMP_FLAGS
+on the specified component. This command can be only
+be applied to mirrored files.
+.TP
+.B lfs setstripe -N \fR[\fIMIRROR_COUNT\fR] \fR[\fICOMPONENT_OPTIONS\fR] \fIDIRECTORY\fR|\fIFILENAME\fR
+Create a new
+.I FILENAME
+with the specified number of mirrors and other specified layout options, or
+set or replace the default file layout on an existing
+.IR DIRECTORY .
+.TP
+.B lfs setstripe -d \fR\fIDIRECTORY\fR
+.br
+Delete the default layout on the specified directory.  It is not necessary
+to delete the default layout on a directory before replacing it, only if
+the directory should revert from a directory-specific default layout
+to using the global filesystem default layout stored on the root directory.
+.TP
+.B lfs setstripe --yaml=\fR\fIYAML_TEMPLATE_FILE.LYL\fR \fIFILENAME\fR
+.br
+Create a new
+.I FILENAME
+using the Lustre YAML Layout template
+.IR YAML_TEMPLATE_FILE.LYL ,
+created from
+.I EXISTING_FILE
+via:
+.br
+.B lfs getstripe --yaml \fR\fIEXISTING_FILE\fR > \fIYAML_TEMPLATE_FILE.LYL\fR
+.br
+.I YAML_TEMPLATE_FILE.LYL
+is a plain-text file that may be saved and/or modified after creation.
+This allows complex file layouts to be created once and re-used later.
+.TP
+.B lfs setstripe --copy=\fR\fISOURCE_TEMPLATE_FILE\fR \fIFILENAME\fR
+.br
+Create a new
+.I file
+using the same layout as an existing
+.IR SOURCE_TEMPLATE_FILE .
+This is similar to the
+.B --yaml
+option but avoids the need for the intermediate
+.B .lyl
+file.
+.TP
+.B lfs setstripe --foreign[=\fR\fIFOREIGN_TYPE\fR\fB] \
+[--flags=\fR\fIHEX\fR\fB] --xattr=\fR\fILAYOUT_STRING\fR \fIFILENAME\fR
+.br
+Create a new
+.I FILENAME
+with a foreign/non-lustre layout of type
+.I FOREIGN_TYPE \fR(\fBnone\fR, \fBdaos\fR, ...)
+with flags
+.I HEX
+and a free-format layout value of
+.I LAYOUT_STRING.
+.SH STRIPE_OPTIONS
+The various OST stripe related options are listed and explained below:
+.TP
+.B -c\fR, \fB--stripe-count \fR\fISTRIPE_COUNT\fR
+The number of OSTs to stripe a file over. \fB0 \fRmeans to use the
+filesystem-wide default stripe count (default 1), and \fB-1 \fRmeans to stripe
+over all available OSTs.
+.TP
+.B -C\fR, \fB--overstripe-count \fR\fISTRIPE_COUNT\fR
+The number of stripes to create, creating > 1 stripe per OST if count exceeds
+the number of OSTs in the file system. \fB0 \fRmeans to use the filesystem-wide
+default stripe count (default 1), and \fB range -1 to -32\fRmeans to stripe
+over all available OSTs in multiple of OST count. For example, \fB-1\fR means
+one stripe per OST, -2 means two stripes per OST, and so on.
+.TP
+.B -S\fR, \fB--stripe-size \fR\fISTRIPE_SIZE\fR
+The number of bytes to store on each OST before moving to the next OST. A
+stripe size of
+.B 0
+means the file should use the filesystem-wide default stripe size
+(default 4MiB).  An optional suffix can be used to specify the units in
+.BR K ibi-,
+.BR M "ebi-, or"
+.BR G ibibytes.
+The
+.I STRIPE_SIZE
+must be a multiple of 64KiB.  Values below 4096 are assumed to be in KiB units.
+.TP
+.B -i\fR, \fB--stripe-index \fR\fISTART_OST_IDX\fR
+The OST index (starting at 0) on which to start striping for this file.  A
+.I START_OST_IDX
+of
+.B -1
+allows the MDS to choose the starting index and it is strongly recommended, as
+this allows space and load balancing to be done by the MDS as needed.
+.TP
+.BR -L ", " --layout " \fILAYOUT_TYPE"
+The type of layout for that component, which can be one of:
+.RS
+.B raid0\fR - stripe the file data across
+\fISTRIPE_COUNT\fR OST objects in units of
+\fISTRIPE_SIZE\fR chunks. This is the default layout if not specified.
+.RE
+.RS
+.B mdt\fR - place the first component of the file data on the MDT for faster
+access where the inode is located. This can be used for small files, and with
+composite file layouts. The
+.B mdt
+type may only be used for first component of a file. The
+.IR STRIPE_SIZE
+of the MDT component is always equal to the component size. There is also a
+per-MDT tunable parameter
+.IR lod.dom_stripesize
+that limits the maximum size of a DoM stripe.  It can be changed on the MDS via
+.B lctl set_param lod.*.dom_stripesize=\fR\fISTRIPE_SIZE\fR ,
+where
+.I STRIPE_SIZE
+must be a multiple of 64KiB in size,
+see also
+.BR lctl (8)
+for details.
+.RE
+.TP
+.B -o\fR, \fB--ost \fR\fIOST_IDX\fR
+Used to specify the exact stripe layout on the file system. \fIOST_IDX\fR
+is a list of OSTs referenced by their indices, which are specified in decimal
+or hex form and can be obtained using the
+.B lfs osts
+command. The list format consists of individual OST indices and index ranges
+separated by commas, e.g. 1,2-4,7. The
+.B -o
+option may be specified multiple times to stripe across the union of all listed
+OSTs. If the
+.B -c
+option is combined with
+.B -o
+the
+.I STRIPE_COUNT
+must agree with the number of OSTs in
+.IR OST_IDX .
+If the
+.B -i
+option is combined with
+.B -o
+the
+.I START_OST_IDX
+must be in the OST list, and it will be used as the index on which to start
+striping the file. Otherwise the striping will occur in the order specified in
+.IR OST_IDX .
+.TP
+.B -p\fR, \fB--pool \fR\fIPOOL_NAME\fR
+Allocate objects from the predefined OST pool
+.I POOL_NAME
+for the layout of this file or component. The
+.IR STRIPE_COUNT ,
+.IR STRIPE_SIZE ,
+and
+.I START_OST_IDX
+can be used to select a subset of the OSTs within the pool; the
+.I START_OST_IDX
+must be part of the pool or an error will be returned.
+It is possible to specify a different pool for each component of a file.  If
+no pool is specified, it will be inherited from the previous component (for
+later components of a composite layout) or the parent or root directory (for
+plain
+.B raid0
+layouts, or the first component of a composite file).
+Use
+.BR pool_name=ignore
+to force a component without a pool set (no inheritance from last component,
+root or parent).
+Use
+.BR pool_name=''
+or
+.BR pool_name=inherit
+(since Lustre 2.15) to force a component to inherit the pool from the parent
+or root directory instead of the previous component.
+.TP
+.B --foreign \fR[\fIFOREIGN_TYPE\fR]
+file layout is non-lustre/free-format and of type
+.IR FOREIGN_TYPE
+, if specified (see also
+.IR --xattr
+and
+.IR --flags
+options).
+Current known types are
+.BR none
+and
+.BR symlink
+, default is
+.BR none
+.
+.B -x\fR, \fB--xattr \fR\fILAYOUT_STRING\fR
+Mandatory non-lustre/free-format layout/LOV EA content for
+.I foreign
+file.
+.TP
+.B -F\fR, \fB--flags \fR\fIHEX\fR
+Optional bitmap of flags for foreign type.
+.SH COMPONENT_OPTIONS
+The various component related options are listed and explained below.  The
+.B --component-*
+options can be shortened to
+.B --comp-*
+if desired.
+.TP
+.B -E\fR, \fB--component-end \fR\fIEND_OFFSET\fR
+Add a new component to a file using the
+.I STRIPE_OPTIONS
+following the
+.B -E
+argument.  These options apply to the component ending at offset
+.I END_OFFSET
+in bytes, or by using a suffix (KMGTP) to specify base-two units,
+such as 256M for 2^28 bytes. An offset of
+.B -1
+or
+.B eof
+means the following options extend to the end of the file.  The first
+component starts at offset 0, and each subsequent component starts at
+the end of the previous component, so they must be specified in increasing
+file offset order, and must be a multiple of 64KiB to align with the
+minimum
+.I STRIPE_SIZE
+value.  Values below 4096 are assumed to be in KiB units.
+.PP
+.RS
+The first component specified will inherit default parameters from the
+parent directory or the root directory like a plain layout, as specified
+above.  Later components will inherit the default layout parameters from
+the previous component.  Multiple
+.B -E
+options are used to separate the
+.I STRIPE_OPTIONS
+parameters for different regions of the file.
+.RE
+.PP
+.RS
+If a file does not have a component extending to
+.B eof
+it will generate an error when trying to write beyond the last component
+.IR end .
+This can be useful to limit the size of a file to the end of the last
+specified component, or use
+.B --component-add
+to add more components to the end of the file.
+.RE
+.TP
+.B -z, --extension-size, --ext-size\fR \fIEXT_SIZE\fR
+This option modifies the \fB-E\fR option, components which have this
+option specified are created as pairs of components, extendable and
+extension ones.
+.PP
+.RS
+The extendable component starts at offset 0 if this is the first
+component of the file. In this case it ends at offset \fIEXT_SIZE\fR and
+it gets the flag \fBinit\fR (initialized). The extendable component starts
+at the end of the previous component if this is not the first component of
+the file. In this case it ends at the same offset (0-length component).
+.PP
+The extension component covers the rest of the specified region up to
+the \fIEND_OFFSET\fR specified by \fB-E\fR option and gets
+the flag \fBextension\fR.
+This component covers the space reserved for the extendable component but
+not used immediately, the later extension of the extendable component is done
+by \fIEXT_SIZE\fR each time until the extension component is used up. This is
+used to control the space on OSTs the stripe is located on, in case one of
+them is low on space, the remaining extension component region is added to the
+next component.
+.RE
+.TP
+.B --ec\fR, \fB--ec-stripe-count \fR\fIDATA_STRIPES\fB+\fIPARITY_STRIPES\fR
+Enable Erasure Coding (EC) for the file or directory layout by specifying
+the number of
+.I DATA_STRIPES
+per RAID Set and
+.I PARITY_STRIPES
+per RAID Set in the format
+.IB DATA+PARITY
+or
+.IB DATA:PARITY.
+For example,
+.B --ec 8+2
+specifies RAID Sets with 8 data stripes and 2 parity stripes each,
+providing fault tolerance for up to 2 OST failures per RAID Set.
+.PP
+.RS
+When \fB--ec\fR is specified, a parity mirror is automatically created
+that matches the structure of the data mirror using Lustre's File Level
+Replication (FLR) mechanism. The parity mirror contains the erasure coding
+information needed to reconstruct data in case of OST failures.
+.PP
+The current EC implementation is "read-only" or "offline" erasure coding.
+Any write operation to the file causes the parity mirror to become stale.
+While stale, the parity information cannot be used for data reconstruction.
+The parity mirror must be resynchronized using the
+.BR lfs-mirror-resync (1)
+command to bring it back into sync with the data mirror. Once resynchronized,
+the parity mirror provides protection for read operations, allowing data
+recovery in case of OST failures. This behavior is identical to how
+non-parity Lustre mirrors work. See
+.BR lfs-mirror-create (1)
+and
+.BR lfs-mirror-resync (1)
+for more information on mirror operations.
+.PP
+For data components with
+.I STRIPE_COUNT
+greater than
+.IR DATA_STRIPES ,
+the data component's stripes are divided into one or more independent RAID
+sets, each containing at most
+.I DATA_STRIPES
+data stripes, each with
+.I PARITY_STRIPES
+parity stripes. Each RAID Set is an independent protection domain. For example,
+a 16-stripe RAID0 data component with \fB--ec 8+2\fR is divided into 2 RAID
+Sets of 8+2 (requiring 4 total parity stripes in two independent domains).
+A 15-stripe data component with \fB--ec 8+2\fR is divided into one 8+2 RAID
+set and one 7+2 RAID Set.
+.PP
+The
+.I DATA_STRIPES
+value must be at least 2, and
+.I PARITY_STRIPES
+must be at least 1 and less than or equal to
+.I DATA_STRIPES.
+The supported limits are 32 data stripes and 4 parity stripes.
+.PP
+For 1-stripe components the EC mirror will be created with only 1
+parity stripe (ie. only single device redundancy). If 2 (or more)
+device redundancy is required for all components, then files should be
+created with
+.I STRIPE_COUNT=2
+(or more) data stripes.
+.PP
+.B EC Option Inheritance and Order Independence
+.PP
+The \fB--ec\fR option can appear anywhere in the command line and applies
+to all components within the same mirror to ensure the file data can be
+recovered even when
+.I PARITY_STRIPES
+OSTs used by the file have failed. When a single \fB--ec\fR option
+is specified, it applies to all components in the parity mirror. When
+multiple \fB--ec\fR options are used, each one inherits to subsequent
+components until it is replaced by another \fB--ec\fR option.  The first
+\fB--ec\fR option applies to any components earlier in the command.
+.PP
+The \fB--ec\fR option is per-mirror and only applies within a single mirror
+definition (specified by \fB-N\fR). Different mirrors can have different
+EC configurations or no EC at all.
+.RE
+.TP
+.B --ec-expert
+Equivalent to \fB--ec\fR but allows EC stripe counts that exceed the
+supported limits of 32 data stripes or 4 parity stripes. This option
+is intended for expert users who understand the performance and
+reliability implications, or for testing purposes.
+.PP
+.RS
+The maximum allowed values are 255 for \fIDATA\fR and 15 for \fIPARITY\fR.
+.RE
+.TP
+.B --component-add
+Add components to the end an existing composite file.  It is not possible
+to add components incrementally to the default directory layout, since the
+entire default layout can be replaced with a single
+.B lfs setstripe
+command.  Adding components to mirrored files is not currently allowed.
+.TP
+.B --component-del
+Delete specified the components from an existing file using either the
+.BR --component-id | -I
+or
+.BR --component-flags .
+Deletion must start with the last component.  The ID specified by the
+.B -I
+option is the numerical unique ID of the component, it can be obtained using
+the
+.B lfs getstripe -I
+command.  It is not possible to delete components from a default directory
+layout, since the entire default layout can be replaced with a single
+.B lfs setstripe
+call.
+The \fB--component-flags\fR option is used to specify certain type of
+components. The only allowed component flag for deleting a component is
+.B ^init
+to indicate an uninstantiated component.  Deleting a single component from
+mirrored files is not currently allowed, see the
+.BR lfs-mirror-split (1)
+command.
+.TP
+.B --component-flags \fR\fICOMP_FLAGS\fR
+Find, set, or clear
+.B flags
+on a specific component. Allowed
+.I flags
+are:
+.RS
+.B * init\fR - component is initialized (has allocated objects).  Used with
+.B --component-del --component-flags ^init
+to find uninitialized components.
+.RE
+.RS
+.B * prefer\fR - component preferred for read/write in a mirrored file
+.RE
+.RS
+.B * prefrd\fR - component preferred for read in a mirrored file
+.RE
+.RS
+.B * prefwr\fR - component preferred for write in a mirrored file
+.RE
+.RS
+.B * stale\fR - component has outdated data in a mirrored file. This flag is
+not allowed to be set on a component of the last non-stale mirror.
+Once a component is marked
+.BR stale ,
+it isn't permitted to clear this flag directly. \fBlfs-mirror-resync\fR(1)
+is required to clear the flag.
+.RE
+.RS
+.B * nosync\fR - mirror components will not be resynched by default when the
+.BR lfs-mirror-resync (1)
+command is run. This option is useful to freeze a file mirror as an old
+version or snapshot of the file.
+.RE
+.RS
+A leading '^' before \fIflags\fR clears the flags, or finds components not
+matching the flags.  Multiple flags can be separated by comma(s).
+.RE
+.TP
+.B -I\fR, \fB--component-id \fR\fICOMP_ID\fR
+The numerical unique component ID to identify a component to be modified.
+.TP
+.BR -N, \fB--mirror-count  \fR[\fIMIRROR_COUNT\fR]
+Create a file with
+.I MIRROR_COUNT
+identical replicas on the file or directory.  The
+.I MIRROR_COUNT
+argument is optional and defaults to 1 if it's not specified; if specified,
+it must follow the
+.B -N
+option without a space. The maximum possible value for the mirror count is 16.
+.br
+The \fISTRIPE_OPTIONS\fR specify the specific layout for the mirror. It
+can be a plain layout with specific striping pattern or a composite layout.
+If not specified, the stripe options are inherited from the previous
+component. If there is no previous component, the
+.I STRIPE_COUNT
+and
+.I STRIPE_SIZE
+options are inherited from filesystem-wide default values, and OST
+.I POOL_NAME
+will be inherited from the parent directory.
+.br
+Multiple
+.B -N
+options may be specified, each with its own
+.I STRIPE_OPTIONS
+if there is a reason to have different layouts for the replicas, such as
+flash pools and archive pools (see
+.BR lfs-mirror-create (1)
+for full details).
+.br
+.B NOTE
+that in the current client implementation, only
+.B one
+replica will be written by client nodes, and the other replicas need to
+be resynched using the
+.B lfs mirror resync
+command, or an external resync agent.
+.SH EXAMPLES
+.TP
+.B lfs setstripe -S 128K -c 2 /mnt/lustre/file1
+This creates a file striped on two OSTs with 128KiB on each stripe.
+.TP
+.B lfs setstripe -d /mnt/lustre/dir
+This deletes a default stripe pattern on dir. New files created in that
+directory will use the filesystem global default instead.
+.TP
+.B lfs setstripe -N2 -E 1M -E eof -c -1 /mnt/lustre/dir1
+This sets a default mirror layout on a directory with 2 PFL mirrors. Each mirror
+has the same specified PFL layout.
+.TP
+.B lfs setstripe -N -E 1M -L mdt -E eof --component-flags=prefer -p flash \
+    -N -E 1G -c 1 -p disk -E eof -c -1 /mnt/lustre/file1
+This creates a mirrored file with 2 replicas. The first replica is using the
+MDT for files smaller than 1MB, and the remainder of the file is on the
+.B flash
+OST pool with filesystem-wide default values.  The second replica is on the
+.B disk
+OST pool, with 1 stripe for the first 1GB of the file, and striped across
+all OSTs in the
+.B disk pool for the remainder of the file.  Clients will
+.B prefer
+the first (flash) replica for both reads and writes.
+.TP
+.B lfs setstripe -E 4M -c 1 -E 64M -c 4 -E -1 -c -1 /mnt/lustre/file1
+This creates a file with composite layout, the component has 1 stripe and
+covers [0, 4MiB), the second component has 4 stripes and covers [4MiB, 64MiB),
+the last component stripes over all available OSTs and covers [64MiB, EOF).
+.TP
+.B lfs setstripe -E -1 -z 64M /mnt/lustre/file1
+This creates a file with a composite layout, the component one covers [0, 64MiB)
+and the second component the rest [64MiB, EOF) originally. Once written beyond
+64MiB the component one is extended to [0, 128MiB), once written beyond 128MiB
+it is extended to [0, 192MiB), etc; the second component is shortened
+appropriately.
+.PP
+.RS
+When one of the OSTs of the first component layout is low on space, e.g. while
+writing beyond 192MiB, the first component is left as [0, 192MiB), and a new
+component is allocated between them, its layout repeats the first component
+layout but initialized on different OSTs so that the full OSTs are avoided.
+It is allocated and immediately extended to [192MiB, 256MiB), the following
+extension component is shortened again.
+.RE
+.TP
+.B lfs setstripe -E 1G -z 64M -E 100G -z 256M -E -1 -z 1G /mnt/lustre/file1
+This creates a file with a composite layout, the component one covers [0,
+64MiB), the third component covers [1G, 1G), the fifth component covers
+[100GiB, 100GiB) originally. The second, fourth and sixth extension components
+cover the left space accordingly. The process of writing is similar to above,
+but when one of the OSTs of the first component layout is low on space, e.g.
+while writing beyond 192MiB in the example above, the first component is left
+as [0, 192MiB), the second (extension) component is removed, and its range
+spills over to the third and the fourth components - they are moved left to
+start at 192MiB instead of 100GiB; the third component is immediately extended
+and becomes [192MiB, 448MiB), the fourth (the extension one) component becomes
+[448MiB, 100GiB).
+.TP
+.B lfs setstripe --component-add -E eof -c 4  /mnt/lustre/file1
+This add a component which starts at the end of last existing component to
+the end of file.
+.TP
+.B lfs setstripe --component-del -I 1 /mnt/lustre/file1
+This deletes the component with ID equal to 1 from an existing file.
+.TP
+.B lfs setstripe --comp-set -I 1 --comp-flags=^prefer,stale /mnt/lustre/file1
+This command will clear the \fBprefer\fR flag and set the \fBstale\fR flag on
+.B file1
+component ID 1.
+.TP
+.B lfs setstripe -E 1M -L mdt -E -1 /mnt/lustre/file1
+Create
+.B file1
+with Data-on-MDT layout. The first 1MiB of the file data is placed on the
+MDT and rest of file is placed on OST(s) with default striping.
+.TP
+.B lfs setstripe --yaml=/tmp/layout_yaml /mnt/lustre/file2
+This creates
+.B file2
+with layout stored in the layout template
+file
+.B layout_yaml
+which can be created with the
+.B lfs getstripe --yaml
+command.
+.TP
+.B lfs setstripe --foreign=symlink --flags=0xda08 \
+	--xattr=PUUID:CUUID /mnt/lustre/file1
+This creates foreign
+.BR file1
+of type
+.BR symlink
+with non-lustre/free-format
+.BR PUUID:CUUID
+layout/LOV EA and flags
+.BR 0xda08
+.
+.TP
+.B lfs setstripe -E -1 -c 8 --ec 8+2 /mnt/lustre/file1
+This creates
+.B file1
+with an Erasure Coding layout using 8 data stripes and 2 parity stripes.
+The file will have two mirrors: a data mirror with 8 stripes and a parity
+mirror with the erasure coding information. Since the data component has
+8 stripes and the EC specification is 8+2, this creates a single RAID Set
+with 8 data stripes and 2 parity stripes, providing fault tolerance for
+up to 2 OST failures with 25% storage overhead.
+.TP
+.B lfs setstripe --ec 8+2 -E -1 -c 8 /mnt/lustre/file1a
+This is equivalent to the previous example, demonstrating if only a single
+\fB--ec\fR option is specified, it applies to all components.
+.TP
+.B lfs setstripe -E 1G -c 4 --ec 4+2 -E -1 -c 8 --ec 8+2 /mnt/lustre/file2
+This creates
+.B file2
+with a composite EC layout. The first component (0 to 1GiB) uses 4 data
+stripes with 2 parity stripes (4+2 EC), and the second component (1GiB to
+EOF) uses 8 data stripes with 2 parity stripes (8+2 EC). Each component
+has both data and parity mirrors.
+.TP
+.B lfs setstripe -E 128M --ec 8+2 -E -1 -c 4 /mnt/lustre/file2a
+This creates
+.B file2a
+with a composite EC layout where a single \fB--ec 8+2\fR applies to all
+components. Both the first component (0 to 128MiB) and the second component
+(128MiB to EOF) will use 8+2 EC, demonstrating that one \fB--ec\fR option
+applies to all components in the parity mirror.
+.TP
+.B lfs setstripe -E 128M --ec 4+2 -E 512M -E -1 --ec 8+2 /mnt/lustre/file2b
+This creates
+.B file2b
+with three components demonstrating multiple \fB--ec\fR options. The first
+component (0 to 128MiB) uses 4+2 EC. The second component (128MiB to 512MiB)
+also uses 4+2 EC (inherited from the first \fB--ec\fR). The third component
+(512MiB to EOF) uses 8+2 EC, as specified by the second \fB--ec\fR option.
+.TP
+.B lfs setstripe -E -1 -c 16 --ec 8+2 /mnt/lustre/file3
+This creates
+.B file3
+with 16 data stripes divided into 2 independent RAID Sets. Each RAID Set
+contains 8 data stripes and 2 parity stripes (8+2), for a total of 4 parity
+stripes across both RAID Sets. Each RAID Set can tolerate up to 2 OST
+failures independently.
+.TP
+.B lfs setstripe -E -1 -c 20 --ec 8+2 /mnt/lustre/file3a
+This creates
+.B file3a
+with 20 data stripes; this does not evenly divide into 8+2 RAID Sets. The
+stripes are automatically divided into multiple RAID Sets of optimal size:
+two 7+2 RAID Sets (14 data stripes, 4 parity stripes) and one 6+2 RAID Set
+(6 data stripes, 2 parity stripes). This maintains the requested level of
+redundancy while creating RAID Sets which are as close to the requested
+dimensions as possible.
+.TP
+.B lfs setstripe -E -1 -c 256 --ec-expert 64+4 /mnt/lustre/file4
+This creates
+.B file4
+with an EC layout that exceeds the supported limits (32 data stripes,
+4 parity stripes). The \fB--ec-expert\fR option allows the use of up to
+255 data stripes and up to 15 parity stripes per RAID Set. With 256 data
+stripes and 64+4 EC, this creates four 64+4 RAID Sets, for a total of 16
+parity stripes. This is intended for advanced users who understand the
+performance and reliability implications.
+.TP
+.B lfs setstripe -N -E 128M -E -1 --ec 8+2 -N -E 256M -E -1 /mnt/lustre/file5
+This creates
+.B file5
+with two mirrors. The first mirror has two components with 8+2 EC applied
+to both. The second mirror has two components with no EC (plain RAID0).
+This demonstrates that \fB--ec\fR is per-mirror: the \fB--ec 8+2\fR only
+applies to the first mirror (between the first and second \fB-N\fR), and
+does not affect the second mirror.
+.TP
+.B lfs setstripe -E -1 -c 8 --ec 8+2 /mnt/lustre/dir1
+This sets the default EC layout on
+.B dir1
+so that new files created in this directory will automatically use an
+8+2 EC layout with 8 data stripes and 2 parity stripes.
+.SH SEE ALSO
+.BR lctl (1),
+.BR lfs (1),
+.BR lfs-migrate (1),
+.BR lfs-mirror-create (1),
+.BR lfs-mirror-split (1),
+.BR lustre (7)
+.BR setcap (8)

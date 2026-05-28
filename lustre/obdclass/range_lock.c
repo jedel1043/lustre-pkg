@@ -1,0 +1,159 @@
+// SPDX-License-Identifier: GPL-2.0
+
+/*
+ * This file is part of Lustre, http://www.lustre.org/
+ *
+ * Range lock is used to allow multiple threads writing a single shared
+ * file given each thread is writing to a non-overlapping portion of the
+ * file.
+ *
+ * Refer to the possible upstream kernel version of range lock by
+ * Jan Kara <jack@suse.cz>: https://lkml.org/lkml/2013/1/31/480
+ *
+ * This file could later replaced by the upstream kernel version.
+ *
+ * Author: Prakash Surya <surya1@llnl.gov>
+ * Author: Bobi Jam <bobijam.xu@intel.com>
+ */
+
+#include <linux/sched/signal.h>
+#include <linux/interval_tree_generic.h>
+#include <uapi/linux/lustre/lustre_user.h>
+#include <linux/libcfs/libcfs_debug.h>
+#include <linux/libcfs/libcfs_private.h>
+#include <range_lock.h>
+
+#define START(node)	((node)->rl_start)
+#define LAST(node)	((node)->rl_end)
+
+INTERVAL_TREE_DEFINE(struct range_lock, rl_rb, __u64, rl_subtree_last,
+		     START, LAST, static, range_lock)
+
+/**
+ * range_lock_tree_init() - Initialize a range lock tree
+ * @tree: an empty range lock tree
+ *
+ * Pre:  Caller should have allocated the range lock tree.
+ * Post: The range lock tree is ready to function.
+ */
+void range_lock_tree_init(struct range_lock_tree *tree)
+{
+	tree->rlt_root = RB_ROOT_CACHED;
+	tree->rlt_sequence = 0;
+	spin_lock_init(&tree->rlt_lock);
+}
+EXPORT_SYMBOL(range_lock_tree_init);
+
+/**
+ * range_lock_init() - Intialize a range lock node
+ * @lock: an empty range lock node
+ * @start: start of the covering region
+ * @end: end of the covering region
+ *
+ * Pre:  Caller should have allocated the range lock node.
+ * Post: The range lock node is meant to cover [start, end] region
+ */
+void range_lock_init(struct range_lock *lock, __u64 start, __u64 end)
+{
+	start >>= PAGE_SHIFT;
+	if (end != LUSTRE_EOF)
+		end >>= PAGE_SHIFT;
+	lock->rl_start = start;
+	lock->rl_end = end;
+
+	lock->rl_task = NULL;
+	lock->rl_blocking_ranges = 0;
+	lock->rl_sequence = 0;
+}
+EXPORT_SYMBOL(range_lock_init);
+
+/**
+ * range_unlock() - Unlock a range lock, wake up locks blocked by this lock.
+ * @tree: range lock tree
+ * @lock: range lock to be deleted
+ *
+ * If this lock has been granted, relase it; if not, just delete it from
+ * the tree or the same region lock list. Wake up those locks only blocked
+ * by this lock.
+ */
+void range_unlock(struct range_lock_tree *tree, struct range_lock *lock)
+{
+	struct range_lock *overlap;
+	ENTRY;
+
+	spin_lock(&tree->rlt_lock);
+
+	range_lock_remove(lock, &tree->rlt_root);
+
+	for (overlap = range_lock_iter_first(&tree->rlt_root,
+					     lock->rl_start,
+					     lock->rl_end);
+	     overlap;
+	     overlap = range_lock_iter_next(overlap,
+					    lock->rl_start,
+					    lock->rl_end))
+		if (overlap->rl_sequence > lock->rl_sequence) {
+			--overlap->rl_blocking_ranges;
+			if (overlap->rl_blocking_ranges == 0)
+				wake_up_process(overlap->rl_task);
+		}
+
+	spin_unlock(&tree->rlt_lock);
+
+	EXIT;
+}
+EXPORT_SYMBOL(range_unlock);
+
+/**
+ * range_lock() - Lock a region
+ * @tree: range lock tree
+ * @lock: range lock node containing the region span
+ *
+ * If there exists overlapping range lock, the new lock will wait and
+ * retry, if later it find that it is not the chosen one to wake up,
+ * it wait again.
+ *
+ * Return:
+ * * %0 get the range lock
+ * * %<0 error code while not getting the range lock
+ */
+int range_lock(struct range_lock_tree *tree, struct range_lock *lock)
+{
+	struct range_lock *overlap;
+	int rc = 0;
+	ENTRY;
+
+	spin_lock(&tree->rlt_lock);
+	/*
+	 * We need to check for all conflicting intervals
+	 * already in the tree.
+	 */
+	for (overlap = range_lock_iter_first(&tree->rlt_root,
+					     lock->rl_start,
+					     lock->rl_end);
+	     overlap;
+	     overlap = range_lock_iter_next(overlap,
+					    lock->rl_start,
+					    lock->rl_end))
+		lock->rl_blocking_ranges += 1;
+
+	range_lock_insert(lock, &tree->rlt_root);
+	lock->rl_sequence = ++tree->rlt_sequence;
+
+	while (lock->rl_blocking_ranges > 0) {
+		lock->rl_task = current;
+		__set_current_state(TASK_INTERRUPTIBLE);
+		spin_unlock(&tree->rlt_lock);
+		schedule();
+
+		if (fatal_signal_pending(current)) {
+			range_unlock(tree, lock);
+			GOTO(out, rc = -ERESTARTSYS);
+		}
+		spin_lock(&tree->rlt_lock);
+	}
+	spin_unlock(&tree->rlt_lock);
+out:
+	RETURN(rc);
+}
+EXPORT_SYMBOL(range_lock);

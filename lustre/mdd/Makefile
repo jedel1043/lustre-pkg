@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# This file is part of Lustre, http://www.lustre.org/
+#
+
+obj-m += mdd.o
+mdd-objs := \
+	mdd_acl.o \
+	mdd_changelog.o \
+	mdd_device.o \
+	mdd_dir.o \
+	mdd_lock.o \
+	mdd_lproc.o \
+	mdd_object.o \
+	mdd_orphans.o \
+	mdd_permission.o \
+	mdd_trans.o

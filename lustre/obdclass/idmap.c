@@ -1,0 +1,182 @@
+// SPDX-License-Identifier: GPL-2.0
+
+/*
+ * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Use is subject to license terms.
+ *
+ * Copyright (c) 2012, 2017, Intel Corporation.
+ */
+
+/*
+ * This file is part of Lustre, http://www.lustre.org/
+ *
+ * Lustre user identity mapping.
+ *
+ * Author: Fan Yong <fanyong@clusterfs.com>
+ */
+
+#define DEBUG_SUBSYSTEM S_SEC
+
+#include <linux/user_namespace.h>
+#include <linux/uidgid.h>
+
+#include <lustre_idmap.h>
+#include <upcall_cache.h>
+#include <md_object.h>
+#include <obd_support.h>
+
+/*
+ * groups_search() is copied from linux kernel!
+ * A simple bsearch.
+ */
+int lustre_groups_search(struct group_info *group_info, gid_t grp)
+{
+	int left, right;
+
+	if (!group_info)
+		return 0;
+
+	left = 0;
+	right = group_info->ngroups;
+	while (left < right) {
+		int mid = (left + right) / 2;
+		int cmp = grp -
+			from_kgid(&init_user_ns, CFS_GROUP_AT(group_info, mid));
+
+		if (cmp > 0)
+			left = mid + 1;
+		else if (cmp < 0)
+			right = mid;
+		else
+			return 1;
+	}
+	return 0;
+}
+EXPORT_SYMBOL(lustre_groups_search);
+
+/* groups_sort() is copied from linux kernel! */
+/* a simple shell-metzner sort */
+void lustre_groups_sort(struct group_info *group_info)
+{
+	int base, max, stride;
+	int gidsetsize = group_info->ngroups;
+
+	for (stride = 1; stride < gidsetsize; stride = 3 * stride + 1)
+		; /* nothing */
+	stride /= 3;
+
+	while (stride) {
+		max = gidsetsize - stride;
+		for (base = 0; base < max; base++) {
+			int left = base;
+			int right = left + stride;
+			gid_t tmp = from_kgid(&init_user_ns,
+					      CFS_GROUP_AT(group_info, right));
+
+			while (left >= 0 &&
+			       tmp < from_kgid(&init_user_ns,
+					       CFS_GROUP_AT(group_info, left))) {
+				CFS_GROUP_AT(group_info, right) =
+					CFS_GROUP_AT(group_info, left);
+				right = left;
+				left -= stride;
+			}
+			CFS_GROUP_AT(group_info, right) =
+						make_kgid(&init_user_ns, tmp);
+		}
+		stride /= 3;
+	}
+}
+EXPORT_SYMBOL(lustre_groups_sort);
+
+int lustre_in_group_p(struct lu_ucred *mu, gid_t grp)
+{
+	int rc = 1;
+
+	if (grp != mu->uc_fsgid) {
+		struct group_info *group_info = NULL;
+
+		if (mu->uc_ginfo || !mu->uc_identity ||
+		    mu->uc_valid == UCRED_OLD)
+			if (grp == mu->uc_suppgids[0] ||
+			    grp == mu->uc_suppgids[1])
+				return 1;
+
+		if (mu->uc_ginfo)
+			group_info = mu->uc_ginfo;
+		else if (mu->uc_identity)
+			group_info = mu->uc_identity->mi_ginfo;
+
+		if (!group_info)
+			return 0;
+
+		get_group_info(group_info);
+		rc = lustre_groups_search(group_info, grp);
+		put_group_info(group_info);
+	}
+	return rc;
+}
+EXPORT_SYMBOL(lustre_in_group_p);
+
+/* make sure fsgid is one of primary or supplementary groups
+ * fetched from identity upcall
+ */
+int has_proper_groups(struct lu_ucred *ucred)
+{
+	struct group_info *group_info = NULL;
+	int rc;
+
+	if (!ucred->uc_identity)
+		return 1;
+
+	if (ucred->uc_fsgid == ucred->uc_identity->mi_gid)
+		return 1;
+
+	group_info = ucred->uc_identity->mi_ginfo;
+	if (!group_info)
+		return 0;
+
+	get_group_info(group_info);
+	rc = lustre_groups_search(group_info, ucred->uc_fsgid);
+	put_group_info(group_info);
+
+	return rc;
+}
+EXPORT_SYMBOL(has_proper_groups);
+
+int lustre_print_groups(struct group_info *group_info)
+{
+	int g;
+
+	if (!group_info)
+		RETURN(-ENOENT);
+
+	get_group_info(group_info);
+	CDEBUG(D_INFO, "ngroups=%u\n", group_info->ngroups);
+	for (g = 0; g < group_info->ngroups; g++)
+		CDEBUG(D_INFO, "group[%u] = %u\n", g,
+		       from_kgid(&init_user_ns, group_info->gid[g]));
+	put_group_info(group_info);
+
+	RETURN(0);
+}
+EXPORT_SYMBOL(lustre_print_groups);
+
+int lustre_print_ucred(struct lu_ucred *ucred)
+{
+	struct group_info *group_info;
+
+	if (unlikely(!ucred))
+		return -EINVAL;
+
+	group_info = ucred->uc_ginfo;
+	if (!group_info && ucred->uc_identity)
+		group_info = ucred->uc_identity->mi_ginfo;
+
+	CDEBUG(D_INFO, "uid=%u gid=%u fsuid=%u fsgid=%u supp=%u/%u ginfo=%px\n",
+	       ucred->uc_uid, ucred->uc_gid, ucred->uc_fsuid, ucred->uc_fsgid,
+	       ucred->uc_suppgids[0], ucred->uc_suppgids[1], group_info);
+
+	return lustre_print_groups(group_info);
+}
+EXPORT_SYMBOL(lustre_print_ucred);

@@ -1,0 +1,2808 @@
+// SPDX-License-Identifier: GPL-2.0
+
+/*
+ * Copyright (c) 2011, 2012 Commissariat a l'energie atomique et aux energies
+ *                          alternatives
+ *
+ * Copyright (c) 2013, 2017, Intel Corporation.
+ * Use is subject to license terms.
+ */
+
+/*
+ * Lustre HSM Coordinator
+ *
+ * Author: Jacques-Charles Lafoucriere <jacques-charles.lafoucriere@cea.fr>
+ * Author: Aurelien Degremont <aurelien.degremont@cea.fr>
+ * Author: Thomas Leibovici <thomas.leibovici@cea.fr>
+ */
+
+#define DEBUG_SUBSYSTEM S_MDS
+
+#include <linux/kthread.h>
+#include <linux/kernel.h>
+#include <obd_support.h>
+#include <lustre_export.h>
+#include <obd.h>
+#include <lprocfs_status.h>
+#include <lustre_log.h>
+#include <lustre_kernelcomm.h>
+#include "mdt_internal.h"
+
+static struct mdt_object *mdt_hsm_get_md_hsm_lock(struct mdt_thread_info *mti,
+						  const struct lu_fid *fid,
+						  struct md_hsm *hsm,
+						  struct mdt_lock_handle *lh,
+						  enum ldlm_mode mode)
+{
+	struct md_attr		*ma;
+	struct mdt_object	*obj;
+	int			 rc;
+	ENTRY;
+
+	memset(hsm, 0, sizeof(*hsm));
+	ma = &mti->mti_attr;
+	ma->ma_need = MA_HSM;
+	ma->ma_valid = 0;
+
+	/* find object by FID */
+	if (!lh)
+		obj = mdt_object_find(mti->mti_env, mti->mti_mdt, fid);
+	else
+		obj = mdt_object_find_lock(mti, fid, lh,
+					   MDS_INODELOCK_XATTR, mode);
+	if (IS_ERR(obj))
+		RETURN(obj);
+
+	if (!mdt_object_exists(obj))
+		GOTO(err, rc = -ENOENT);
+
+	rc = mdt_attr_get_complex(mti, obj, ma);
+	if (rc)
+		GOTO(err, rc);
+
+	if (ma->ma_valid & MA_HSM)
+		*hsm = ma->ma_hsm;
+	ma->ma_valid = 0;
+
+	RETURN(obj);
+
+err:
+	if (lh)
+		mdt_object_unlock(mti, obj, lh, 1);
+	mdt_object_put(mti->mti_env, obj);
+
+	RETURN(ERR_PTR(rc));
+}
+
+/**
+ * get obj and HSM attributes on a fid
+ * \param mti [IN] context
+ * \param fid [IN] object fid
+ * \param hsm [OUT] HSM meta data
+ * \retval obj or error (-ENOENT if not found)
+ */
+struct mdt_object *mdt_hsm_get_md_hsm(struct mdt_thread_info *mti,
+				      const struct lu_fid *fid,
+				      struct md_hsm *hsm)
+{
+	return mdt_hsm_get_md_hsm_lock(mti, fid, hsm, NULL, LCK_NL);
+}
+
+void mdt_hsm_dump_hal(int level, const char *prefix,
+		      struct hsm_action_list *hal)
+{
+	int			 i, sz;
+	struct hsm_action_item	*hai;
+	char			 buf[12];
+
+	CDEBUG(level, "%s: HAL header: version %X count %d"
+		      " archive_id %d flags %#llx\n",
+	       prefix, hal->hal_version, hal->hal_count,
+	       hal->hal_archive_id, hal->hal_flags);
+
+	hai = hai_first(hal);
+	for (i = 0; i < hal->hal_count; i++) {
+		sz = hai->hai_len - sizeof(*hai);
+		CDEBUG(level, "%s %d: fid="DFID" dfid="DFID
+		       " cookie=%#llx"
+		       " action=%s extent=%#llx-%#llx gid=%#llx"
+		       " datalen=%d data=[%s]\n",
+		       prefix, i,
+		       PFID(&hai->hai_fid), PFID(&hai->hai_dfid),
+		       hai->hai_cookie,
+		       hsm_copytool_action2name(hai->hai_action),
+		       hai->hai_extent.offset,
+		       hai->hai_extent.length,
+		       hai->hai_gid, sz,
+		       hai_dump_data_field(hai, buf, sizeof(buf)));
+		hai = hai_next(hai);
+	}
+}
+
+struct hsm_scan_data {
+	struct mdt_thread_info	*hsd_mti;
+	char			 hsd_fsname[MTI_NAME_MAXLEN + 1];
+	/* are we scanning the logs for housekeeping, or just looking
+	 * for new work?
+	 */
+	bool			 hsd_housekeeping;
+	bool			 hsd_one_restore;
+	u32			 hsd_start_cat_idx;
+	u32			 hsd_start_rec_idx;
+	int			 hsd_action_count;
+	u64			 hsd_request_len; /* array alloc len */
+	u64			 hsd_request_count; /* array used count */
+	struct hsm_scan_request	*hsd_request;
+};
+
+static inline int mdt_cdt_check_rec(struct llog_agent_req_rec *rec, size_t size)
+{
+	ENTRY;
+
+	if (rec->arr_hdr.lrh_len > size ||
+	    rec->arr_hdr.lrh_len < sizeof(*rec) ||
+	    rec->arr_hdr.lrh_type != HSM_AGENT_REC ||
+	    rec->arr_hdr.lrh_index !=
+	    llog_get_rec_tail(&rec->arr_hdr)->lrt_index ||
+	    rec->arr_hdr.lrh_len != llog_get_rec_tail(&rec->arr_hdr)->lrt_len)
+		RETURN(-EBADR);
+
+	if (rec->arr_status > ARS_SUCCEED)
+		RETURN(-EBADR);
+
+	if (rec->arr_hai.hai_len > rec->arr_hdr.lrh_len ||
+	    rec->arr_hai.hai_len < sizeof(rec->arr_hai) ||
+	    (rec->arr_hai.hai_action != HSMA_NONE &&
+	     rec->arr_hai.hai_action < HSMA_ARCHIVE &&
+	     rec->arr_hai.hai_action > HSMA_CANCEL) ||
+	    rec->arr_hai.hai_cookie == 0)
+		RETURN(-EBADR);
+
+	RETURN(0);
+}
+
+static int mdt_cdt_waiting_cb(const struct lu_env *env,
+			      struct mdt_device *mdt,
+			      struct llog_handle *llh,
+			      struct llog_agent_req_rec *larr,
+			      struct hsm_scan_data *hsd)
+{
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+	struct hsm_scan_request *request;
+	struct cdt_agent_req *car;
+	struct obd_uuid uuid = {.uuid = {0}};
+	struct llog_cookie cookie;
+	size_t hai_size;
+	u32 archive_id;
+	bool wrapped;
+	int i;
+
+	/* Are agents full? */
+	if (atomic_read(&cdt->cdt_request_count) >= cdt->cdt_max_requests)
+		RETURN(hsd->hsd_housekeeping ? 0 : LLOG_PROC_BREAK);
+
+	if (hsd->hsd_action_count + atomic_read(&cdt->cdt_request_count) >=
+	    cdt->cdt_max_requests) {
+		/* We cannot send any more request
+		 *
+		 *                     *** SPECIAL CASE ***
+		 *
+		 * Restore requests are too important not to schedule at least
+		 * one, everytime we can.
+		 */
+		if (larr->arr_hai.hai_action != HSMA_RESTORE ||
+		    hsd->hsd_one_restore)
+			RETURN(hsd->hsd_housekeeping ? 0 : LLOG_PROC_BREAK);
+	}
+
+	hai_size = round_up(larr->arr_hai.hai_len, 8);
+	archive_id = larr->arr_archive_id;
+
+	request = NULL;
+	for (i = 0; i < hsd->hsd_request_count; i++) {
+		if (hsr_get_archive_id(&hsd->hsd_request[i]) == archive_id &&
+		    hsd->hsd_request[i].hsr_used_sz + hai_size <=
+		    LDLM_MAXREQSIZE) {
+			request = &hsd->hsd_request[i];
+			break;
+		}
+	}
+
+	/* Are we trying to force-schedule a request? */
+	if (hsd->hsd_action_count + atomic_read(&cdt->cdt_request_count) >=
+	    cdt->cdt_max_requests) {
+		/* Is there really no compatible hsm_scan_request? */
+		if (!request) {
+			for (i -= 1; i >= 0; i--) {
+				if (hsr_get_archive_id(&hsd->hsd_request[i]) ==
+				    archive_id) {
+					request = &hsd->hsd_request[i];
+					break;
+				}
+			}
+		}
+
+		/* Make room for the car */
+		if (request) {
+			/* Discard the last car until there is enough space */
+			do {
+				request->hsr_count--;
+
+				car = list_last_entry(&request->hsr_cars,
+						      struct cdt_agent_req,
+						      car_scan_list);
+				list_del_init(&car->car_scan_list);
+
+				request->hsr_used_sz -=
+					round_up(car->car_hai.hai_len, 8);
+
+				mdt_cdt_put_request(car);
+				hsd->hsd_action_count--;
+			} while (request->hsr_used_sz + hai_size >
+				 LDLM_MAXREQSIZE);
+		} else if (hsd->hsd_housekeeping) {
+			struct hsm_scan_request *tmp;
+			struct cdt_agent_req *pos;
+			struct cdt_agent_req *tmp2;
+
+			/* Discard the (whole) records from request */
+			hsd->hsd_request_count--;
+			LASSERT(hsd->hsd_request_count >= 0);
+			tmp = &hsd->hsd_request[hsd->hsd_request_count];
+			hsd->hsd_action_count -= tmp->hsr_count;
+			LASSERT(hsd->hsd_action_count >= 0);
+			list_for_each_entry_safe(pos, tmp2, &tmp->hsr_cars,
+						 car_scan_list) {
+				list_del_init(&pos->car_scan_list);
+				mdt_cdt_put_request(pos);
+			}
+		} else {
+			/* Bailing out, this code path is too hot */
+			RETURN(LLOG_PROC_BREAK);
+
+		}
+	}
+
+	if (!request) {
+		LASSERT(hsd->hsd_request_count < hsd->hsd_request_len);
+		request = &hsd->hsd_request[hsd->hsd_request_count];
+
+		INIT_LIST_HEAD(&request->hsr_cars);
+		request->hsr_fsname = &hsd->hsd_fsname[0];
+		request->hsr_version = HAL_VERSION;
+		request->hsr_count = 0;
+		request->hsr_used_sz = sizeof(struct hsm_action_list) +
+			__ALIGN_KERNEL(strlen(hsd->hsd_fsname) + 1, 8);
+		hsd->hsd_request_count++;
+	}
+
+	cookie.lgc_offset = 0;
+	llog_get_cookie(env, &cookie);
+	LASSERTF(cookie.lgc_offset >= llh->lgh_hdr->llh_size,
+		 "Bad record offset %llx for idx %d", cookie.lgc_offset,
+		 larr->arr_hdr.lrh_index);
+
+	car = mdt_cdt_alloc_request(&uuid, larr);
+	if (IS_ERR(car))
+		RETURN(PTR_ERR(car));
+
+	car->car_hmm->mr_offset = cookie.lgc_offset;
+	car->car_hmm->mr_lid = llh->lgh_id;
+	list_add_tail(&car->car_scan_list, &request->hsr_cars);
+
+	CDEBUG(D_HSM, "Copying record %d to request %px, count %d\n",
+	       larr->arr_hdr.lrh_index, request, request->hsr_count);
+
+	request->hsr_count++;
+	request->hsr_used_sz += hai_size;
+	hsd->hsd_action_count++;
+
+	switch (car->car_hmm->mr_rec.arr_hai.hai_action) {
+	case HSMA_CANCEL:
+		break;
+	case HSMA_RESTORE:
+		hsd->hsd_one_restore = true;
+		fallthrough;
+	default:
+		break;
+	}
+
+	wrapped = llh->lgh_hdr->llh_cat_idx >= llh->lgh_last_idx &&
+		  llh->lgh_hdr->llh_count > 1;
+	if ((!wrapped && llh->lgh_hdr->llh_cat_idx > hsd->hsd_start_cat_idx) ||
+	    (wrapped && llh->lgh_hdr->llh_cat_idx < hsd->hsd_start_cat_idx) ||
+	    (llh->lgh_hdr->llh_cat_idx == hsd->hsd_start_cat_idx &&
+	     larr->arr_hdr.lrh_index > hsd->hsd_start_rec_idx)) {
+		hsd->hsd_start_cat_idx = llh->lgh_hdr->llh_cat_idx;
+		hsd->hsd_start_rec_idx = larr->arr_hdr.lrh_index;
+	}
+
+	RETURN(0);
+}
+
+static int mdt_cdt_started_cb(const struct lu_env *env,
+			      struct mdt_device *mdt,
+			      struct llog_handle *llh,
+			      struct llog_agent_req_rec *larr,
+			      struct hsm_scan_data *hsd)
+{
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+	struct hsm_action_item *hai = &larr->arr_hai;
+	struct cdt_agent_req *car;
+	time64_t now = ktime_get_real_seconds();
+	time64_t last;
+	enum changelog_rec_flags clf_flags;
+	int rc;
+
+	if (!hsd->hsd_housekeeping)
+		RETURN(0);
+
+	/* we search for a running request
+	 * error may happen if coordinator crashes or stopped
+	 * with running request
+	 */
+	car = mdt_cdt_find_request(cdt, hai->hai_cookie);
+	if (car == NULL) {
+		last = larr->arr_req_change;
+	} else {
+		last = car->car_req_update;
+	}
+
+	/* test if request too long, if yes cancel it
+	 * the same way the copy tool acknowledge a cancel request */
+	if (now <= last + cdt->cdt_active_req_timeout)
+		GOTO(out_car, rc = 0);
+
+	dump_llog_agent_req_rec("request timed out, start cleaning", larr);
+
+	if (car != NULL) {
+		car->car_req_update = now;
+		mdt_hsm_agent_update_statistics(cdt, 0, 1, 0, &car->car_uuid);
+		/* Remove car from memory list (LU-9075) */
+		mdt_cdt_remove_request(cdt, hai->hai_cookie);
+	}
+
+	/* Emit a changelog record for the failed action.*/
+	clf_flags = 0;
+	hsm_set_cl_error(&clf_flags, ECANCELED);
+
+	switch (hai->hai_action) {
+	case HSMA_ARCHIVE:
+		hsm_set_cl_event(&clf_flags, HE_ARCHIVE);
+		break;
+	case HSMA_RESTORE:
+		hsm_set_cl_event(&clf_flags, HE_RESTORE);
+		break;
+	case HSMA_REMOVE:
+		hsm_set_cl_event(&clf_flags, HE_REMOVE);
+		break;
+	case HSMA_CANCEL:
+		hsm_set_cl_event(&clf_flags, HE_CANCEL);
+		break;
+	default:
+		/* Unknown record type, skip changelog. */
+		clf_flags = 0;
+		break;
+	}
+
+	if (clf_flags != 0)
+		mo_changelog(env, CL_HSM, clf_flags, mdt->mdt_child,
+			     &hai->hai_fid);
+
+	if (hai->hai_action == HSMA_RESTORE)
+		cdt_restore_handle_del(hsd->hsd_mti, cdt, &hai->hai_fid);
+
+	larr->arr_status = ARS_CANCELED;
+	larr->arr_req_change = now;
+	rc = llog_write(env, llh, &larr->arr_hdr, larr->arr_hdr.lrh_index);
+	if (rc < 0) {
+		CERROR("%s: cannot update agent log: rc = %d\n",
+		       mdt_obd_name(mdt), rc);
+		rc = LLOG_DEL_RECORD;
+	}
+
+	/* ct has completed a request, so a slot is available,
+	 * signal the coordinator to find new work */
+	mdt_hsm_cdt_event(cdt);
+out_car:
+	if (car != NULL)
+		mdt_cdt_put_request(car);
+
+	RETURN(rc);
+}
+
+/**
+ *  llog_cat_process() callback, used to:
+ *  - find waiting request and start action
+ *  - purge canceled and done requests
+ * \param env [IN] environment
+ * \param llh [IN] llog handle
+ * \param hdr [IN] llog record
+ * \param data [IN/OUT] cb data = struct hsm_scan_data
+ * \retval 0 success
+ * \retval -ve failure
+ */
+static int mdt_coordinator_cb(const struct lu_env *env,
+			      struct llog_handle *llh,
+			      struct llog_rec_hdr *hdr,
+			      void *data)
+{
+	struct llog_agent_req_rec *larr = (struct llog_agent_req_rec *)hdr;
+	struct hsm_scan_data *hsd = data;
+	struct mdt_device *mdt = hsd->hsd_mti->mti_mdt;
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+	int rc;
+
+	ENTRY;
+
+	if (cdt->cdt_state == CDT_DISABLE)
+		RETURN(-ECANCELED);
+
+	larr = (struct llog_agent_req_rec *)hdr;
+	rc = mdt_cdt_check_rec(larr, larr->arr_hdr.lrh_len);
+	if (rc) {
+		CDEBUG(D_HSM, "%s: bad llog record "DOSTID" idx %d, rc = %d\n",
+		       llh->lgh_ctxt->loc_obd->obd_name,
+		       POSTID(&llh->lgh_id.lgl_oi), larr->arr_hdr.lrh_index,
+		       rc);
+		RETURN(LLOG_DEL_RECORD);
+	}
+	dump_llog_agent_req_rec("mdt_coordinator_cb(): ", larr);
+	switch (larr->arr_status) {
+	case ARS_WAITING:
+		RETURN(mdt_cdt_waiting_cb(env, mdt, llh, larr, hsd));
+	case ARS_STARTED:
+		RETURN(mdt_cdt_started_cb(env, mdt, llh, larr, hsd));
+	default:
+		if (!hsd->hsd_housekeeping)
+			RETURN(0);
+
+		if ((larr->arr_req_change + cdt->cdt_grace_delay) <
+		    ktime_get_real_seconds()) {
+			RETURN(LLOG_DEL_RECORD);
+		}
+
+		RETURN(0);
+	}
+}
+
+static void cdt_crh_free(struct rcu_head *head)
+{
+	struct cdt_restore_handle *crh;
+
+	crh = container_of(head, struct cdt_restore_handle, crh_rcu);
+	OBD_SLAB_FREE_PTR(crh, mdt_hsm_cdt_kmem);
+}
+
+static void
+cdt_crh_put(struct cdt_restore_handle *crh, struct mdt_thread_info *cdt_mti)
+{
+	if (atomic_dec_and_test(&crh->crh_refc)) {
+		/* XXX We pass a NULL object since the restore handle does not
+		 * keep a reference on the object being restored.
+		 */
+		if (lustre_handle_is_used(&crh->crh_lh.mlh_reg_lh))
+			mdt_object_unlock(cdt_mti, NULL, &crh->crh_lh, 1);
+		call_rcu(&crh->crh_rcu, cdt_crh_free);
+	}
+}
+
+static void crh_free_hash(void *vcrh, void *vcdt_mti)
+{
+	struct cdt_restore_handle *crh = vcrh;
+	struct mdt_thread_info *cdt_mti = vcdt_mti;
+
+	/* put last reference */
+	cdt_crh_put(crh, cdt_mti);
+}
+
+static const struct rhashtable_params crh_hash_params = {
+	.key_len	= sizeof(struct lu_fid),
+	.key_offset	= offsetof(struct cdt_restore_handle, crh_fid),
+	.head_offset	= offsetof(struct cdt_restore_handle, crh_hash),
+	.hashfn		= lu_fid_hash,
+	.automatic_shrinking = true,
+};
+
+/* Release the ressource used by the coordinator. Called when the
+ * coordinator is stopping. */
+static void mdt_hsm_cdt_cleanup(struct mdt_device *mdt)
+{
+	struct coordinator		*cdt = &mdt->mdt_coordinator;
+	struct cdt_agent_req		*car, *tmp1;
+	struct hsm_agent		*ha, *tmp2;
+	struct mdt_thread_info		*cdt_mti;
+
+	/* start cleaning */
+	down_write(&cdt->cdt_request_lock);
+	list_for_each_entry_safe(car, tmp1, &cdt->cdt_request_list,
+				 car_request_list) {
+		cfs_hash_del(cdt->cdt_request_cookie_hash,
+			     &car->car_hai.hai_cookie,
+			     &car->car_cookie_hash);
+		list_del(&car->car_request_list);
+		mdt_cdt_put_request(car);
+	}
+	up_write(&cdt->cdt_request_lock);
+
+	down_write(&cdt->cdt_agent_lock);
+	list_for_each_entry_safe(ha, tmp2, &cdt->cdt_agents, ha_list) {
+		list_del(&ha->ha_list);
+		if (ha->ha_archive_cnt != 0)
+			OBD_FREE_PTR_ARRAY(ha->ha_archive_id,
+					   ha->ha_archive_cnt);
+		OBD_FREE_PTR(ha);
+	}
+	up_write(&cdt->cdt_agent_lock);
+
+	cdt_mti = lu_context_key_get(&cdt->cdt_env.le_ctx, &mdt_thread_key);
+	rhashtable_free_and_destroy(&cdt->cdt_restore_hash, crh_free_hash,
+				    cdt_mti);
+	rcu_barrier();
+}
+
+/*
+ * Coordinator state transition table, indexed on enum cdt_states, taking
+ * from and to states. For instance since CDT_INIT to CDT_RUNNING is a
+ * valid transition, cdt_transition[CDT_INIT][CDT_RUNNING] is true.
+ */
+static bool cdt_transition[CDT_STATES_COUNT][CDT_STATES_COUNT] = {
+	/* from -> to:    stopped init   running disable stopping */
+	/* stopped */	{ true,   true,  false,  false,  false },
+	/* init */	{ true,   false, true,   false,  false },
+	/* running */	{ false,  false, true,   true,   true },
+	/* disable */	{ false,  false, true,   true,   true },
+	/* stopping */	{ true,   false, false,  false,  false }
+};
+
+/**
+ * Change coordinator thread state
+ * Some combinations are not valid, so catch them here.
+ *
+ * Returns 0 on success, with old_state set if not NULL, or -EINVAL if
+ * the transition was not possible.
+ */
+static int set_cdt_state_locked(struct coordinator *cdt,
+				enum cdt_states new_state)
+{
+	int rc;
+	enum cdt_states state;
+
+	state = cdt->cdt_state;
+
+	if (cdt_transition[state][new_state]) {
+		cdt->cdt_state = new_state;
+		rc = 0;
+	} else {
+		CDEBUG(D_HSM,
+		       "unexpected coordinator transition, from=%s, to=%s\n",
+		       cdt_mdt_state2str(state), cdt_mdt_state2str(new_state));
+		rc = -EINVAL;
+	}
+
+	return rc;
+}
+
+static int set_cdt_state(struct coordinator *cdt, enum cdt_states new_state)
+{
+	int rc;
+
+	mutex_lock(&cdt->cdt_state_lock);
+	rc = set_cdt_state_locked(cdt, new_state);
+	mutex_unlock(&cdt->cdt_state_lock);
+
+	return rc;
+}
+
+int cdt_getref_try(struct coordinator *cdt)
+{
+	return refcount_inc_not_zero(&cdt->cdt_ref);
+}
+
+void cdt_putref(struct coordinator *cdt)
+{
+	if (refcount_dec_and_test(&cdt->cdt_ref))
+		wake_up(&cdt->cdt_waitq);
+}
+
+static int mdt_hsm_pending_restore(struct mdt_thread_info *mti);
+
+static int cdt_start_pending_restore(struct mdt_device *mdt,
+				     struct coordinator *cdt)
+{
+	struct mdt_thread_info *cdt_mti;
+	unsigned int i = 0;
+	int rc;
+
+	/* wait until MDD initialize hsm actions llog */
+	while (!test_bit(MDT_FL_CFGLOG, &mdt->mdt_state) && i < obd_timeout) {
+		schedule_timeout_interruptible(cfs_time_seconds(1));
+		if (kthread_should_stop())
+			return -ESHUTDOWN;
+		i++;
+	}
+	if (!test_bit(MDT_FL_CFGLOG, &mdt->mdt_state))
+		CWARN("%s: trying to init HSM before MDD\n", mdt_obd_name(mdt));
+
+	/* set up list of started restore requests */
+	cdt_mti = lu_context_key_get(&cdt->cdt_env.le_ctx, &mdt_thread_key);
+	rc = mdt_hsm_pending_restore(cdt_mti);
+	if (rc)
+		CERROR("%s: cannot take the layout locks needed for registered restore: %d\n",
+		       mdt_obd_name(mdt), rc);
+
+	return rc;
+}
+
+/**
+ * coordinator thread
+ * \param data [IN] obd device
+ * \retval 0 success
+ * \retval -ve failure
+ */
+static int mdt_coordinator(void *data)
+{
+	struct mdt_thread_info	*mti = data;
+	struct mdt_device	*mdt = mti->mti_mdt;
+	struct coordinator	*cdt = &mdt->mdt_coordinator;
+	struct hsm_scan_data	 hsd = { NULL };
+	time64_t		 last_housekeeping = 0;
+	int rc;
+	ENTRY;
+
+	CDEBUG(D_HSM, "%s: coordinator thread starting, pid=%d\n",
+	       mdt_obd_name(mdt), current->pid);
+
+	hsd.hsd_mti = mti;
+	obd_uuid2fsname(hsd.hsd_fsname, mdt_obd_name(mdt),
+			sizeof(hsd.hsd_fsname));
+
+	set_cdt_state(cdt, CDT_RUNNING);
+
+	/* Inform mdt_hsm_cdt_start(). */
+	wake_up(&cdt->cdt_waitq);
+
+	/* this initilazes cdt_last_cookie too */
+	rc = cdt_start_pending_restore(mdt, cdt);
+	if (rc < 0 || kthread_should_stop())
+		GOTO(fail_to_start, rc);
+
+	refcount_set(&cdt->cdt_ref, 1);
+
+	while (1) {
+		int i;
+		u32 start_cat_idx;
+		u32 start_rec_idx;
+
+		if (cdt->cdt_state == CDT_DISABLE) {
+			cdt->cdt_idle = true;
+			wake_up(&cdt->cdt_cancel_all);
+		}
+		/* Limit execution of the expensive requests traversal
+		 * to at most one second. This prevents repeatedly
+		 * locking/unlocking the catalog for each request
+		 * and preventing other HSM operations from happening
+		 */
+		wait_event_interruptible_timeout(cdt->cdt_waitq,
+						 kthread_should_stop() ||
+						 cdt->cdt_wakeup_coordinator,
+						 cfs_time_seconds(1));
+
+		cdt->cdt_wakeup_coordinator = false;
+		CDEBUG(D_HSM, "coordinator resumes\n");
+
+		if (kthread_should_stop()) {
+			CDEBUG(D_HSM, "Coordinator stops\n");
+
+			/* Drop the running ref */
+			cdt_putref(cdt);
+			/* Wait threads to finish */
+			wait_event(cdt->cdt_waitq,
+				   refcount_read(&cdt->cdt_ref) == 0);
+			rc = 0;
+			break;
+		}
+
+		/* if coordinator is suspended continue to wait */
+		if (cdt->cdt_state == CDT_DISABLE) {
+			CDEBUG(D_HSM, "disable state, coordinator sleeps\n");
+			continue;
+		}
+
+		cdt->cdt_idle = false;
+		/* If no event, and no housekeeping to do, continue to
+		 * wait. */
+		if (last_housekeeping + cdt->cdt_loop_period <=
+		    ktime_get_real_seconds()) {
+			last_housekeeping = ktime_get_real_seconds();
+			hsd.hsd_housekeeping = true;
+			start_cat_idx = 0;
+			start_rec_idx = 0;
+		} else if (cdt->cdt_event) {
+			hsd.hsd_housekeeping = false;
+			start_cat_idx = hsd.hsd_start_cat_idx;
+			start_rec_idx = hsd.hsd_start_rec_idx;
+		} else {
+			continue;
+		}
+
+		cdt->cdt_event = false;
+
+		CDEBUG(D_HSM, "coordinator starts reading llog\n");
+
+		if (hsd.hsd_request_len != cdt->cdt_max_requests) {
+			/* cdt_max_requests has changed,
+			 * we need to allocate a new buffer
+			 */
+			struct hsm_scan_request *tmp = NULL;
+			u64 max_requests = cdt->cdt_max_requests;
+
+			OBD_ALLOC_PTR_ARRAY_LARGE(tmp, max_requests);
+			if (!tmp) {
+				CERROR("%s: error resizing buffer to %llu, keep %llu: rc = %d\n",
+				       mdt_obd_name(mdt), max_requests,
+				       hsd.hsd_request_len, -ENOMEM);
+			} else {
+				if (hsd.hsd_request != NULL)
+					OBD_FREE_PTR_ARRAY_LARGE(
+						hsd.hsd_request,
+						hsd.hsd_request_len);
+
+				hsd.hsd_request_len = max_requests;
+				hsd.hsd_request = tmp;
+			}
+		}
+
+		hsd.hsd_action_count = 0;
+		hsd.hsd_request_count = 0;
+		hsd.hsd_one_restore = false;
+
+		rc = cdt_llog_process(mti->mti_env, mdt, mdt_coordinator_cb,
+				      &hsd, start_cat_idx, start_rec_idx);
+		if (rc < 0)
+			goto clean_cb_alloc;
+
+		CDEBUG(D_HSM, "found %llu requests to send\n",
+		       hsd.hsd_request_count);
+
+		if (list_empty(&cdt->cdt_agents)) {
+			CDEBUG(D_HSM, "no agent available, "
+				      "coordinator sleeps\n");
+			/* reset HSM scanning index range. */
+			hsd.hsd_start_cat_idx = start_cat_idx;
+			hsd.hsd_start_rec_idx = start_rec_idx;
+			goto clean_cb_alloc;
+		}
+
+		/* here hsd contains a list of requests to be started */
+		for (i = 0; i < hsd.hsd_request_count; i++) {
+			struct hsm_scan_request *request = &hsd.hsd_request[i];
+
+			/* still room for work ? */
+			if (atomic_read(&cdt->cdt_request_count) >=
+			    cdt->cdt_max_requests)
+				break;
+
+			/* if cancels happen during llog process or sending
+			 * assumes that other records are cancelled
+			 */
+			if (cdt->cdt_state == CDT_DISABLE)
+				goto clean_cb_alloc;
+
+			rc = mdt_hsm_agent_send(mti, request, 0);
+			/* if failure, we suppose it is temporary
+			 * if the copy tool failed to do the request
+			 * it has to use hsm_progress
+			 */
+
+			/* TODO: narrow down the HSM action range that already
+			 * scanned accroding to the cookies when a failure
+			 * occurs.
+			 */
+			if (rc) {
+				hsd.hsd_start_cat_idx = start_cat_idx;
+				hsd.hsd_start_rec_idx = start_rec_idx;
+			}
+		}
+
+clean_cb_alloc:
+		/* free hal allocated by callback */
+		for (i = 0; i < hsd.hsd_request_count; i++) {
+			struct hsm_scan_request *request = &hsd.hsd_request[i];
+			struct cdt_agent_req *pos;
+		        struct cdt_agent_req *tmp;
+
+			list_for_each_entry_safe(pos, tmp, &request->hsr_cars,
+						 car_scan_list) {
+				list_del_init(&pos->car_scan_list);
+				mdt_cdt_put_request(pos);
+			}
+
+		}
+	}
+
+	if (hsd.hsd_request != NULL)
+		OBD_FREE_PTR_ARRAY_LARGE(hsd.hsd_request, hsd.hsd_request_len);
+
+fail_to_start:
+	mdt_hsm_cdt_cleanup(mdt);
+
+	if (rc != 0)
+		CERROR("%s: coordinator thread exiting, process=%d, rc=%d\n",
+		       mdt_obd_name(mdt), current->pid, rc);
+	else
+		CDEBUG(D_HSM, "%s: coordinator thread exiting, process=%d,"
+			      " no error\n",
+		       mdt_obd_name(mdt), current->pid);
+
+	/* Clear cdt_task under lock to avoid race with mdt_hsm_cdt_stop() */
+	mutex_lock(&cdt->cdt_state_lock);
+	cdt->cdt_task = NULL;
+	set_cdt_state_locked(cdt, CDT_STOPPED);
+	mutex_unlock(&cdt->cdt_state_lock);
+
+	/* Inform mdt_hsm_cdt_stop(). */
+	wake_up(&cdt->cdt_waitq);
+
+	RETURN(rc);
+}
+
+/**
+ * register a new HSM restore handle for a file and take EX lock on the layout
+ * \param mti [IN] thread info
+ * \param cdt [IN] coordinator
+ * \param fid [IN] fid of the file to restore
+ * \param he  [IN] HSM extent
+ * \retval 0 success
+ * \retval 1 restore handle already exists for the fid
+ * \retval -ve failure
+ */
+int cdt_restore_handle_add(struct mdt_thread_info *mti, struct coordinator *cdt,
+			   const struct lu_fid *fid,
+			   const struct hsm_extent *he)
+{
+	struct cdt_restore_handle *crh;
+	struct mdt_object *obj;
+	int rc;
+	ENTRY;
+
+	OBD_SLAB_ALLOC_PTR(crh, mdt_hsm_cdt_kmem);
+	if (crh == NULL)
+		RETURN(-ENOMEM);
+
+	crh->crh_fid = *fid;
+	/* in V1 all file is restored
+	 * crh->extent.start = he->offset;
+	 * crh->extent.end = he->offset + he->length;
+	 */
+	crh->crh_extent.start = 0;
+	crh->crh_extent.end = he->length;
+	atomic_set(&crh->crh_refc, 2);
+
+	rc = rhashtable_lookup_insert_fast(&cdt->cdt_restore_hash,
+					   &crh->crh_hash, crh_hash_params);
+	if (rc) {
+		OBD_SLAB_FREE_PTR(crh, mdt_hsm_cdt_kmem);
+		RETURN(rc);
+	}
+
+	/* get the layout lock */
+	obj = mdt_object_find_lock(mti, &crh->crh_fid, &crh->crh_lh,
+				   MDS_INODELOCK_LAYOUT, LCK_EX);
+	if (IS_ERR(obj)) {
+		rc = rhashtable_remove_fast(&cdt->cdt_restore_hash,
+					    &crh->crh_hash, crh_hash_params);
+		/* rc < 0 means it has been removed in a parallel thread.
+		 * This shouldn't happen by design as at current stage record
+		 * hasn't been added in llog yet.
+		 */
+		if (!rc)
+			cdt_crh_put(crh, mti);
+		cdt_crh_put(crh, mti);
+
+		RETURN(PTR_ERR(obj));
+	}
+
+	/* We do not keep a reference on the object during the restore
+	 * which can be very long.
+	 */
+	mdt_object_put(mti->mti_env, obj);
+	cdt_crh_put(crh, mti);
+	RETURN(rc);
+}
+
+/**
+ * lookup a restore handle by FID
+ * \param cdt [IN] coordinator
+ * \param fid [IN] FID
+ * \retval true cdt_restore_handle found
+ * \retval false not found
+ */
+bool cdt_restore_handle_exists(struct coordinator *cdt,
+			       const struct lu_fid *fid)
+{
+	return rhashtable_lookup_fast(&cdt->cdt_restore_hash, fid,
+				      crh_hash_params);
+}
+
+void cdt_restore_handle_del(struct mdt_thread_info *mti,
+			    struct coordinator *cdt, const struct lu_fid *fid)
+{
+	struct cdt_restore_handle *crh;
+
+	/* give back layout lock */
+	rcu_read_lock();
+	crh = rhashtable_lookup(&cdt->cdt_restore_hash, fid, crh_hash_params);
+	if (crh &&
+	    rhashtable_remove_fast(&cdt->cdt_restore_hash, &crh->crh_hash,
+				   crh_hash_params))
+		crh = NULL;
+	rcu_read_unlock();
+
+	/* crh has been removed in a parallel thread */
+	if (crh == NULL)
+		return;
+
+	cdt_crh_put(crh, mti);
+}
+
+/**
+ * data passed to llog_cat_process() callback
+ * to scan requests and take actions
+ */
+struct hsm_restore_data {
+	struct mdt_thread_info	*hrd_mti;
+};
+
+/**
+ *  llog_cat_process() callback, used to:
+ *  - find restore request and allocate the restore handle
+ * \param env [IN] environment
+ * \param llh [IN] llog handle
+ * \param hdr [IN] llog record
+ * \param data [IN/OUT] cb data = struct hsm_restore_data
+ * \retval 0 success
+ * \retval -ve failure
+ */
+static int hsm_restore_cb(const struct lu_env *env,
+			  struct llog_handle *llh,
+			  struct llog_rec_hdr *hdr, void *data)
+{
+	struct llog_agent_req_rec	*larr;
+	struct hsm_restore_data		*hrd;
+	struct hsm_action_item		*hai;
+	struct mdt_thread_info		*mti;
+	struct coordinator		*cdt;
+	int rc;
+	ENTRY;
+
+	hrd = data;
+	mti = hrd->hrd_mti;
+	cdt = &mti->mti_mdt->mdt_coordinator;
+
+	larr = (struct llog_agent_req_rec *)hdr;
+	hai = &larr->arr_hai;
+
+	if (hai->hai_cookie > atomic64_read(&cdt->cdt_last_cookie)) {
+		/* update the cookie to avoid collision */
+		atomic64_set(&cdt->cdt_last_cookie, hai->hai_cookie);
+	}
+
+	if (hai->hai_action != HSMA_RESTORE ||
+	    agent_req_in_final_state(larr->arr_status))
+		RETURN(0);
+
+	/* restore request not in a final state */
+
+	/* force replay of restore requests left in started state from previous
+	 * CDT context, to be canceled later if finally found to be incompatible
+	 * when being re-started */
+	if (larr->arr_status == ARS_STARTED) {
+		larr->arr_status = ARS_WAITING;
+		larr->arr_req_change = ktime_get_real_seconds();
+		rc = llog_write(env, llh, hdr, hdr->lrh_index);
+		if (rc != 0)
+			GOTO(out, rc);
+	}
+
+	rc = cdt_restore_handle_add(mti, cdt, &hai->hai_fid, &hai->hai_extent);
+	if (rc == -EEXIST) {
+		CWARN("%s: duplicate restore record for fid="DFID" found in the llog: rc = %d\n",
+		      mdt_obd_name(mti->mti_mdt), PFID(&hai->hai_fid), rc);
+		rc = 0;
+	}
+out:
+	RETURN(rc);
+}
+
+/**
+ * restore coordinator state at startup
+ * the goal is to take a layout lock for each registered restore request
+ * \param mti [IN] context
+ */
+static int mdt_hsm_pending_restore(struct mdt_thread_info *mti)
+{
+	struct coordinator *cdt = &mti->mti_mdt->mdt_coordinator;
+	struct hsm_restore_data	 hrd;
+	int rc;
+	ENTRY;
+
+	hrd.hrd_mti = mti;
+
+	rc = cdt_llog_process(mti->mti_env, mti->mti_mdt, hsm_restore_cb, &hrd,
+			      0, 0);
+
+	if (rc < 0)
+		RETURN(rc);
+
+	/* no pending request found -> start a new session */
+	if (!atomic64_read(&cdt->cdt_last_cookie))
+		atomic64_set(&cdt->cdt_last_cookie, ktime_get_real_seconds());
+
+	RETURN(0);
+}
+
+int hsm_init_ucred(struct lu_ucred *uc)
+{
+	ENTRY;
+	uc->uc_valid = UCRED_OLD;
+	uc->uc_o_uid = 0;
+	uc->uc_o_gid = 0;
+	uc->uc_o_fsuid = 0;
+	uc->uc_o_fsgid = 0;
+	uc->uc_uid = 0;
+	uc->uc_gid = 0;
+	uc->uc_fsuid = 0;
+	uc->uc_fsgid = 0;
+	uc->uc_suppgids[0] = -1;
+	uc->uc_suppgids[1] = -1;
+	uc->uc_cap = cap_combine(CAP_FS_SET, CAP_NFSD_SET);
+	uc->uc_umask = 0777;
+	uc->uc_ginfo = NULL;
+	uc->uc_identity = NULL;
+	/* always record internal HSM activity if also enabled globally */
+	uc->uc_enable_audit = 1;
+	/* do not let rbac interfere with HSM internal processing */
+	uc->uc_rbac_file_perms = 1;
+	uc->uc_rbac_dne_ops = 1;
+	uc->uc_rbac_quota_ops = 1;
+	uc->uc_rbac_byfid_ops = 1;
+	uc->uc_rbac_chlg_ops = 1;
+	uc->uc_rbac_fscrypt_admin = 1;
+	uc->uc_rbac_server_upcall = 1;
+	uc->uc_rbac_ignore_root_prjquota = 1;
+	uc->uc_rbac_hsm_ops = 1;
+	uc->uc_rbac_local_admin = 1;
+	uc->uc_rbac_pool_quota_ops = 1;
+	uc->uc_rbac_lqa_quota_ops = 1;
+	uc->uc_rbac_projid_set = 1;
+	uc->uc_rbac_foreign_ops = 1;
+
+	RETURN(0);
+}
+
+#define HAI_DATA_SIZE_EST (128)
+#define HAI_SIZE_EST (sizeof(struct hsm_action_item) + HAI_DATA_SIZE_EST)
+#define HSM_ACTIVE_REQ_SIZE_EST (sizeof(struct cdt_agent_req) + \
+				 sizeof(struct hsm_mem_req_rec) + \
+				 HAI_DATA_SIZE_EST)
+/* mdt_coordinatoor prealloc: max_requests * sizeof(struct hsm_scan_request) */
+#define HSM_SCAN_REQ_SIZE (sizeof(struct hsm_scan_request))
+
+/* The memory footprint estimation is the sum of the memory needed to build hal
+ * requests and the one needed to cache the active requests.
+ */
+#define HSM_REQ_MEM_FOOTPRINT_EST (HSM_SCAN_REQ_SIZE + HSM_ACTIVE_REQ_SIZE_EST)
+
+static u64 max_requests_total;
+static DEFINE_SPINLOCK(max_requests_total_lock);
+
+/* Limit total max_requests to 1/8 total memory */
+static int mdt_hsm_max_requests_update(struct coordinator *cdt, u64 new)
+{
+	u64 max_ram = compat_totalram_pages() * PAGE_SIZE / 8;
+	int rc = 0;
+
+	if (new == cdt->cdt_max_requests)
+		return 0;
+
+	spin_lock(&max_requests_total_lock);
+	if (new < cdt->cdt_max_requests) {
+		LASSERT(max_requests_total >= cdt->cdt_max_requests - new);
+		max_requests_total -= cdt->cdt_max_requests - new;
+		cdt->cdt_max_requests = new;
+	} else if (new > cdt->cdt_max_requests) {
+		u64 max_ram_reqs = max_ram / HSM_REQ_MEM_FOOTPRINT_EST;
+		u64 to_add = new - cdt->cdt_max_requests;
+		struct mdt_device *mdt = container_of(cdt, typeof(*mdt),
+						      mdt_coordinator);
+
+		if (to_add > max_ram_reqs ||
+		    max_requests_total > max_ram_reqs - to_add) {
+			rc = -ENOMEM;
+			LCONSOLE_WARN("%s: No more memory to set HSM max_requests=%llu (max request memory: %lluMB, current total %llu/%llu): rc = %d\n",
+				      mdt_obd_name(mdt), new, max_ram >> 20,
+				      max_requests_total, max_ram_reqs, rc);
+			to_add = max_ram_reqs - max_requests_total;
+		}
+
+		max_requests_total += to_add;
+		cdt->cdt_max_requests += to_add;
+
+		/* no memory available for a new MDT -> allow 1 more request */
+		if (!cdt->cdt_max_requests) {
+			max_requests_total++;
+			cdt->cdt_max_requests++;
+		}
+	}
+	spin_unlock(&max_requests_total_lock);
+
+	return rc;
+}
+
+/**
+ * initialize coordinator struct
+ * \param mdt [IN] device
+ * \retval 0 success
+ * \retval -ve failure
+ */
+int mdt_hsm_cdt_init(struct mdt_device *mdt)
+{
+	struct coordinator	*cdt = &mdt->mdt_coordinator;
+	struct mdt_thread_info	*cdt_mti = NULL;
+	int			 rc;
+	ENTRY;
+
+	init_waitqueue_head(&cdt->cdt_waitq);
+	init_waitqueue_head(&cdt->cdt_cancel_all);
+	init_rwsem(&cdt->cdt_agent_lock);
+	init_rwsem(&cdt->cdt_request_lock);
+	mutex_init(&cdt->cdt_state_lock);
+	set_cdt_state(cdt, CDT_STOPPED);
+
+	INIT_LIST_HEAD(&cdt->cdt_request_list);
+	INIT_LIST_HEAD(&cdt->cdt_agents);
+
+	cdt->cdt_request_cookie_hash = cfs_hash_create("REQUEST_COOKIE_HASH",
+						       CFS_HASH_BITS_MIN,
+						       CFS_HASH_BITS_MAX,
+						       CFS_HASH_BKT_BITS,
+						       0 /* extra bytes */,
+						       CFS_HASH_MIN_THETA,
+						       CFS_HASH_MAX_THETA,
+						&cdt_request_cookie_hash_ops,
+						       CFS_HASH_DEFAULT);
+	if (cdt->cdt_request_cookie_hash == NULL)
+		RETURN(-ENOMEM);
+
+	rc = lu_env_init(&cdt->cdt_env, LCT_MD_THREAD);
+	if (rc < 0)
+		GOTO(out_request_cookie_hash, rc);
+
+	/* for mdt_ucred(), lu_ucred stored in lu_ucred_key */
+	rc = lu_context_init(&cdt->cdt_session, LCT_SERVER_SESSION);
+	if (rc < 0)
+		GOTO(out_env, rc);
+
+	lu_context_enter(&cdt->cdt_session);
+	cdt->cdt_env.le_ses = &cdt->cdt_session;
+
+	cdt_mti = lu_context_key_get(&cdt->cdt_env.le_ctx, &mdt_thread_key);
+	LASSERT(cdt_mti != NULL);
+
+	cdt_mti->mti_env = &cdt->cdt_env;
+	cdt_mti->mti_mdt = mdt;
+
+	hsm_init_ucred(mdt_ucred(cdt_mti));
+
+	/* default values for sysfs tunnables
+	 * can be override by MGS conf */
+	cdt->cdt_default_archive_id = 1;
+	cdt->cdt_grace_delay = 60;
+	cdt->cdt_loop_period = 10;
+	cdt->cdt_policy = CDT_DEFAULT_POLICY;
+	cdt->cdt_active_req_timeout = 3600;
+
+	cdt->cdt_max_requests = 0;
+	mdt_hsm_max_requests_update(cdt, 3);
+
+	/* by default do not remove archives on last unlink */
+	cdt->cdt_remove_archive_on_last_unlink = false;
+	cdt->cdt_idle = true;
+
+	RETURN(0);
+
+out_env:
+	lu_env_fini(&cdt->cdt_env);
+out_request_cookie_hash:
+	cfs_hash_putref(cdt->cdt_request_cookie_hash);
+	cdt->cdt_request_cookie_hash = NULL;
+
+	return rc;
+}
+
+/**
+ * free a coordinator thread
+ * \param mdt [IN] device
+ */
+int  mdt_hsm_cdt_fini(struct mdt_device *mdt)
+{
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+	ENTRY;
+
+	mdt_hsm_max_requests_update(cdt, 0);
+
+	lu_context_exit(cdt->cdt_env.le_ses);
+	lu_context_fini(cdt->cdt_env.le_ses);
+
+	lu_env_fini(&cdt->cdt_env);
+
+	cfs_hash_putref(cdt->cdt_request_cookie_hash);
+	cdt->cdt_request_cookie_hash = NULL;
+
+	RETURN(0);
+}
+
+/**
+ * start a coordinator thread
+ * \param mdt [IN] device
+ * \retval 0 success
+ * \retval -ve failure
+ */
+static int mdt_hsm_cdt_start(struct mdt_device *mdt)
+{
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+	struct mdt_thread_info *cdt_mti;
+	int rc;
+	struct task_struct *task;
+	ENTRY;
+
+	rc = set_cdt_state(cdt, CDT_INIT);
+	if (rc) {
+		CERROR("%s: Coordinator already started or stopping\n",
+		       mdt_obd_name(mdt));
+		RETURN(-EALREADY);
+	}
+
+	BUILD_BUG_ON(BIT(CDT_POLICY_SHIFT_COUNT - 1) != CDT_POLICY_LAST);
+	cdt->cdt_policy = CDT_DEFAULT_POLICY;
+
+	atomic_set(&cdt->cdt_request_count, 0);
+	atomic_set(&cdt->cdt_archive_count, 0);
+	atomic_set(&cdt->cdt_restore_count, 0);
+	atomic_set(&cdt->cdt_remove_count, 0);
+	cdt->cdt_user_request_mask = (1UL << HSMA_RESTORE);
+	cdt->cdt_group_request_mask = (1UL << HSMA_RESTORE);
+	cdt->cdt_other_request_mask = (1UL << HSMA_RESTORE);
+	rc = rhashtable_init(&cdt->cdt_restore_hash, &crh_hash_params);
+	if (rc) {
+		CERROR("%s: failed to create cdt_restore hash: rc = %d\n",
+		       mdt_obd_name(mdt), rc);
+		set_cdt_state(cdt, CDT_STOPPED);
+		RETURN(rc);
+	}
+
+	/* to avoid deadlock when start is made through sysfs
+	 * sysfs entries are created by the coordinator thread
+	 */
+	if (mdt->mdt_bottom->dd_rdonly)
+		RETURN(0);
+
+	cdt_mti = lu_context_key_get(&cdt->cdt_env.le_ctx, &mdt_thread_key);
+	task = kthread_run(mdt_coordinator, cdt_mti, "hsm_cdtr");
+	if (IS_ERR(task)) {
+		rc = PTR_ERR(task);
+		set_cdt_state(cdt, CDT_STOPPED);
+		CERROR("%s: error starting coordinator thread: %d\n",
+		       mdt_obd_name(mdt), rc);
+	} else {
+		/* Set task under lock to avoid race with mdt_hsm_cdt_stop() */
+		mutex_lock(&cdt->cdt_state_lock);
+		cdt->cdt_task = task;
+		mutex_unlock(&cdt->cdt_state_lock);
+		wait_event(cdt->cdt_waitq, cdt->cdt_state != CDT_INIT);
+		CDEBUG(D_HSM, "%s: coordinator thread started\n",
+		       mdt_obd_name(mdt));
+		rc = 0;
+	}
+
+	RETURN(rc);
+}
+
+/**
+ * stop a coordinator thread
+ * \param mdt [IN] device
+ */
+int mdt_hsm_cdt_stop(struct mdt_device *mdt)
+{
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+	struct task_struct *task;
+	int rc;
+
+	ENTRY;
+
+	/* stop coordinator thread */
+	rc = set_cdt_state(cdt, CDT_STOPPING);
+	if (rc)
+		RETURN(rc);
+
+	/* Get task pointer under lock to avoid race with thread exit */
+	mutex_lock(&cdt->cdt_state_lock);
+	task = cdt->cdt_task;
+	if (task)
+		cdt->cdt_task = NULL;
+	mutex_unlock(&cdt->cdt_state_lock);
+
+	/* Only call kthread_stop if we have a valid task */
+	if (task)
+		kthread_stop(task);
+
+	rc = wait_event_interruptible(cdt->cdt_waitq,
+				      cdt->cdt_state == CDT_STOPPED);
+	if (rc)
+		RETURN(-EINTR);
+
+	RETURN(0);
+}
+
+static int mdt_hsm_set_exists(struct mdt_thread_info *mti,
+			      const struct lu_fid *fid,
+			      u32 archive_id)
+{
+	struct mdt_object *obj;
+	struct md_hsm mh;
+	int rc;
+
+	obj = mdt_hsm_get_md_hsm(mti, fid, &mh);
+	if (IS_ERR(obj))
+		GOTO(out, rc = PTR_ERR(obj));
+
+	if (mh.mh_flags & HS_EXISTS &&
+	    mh.mh_arch_id == archive_id)
+		GOTO(out_obj, rc = 0);
+
+	mh.mh_flags |= HS_EXISTS;
+	mh.mh_arch_id = archive_id;
+	rc = mdt_hsm_attr_set(mti, obj, &mh);
+
+out_obj:
+	mdt_object_put(mti->mti_env, obj);
+out:
+	return rc;
+}
+
+/**
+ * register all agent requests from a scan phase
+ * \param mti [IN] context
+ * \param rq [IN] request
+ * \param uuid [OUT] in case of CANCEL, the uuid of the agent
+ *  which is running the CT
+ * \retval 0 success
+ * \retval -ve failure
+ */
+int mdt_hsm_add_hsr(struct mdt_thread_info *mti, struct hsm_scan_request *rq,
+		    struct obd_uuid *uuid)
+{
+	struct mdt_device	*mdt = mti->mti_mdt;
+	struct coordinator	*cdt = &mdt->mdt_coordinator;
+	struct cdt_agent_req *car;
+	struct hsm_mem_req_rec	*hmm;
+	struct hsm_action_item	*hai;
+	int			 rc = 0;
+	ENTRY;
+
+	/* register request in memory list */
+	list_for_each_entry(car, &rq->hsr_cars, car_scan_list) {
+		hmm = car->car_hmm;
+		if (hmm->mr_rec.arr_status == ARS_FAILED)
+			continue;
+
+		hai = &car->car_hai;
+
+		/* in case of a cancel request, we first mark the ondisk
+		 * record of the request we want to stop as canceled
+		 * this does not change the cancel record
+		 * it will be done when updating the request status
+		 */
+		if (hai->hai_action == HSMA_CANCEL) {
+			struct cdt_agent_req *orig;
+			struct hsm_action_item *h;
+
+			/* find the running request to set it canceled */
+			orig = mdt_cdt_find_request(cdt, hai->hai_cookie);
+			if (!orig)
+				continue;
+
+			h = &orig->car_hai;
+			if (orig->car_cancel) {
+				CDEBUG(D_HSM,
+				       "%s: %llx already canceled %s "DFID"\n",
+				       mdt_obd_name(mdt), h->hai_cookie,
+				       hsm_copytool_action2name(h->hai_action),
+				       PFID(&h->hai_fid));
+				mdt_cdt_put_request(orig);
+				continue;
+			}
+			orig->car_hmm->mr_rec.arr_status = ARS_CANCELED;
+
+			rc = mdt_hsm_agent_modify_record(mti->mti_env, mdt,
+							 orig->car_hmm);
+
+			if (rc) {
+				CERROR("%s: modify record failed, cannot update status to %s for cookie %#llx : rc = %d\n",
+				       mdt_obd_name(mdt),
+				       agent_req_status2name(ARS_CANCELED),
+				       hai->hai_cookie, rc);
+				mdt_cdt_put_request(orig);
+				GOTO(out, rc);
+			}
+
+			/* orig holding cancel request orig->car_cancel */
+			mdt_cdt_get_request(car);
+			/* uuid has to be changed to the one running the
+			 * request to cancel
+			 */
+			*uuid = orig->car_uuid;
+			car->car_uuid = orig->car_uuid;
+			orig->car_cancel = car;
+			continue;
+		}
+
+		if (hai->hai_action == HSMA_ARCHIVE) {
+			rc = mdt_hsm_set_exists(mti, &hai->hai_fid,
+						hsr_get_archive_id(rq));
+			if (rc == -ENOENT)
+				continue;
+			else if (rc < 0)
+				GOTO(out, rc);
+		}
+
+		car->car_uuid = *uuid;
+		rc = mdt_cdt_add_request(cdt, car);
+		if (rc)
+			break;
+	}
+out:
+	RETURN(rc);
+}
+
+/**
+ * swap layouts between 2 fids
+ * \param mti [IN] context
+ * \param obj [IN]
+ * \param dfid [IN]
+ * \param mh_common [IN] MD HSM
+ */
+static int hsm_swap_layouts(struct mdt_thread_info *mti,
+			    struct mdt_object *obj, const struct lu_fid *dfid,
+			    struct md_hsm *mh_common)
+{
+	struct mdt_object	*dobj;
+	struct mdt_lock_handle	*dlh;
+	int			 rc;
+	ENTRY;
+
+	if (!mdt_object_exists(obj))
+		GOTO(out, rc = -ENOENT);
+
+	/* we already have layout lock on obj so take only
+	 * on dfid */
+	dlh = &mti->mti_lh[MDT_LH_OLD];
+	dobj = mdt_object_find_lock(mti, dfid, dlh, MDS_INODELOCK_LAYOUT,
+				    LCK_EX);
+	if (IS_ERR(dobj))
+		GOTO(out, rc = PTR_ERR(dobj));
+
+	/* if copy tool closes the volatile before sending the final
+	 * progress through llapi_hsm_copy_end(), all the objects
+	 * are removed and mdd_swap_layout LBUG */
+	if (!mdt_object_exists(dobj)) {
+		CERROR("%s: Copytool has closed volatile file "DFID"\n",
+		       mdt_obd_name(mti->mti_mdt), PFID(dfid));
+		GOTO(out_dobj, rc = -ENOENT);
+	}
+	/* Since we only handle restores here, unconditionally use
+	 * SWAP_LAYOUTS_MDS_HSM flag to ensure original layout will
+	 * be preserved in case of failure during swap_layout and not
+	 * leave a file in an intermediate but incoherent state.
+	 * But need to setup HSM xattr of data FID before, reuse
+	 * mti and mh presets for FID in hsm_cdt_request_completed(),
+	 * only need to clear RELEASED and DIRTY.
+	 */
+	mh_common->mh_flags &= ~(HS_RELEASED | HS_DIRTY);
+	rc = mdt_hsm_attr_set(mti, dobj, mh_common);
+	if (rc)
+		GOTO(out_dobj, rc);
+
+	rc = mo_swap_layouts(mti->mti_env, mdt_object_child(obj),
+			     mdt_object_child(dobj), 0, 0, 0);
+	if (rc)
+		GOTO(out_dobj, rc);
+
+	rc = mdt_lsom_downgrade(mti, obj);
+	if (rc)
+		CDEBUG(D_INODE,
+		       "%s: File fid="DFID" SOM downgrade failed, rc = %d\n",
+		       mdt_obd_name(mti->mti_mdt),
+		       PFID(mdt_object_fid(obj)), rc);
+out_dobj:
+	mdt_object_unlock_put(mti, dobj, dlh, 1);
+out:
+	RETURN(rc);
+}
+
+/**
+ * update status of a completed request
+ * \param mti [IN] context
+ * \param pgs [IN] progress of the copy tool
+ * \retval 0 success
+ * \retval -ve failure
+ */
+static int hsm_cdt_request_completed(struct mdt_thread_info *mti,
+				     struct hsm_progress_kernel *pgs,
+				     const struct cdt_agent_req *car,
+				     enum agent_req_status *status)
+{
+	const struct lu_env *env = mti->mti_env;
+	struct mdt_device *mdt = mti->mti_mdt;
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+	struct mdt_lock_handle *mdlh = &mti->mti_lh[MDT_LH_LOCAL];
+	struct mdt_object *obj = NULL;
+	enum changelog_rec_flags clf_flags = 0;
+	struct md_hsm mh = { 0 };
+	bool is_mh_changed;
+	bool need_changelog = true;
+	int rc = 0;
+
+	ENTRY;
+	/* default is to retry */
+	*status = ARS_WAITING;
+
+	/* find object by FID, mdt_hsm_get_md_hsm() returns obj or err
+	 * if error/removed continue anyway to get correct reporting done */
+	obj = mdt_hsm_get_md_hsm_lock(mti, &car->car_hai.hai_fid, &mh,
+				      mdlh, LCK_PW);
+	/* we will update MD HSM only if needed */
+	is_mh_changed = false;
+
+	/* no need to change mh->mh_arch_id
+	 * mdt_hsm_get_md_hsm() got it from disk and it is still valid
+	 */
+	if (pgs->hpk_errval != 0) {
+		switch (pgs->hpk_errval) {
+		case ENOSYS:
+			/* the copy tool does not support cancel
+			 * so the cancel request is failed
+			 * As we cannot distinguish a cancel progress
+			 * from another action progress (they have the
+			 * same cookie), we suppose here the CT returns
+			 * ENOSYS only if does not support cancel
+			 */
+			/* this can also happen when cdt calls it to
+			 * for a timed out request */
+			*status = ARS_FAILED;
+			/* to have a cancel event in changelog */
+			pgs->hpk_errval = ECANCELED;
+			break;
+		case ECANCELED:
+			/* the request record has already been set to
+			 * ARS_CANCELED, this set the cancel request
+			 * to ARS_SUCCEED */
+			*status = ARS_SUCCEED;
+			break;
+		default:
+			/* retry only if current policy or requested, and
+			 * object is not on error/removed */
+			*status = (cdt->cdt_policy & CDT_NORETRY_ACTION ||
+				   !(pgs->hpk_flags & HP_FLAG_RETRY) ||
+				   IS_ERR(obj)) ? ARS_FAILED : ARS_WAITING;
+			break;
+		}
+
+		rc = hsm_set_cl_error(&clf_flags, pgs->hpk_errval);
+		if (rc == -EOVERFLOW) {
+			CERROR("%s: Request %#llx on "DFID" failed, error code %d too large\n",
+			       mdt_obd_name(mdt), pgs->hpk_cookie,
+			       PFID(&pgs->hpk_fid), (int)abs(pgs->hpk_errval));
+			rc = 0;
+		}
+
+		switch (car->car_hai.hai_action) {
+		case HSMA_ARCHIVE:
+			hsm_set_cl_event(&clf_flags, HE_ARCHIVE);
+
+			/* archive failed -> set to dirty for safety */
+			if (pgs->hpk_errval != EALREADY &&
+			    unlikely((mh.mh_flags & (HS_ARCHIVED|HS_DIRTY)) ==
+				     HS_ARCHIVED)) {
+				hsm_set_cl_flags(&clf_flags, CLF_HSM_DIRTY);
+				mh.mh_flags |= HS_DIRTY;
+				is_mh_changed = true;
+			}
+			break;
+		case HSMA_RESTORE:
+			hsm_set_cl_event(&clf_flags, HE_RESTORE);
+			break;
+		case HSMA_REMOVE:
+			hsm_set_cl_event(&clf_flags, HE_REMOVE);
+			break;
+		case HSMA_CANCEL:
+			hsm_set_cl_event(&clf_flags, HE_CANCEL);
+			CERROR("%s: Failed request %#llx on "DFID
+			       " cannot be a CANCEL\n",
+			       mdt_obd_name(mdt),
+			       pgs->hpk_cookie,
+			       PFID(&pgs->hpk_fid));
+			break;
+		default:
+			CERROR("%s: Failed request %#llx on "DFID
+			       " %d is an unknown action\n",
+			       mdt_obd_name(mdt),
+			       pgs->hpk_cookie, PFID(&pgs->hpk_fid),
+			       car->car_hai.hai_action);
+			rc = -EINVAL;
+			break;
+		}
+	} else {
+		*status = ARS_SUCCEED;
+		switch (car->car_hai.hai_action) {
+		case HSMA_ARCHIVE:
+			hsm_set_cl_event(&clf_flags, HE_ARCHIVE);
+			/* set ARCHIVE keep EXIST and clear LOST and
+			 * DIRTY */
+			mh.mh_arch_ver = pgs->hpk_data_version;
+			mh.mh_flags |= HS_ARCHIVED;
+			mh.mh_flags &= ~(HS_LOST|HS_DIRTY);
+			is_mh_changed = true;
+			break;
+		case HSMA_RESTORE:
+			hsm_set_cl_event(&clf_flags, HE_RESTORE);
+
+			/* do not clear RELEASED and DIRTY here
+			 * this will occur in hsm_swap_layouts()
+			 */
+
+			/* Restoring has changed the file version on
+			 * disk. */
+			mh.mh_arch_ver = pgs->hpk_data_version;
+			is_mh_changed = true;
+			break;
+		case HSMA_REMOVE:
+			hsm_set_cl_event(&clf_flags, HE_REMOVE);
+			/* clear ARCHIVED EXISTS and LOST */
+			mh.mh_flags &= ~(HS_ARCHIVED | HS_EXISTS | HS_LOST);
+			is_mh_changed = true;
+			break;
+		case HSMA_CANCEL:
+			hsm_set_cl_event(&clf_flags, HE_CANCEL);
+			CERROR("%s: Successful request %#llx on "DFID" cannot be a CANCEL\n",
+			       mdt_obd_name(mdt),
+			       pgs->hpk_cookie,
+			       PFID(&pgs->hpk_fid));
+			break;
+		default:
+			CERROR("%s: Successful request %#llx on "DFID" %d is an unknown action\n",
+			       mdt_obd_name(mdt),
+			       pgs->hpk_cookie, PFID(&pgs->hpk_fid),
+			       car->car_hai.hai_action);
+			rc = -EINVAL;
+			break;
+		}
+	}
+
+	/* rc != 0 means error when analysing action, it may come from
+	 * a crasy CT no need to manage DIRTY
+	 * and if mdt_hsm_get_md_hsm() has returned an error, mh has not been
+	 * filled
+	 */
+	if (rc == 0 && !IS_ERR(obj))
+		hsm_set_cl_flags(&clf_flags,
+				 mh.mh_flags & HS_DIRTY ? CLF_HSM_DIRTY : 0);
+
+	/* unlock is done later, after layout lock management */
+	if (is_mh_changed && !IS_ERR(obj))
+		rc = mdt_hsm_attr_set(mti, obj, &mh);
+
+	/* we give back layout lock only if restore was successful or
+	 * if no retry will be attempted and if object is still alive,
+	 * in other cases we just unlock the object */
+	if (car->car_hai.hai_action == HSMA_RESTORE) {
+		struct mdt_lock_handle *lh;
+
+		/* restore in data FID done, we swap the layouts
+		 * only if restore is successful */
+		if (pgs->hpk_errval == 0 && !IS_ERR(obj)) {
+			rc = hsm_swap_layouts(mti, obj, &car->car_hai.hai_dfid,
+					      &mh);
+			if (rc) {
+				if (cdt->cdt_policy & CDT_NORETRY_ACTION)
+					*status = ARS_FAILED;
+				pgs->hpk_errval = -rc;
+				hsm_set_cl_error(&clf_flags, pgs->hpk_errval);
+			}
+		}
+		/* we have to retry, so keep layout lock */
+		if (*status == ARS_WAITING)
+			GOTO(out, rc);
+
+		/* restore special case, need to create ChangeLog record
+		 * before to give back layout lock to avoid concurrent
+		 * file updater to post out of order ChangeLog */
+		mo_changelog(env, CL_HSM, clf_flags, mdt->mdt_child,
+			     &car->car_hai.hai_fid);
+		need_changelog = false;
+
+		cdt_restore_handle_del(mti, cdt, &car->car_hai.hai_fid);
+		if (!IS_ERR_OR_NULL(obj)) {
+			/* flush UPDATE lock so attributes are upadated */
+			lh = &mti->mti_lh[MDT_LH_OLD];
+			mdt_object_lock(mti, obj, lh, MDS_INODELOCK_UPDATE,
+					LCK_EX);
+			mdt_object_unlock(mti, obj, lh, 1);
+		}
+	}
+
+	GOTO(out, rc);
+
+out:
+	/* always add a ChangeLog record */
+	if (need_changelog)
+		mo_changelog(env, CL_HSM, clf_flags, mdt->mdt_child,
+			     &car->car_hai.hai_fid);
+
+	if (!IS_ERR(obj)) {
+		mdt_object_unlock(mti, obj, mdlh, 1);
+		mdt_object_put(mti->mti_env, obj);
+	}
+
+	RETURN(rc);
+}
+
+/**
+ * update status of a request
+ * \param mti [IN] context
+ * \param pgs [IN] progress of the copy tool
+ * \retval 0 success
+ * \retval -ve failure
+ */
+int mdt_hsm_update_request_state(struct mdt_thread_info *mti,
+				 struct hsm_progress_kernel *pgs)
+{
+	struct mdt_device	*mdt = mti->mti_mdt;
+	struct coordinator	*cdt = &mdt->mdt_coordinator;
+	struct cdt_agent_req	*car;
+	int			 rc = 0;
+	ENTRY;
+
+	/* no coordinator started, so we cannot serve requests */
+	if (!cdt_getref_try(cdt))
+		RETURN(-EAGAIN);
+
+	/* first do sanity checks */
+	car = mdt_cdt_update_request(cdt, pgs);
+	if (IS_ERR(car)) {
+		CERROR("%s: Cannot find running request for cookie %#llx"
+		       " on fid="DFID"\n",
+		       mdt_obd_name(mdt),
+		       pgs->hpk_cookie, PFID(&pgs->hpk_fid));
+
+		GOTO(putref, rc = PTR_ERR(car));
+	}
+
+	CDEBUG(D_HSM, "Progress received for fid="DFID" cookie=%#llx"
+		      " action=%s flags=%d err=%d fid="DFID" dfid="DFID"\n",
+		      PFID(&pgs->hpk_fid), pgs->hpk_cookie,
+		      hsm_copytool_action2name(car->car_hai.hai_action),
+		      pgs->hpk_flags, pgs->hpk_errval,
+		      PFID(&car->car_hai.hai_fid),
+		      PFID(&car->car_hai.hai_dfid));
+
+	/* progress is done on FID or data FID depending of the action and
+	 * of the copy progress */
+	/* for restore progress is used to send back the data FID to cdt */
+	if (car->car_hai.hai_action == HSMA_RESTORE &&
+	    lu_fid_eq(&car->car_hai.hai_fid, &car->car_hai.hai_dfid))
+		car->car_hai.hai_dfid = pgs->hpk_fid;
+
+	if ((car->car_hai.hai_action == HSMA_RESTORE ||
+	     car->car_hai.hai_action == HSMA_ARCHIVE) &&
+	    (!lu_fid_eq(&pgs->hpk_fid, &car->car_hai.hai_dfid) &&
+	     !lu_fid_eq(&pgs->hpk_fid, &car->car_hai.hai_fid))) {
+		CERROR("%s: Progress on "DFID" for cookie %#llx"
+		       " does not match request FID "DFID" nor data FID "
+		       DFID"\n",
+		       mdt_obd_name(mdt),
+		       PFID(&pgs->hpk_fid), pgs->hpk_cookie,
+		       PFID(&car->car_hai.hai_fid),
+		       PFID(&car->car_hai.hai_dfid));
+		GOTO(out, rc = -EINVAL);
+	}
+
+	if (pgs->hpk_errval != 0 && !(pgs->hpk_flags & HP_FLAG_COMPLETED)) {
+		CERROR("%s: Progress on "DFID" for cookie %#llx action=%s"
+		       " is not coherent (err=%d and not completed"
+		       " (flags=%d))\n",
+		       mdt_obd_name(mdt),
+		       PFID(&pgs->hpk_fid), pgs->hpk_cookie,
+		       hsm_copytool_action2name(car->car_hai.hai_action),
+		       pgs->hpk_errval, pgs->hpk_flags);
+		GOTO(out, rc = -EINVAL);
+	}
+
+	/* now progress is valid */
+
+	/* we use a root like ucred */
+	hsm_init_ucred(mdt_ucred(mti));
+
+	if (pgs->hpk_flags & HP_FLAG_COMPLETED) {
+		enum agent_req_status status;
+		struct hsm_mem_req_rec *hmm;
+		int rc1;
+
+		rc = hsm_cdt_request_completed(mti, pgs, car, &status);
+
+		/* if original record was canceled, need to update cancel rec */
+		if (unlikely(car->car_cancel))
+			hmm = car->car_cancel->car_hmm;
+		else
+			hmm = car->car_hmm;
+
+		CDEBUG(D_HSM, "updating record: fid="DFID" cookie=%#llx action=%s status=%s to %s\n",
+		       PFID(&pgs->hpk_fid), pgs->hpk_cookie,
+		       hsm_copytool_action2name(hmm->mr_rec.arr_hai.hai_action),
+		       agent_req_status2name(hmm->mr_rec.arr_status),
+		       agent_req_status2name(status));
+
+		if (hmm->mr_rec.arr_status == ARS_STARTED ||
+		    hmm->mr_rec.arr_status == ARS_WAITING) {
+			/* update record first (LU-9075) */
+			hmm->mr_rec.arr_status = status;
+
+			rc1 = mdt_hsm_agent_modify_record(mti->mti_env, mdt,
+							  hmm);
+
+			if (rc1)
+				CERROR("%s: modify record failed, cannot update status to %s for cookie %#llx: rc = %d\n",
+				       mdt_obd_name(mdt),
+				       agent_req_status2name(status),
+				       pgs->hpk_cookie, rc1);
+			rc = (rc != 0 ? rc : rc1);
+		}
+		/* then remove request from memory list (LU-9075) */
+		mdt_cdt_remove_request(cdt, pgs->hpk_cookie);
+
+		/* ct has completed a request, so a slot is available,
+		 * signal the coordinator to find new work */
+		mdt_hsm_cdt_event(cdt);
+	} else {
+		/* if copytool send a progress on a canceled request
+		 * we inform copytool it should stop
+		 */
+		if (car->car_cancel)
+			rc = -ECANCELED;
+	}
+	GOTO(out, rc);
+
+out:
+	/* remove ref got from mdt_cdt_update_request() */
+	mdt_cdt_put_request(car);
+
+putref:
+	cdt_putref(cdt);
+	return rc;
+}
+
+
+/**
+ *  llog_cat_process() callback, used to:
+ *  - purge all requests
+ * \param env [IN] environment
+ * \param llh [IN] llog handle
+ * \param hdr [IN] llog record
+ * \param data [IN] cb data = struct mdt_thread_info
+ * \retval 0 success
+ * \retval -ve failure
+ */
+static int mdt_cancel_all_cb(const struct lu_env *env,
+			     struct llog_handle *llh,
+			     struct llog_rec_hdr *hdr, void *data)
+{
+	struct llog_agent_req_rec *larr = (struct llog_agent_req_rec *)hdr;
+	struct hsm_action_item *hai = &larr->arr_hai;
+	struct mdt_thread_info	*mti = data;
+	struct coordinator *cdt = &mti->mti_mdt->mdt_coordinator;
+	int rc;
+	ENTRY;
+
+	CDEBUG(D_TRACE, "%s: HSM record idx %d "DFID" status %s\n",
+	       mdt_obd_name(mti->mti_mdt), hdr->lrh_index,
+	       PFID(&hai->hai_fid),
+	       agent_req_status2name(larr->arr_status));
+
+	if (larr->arr_status != ARS_WAITING &&
+	    larr->arr_status != ARS_STARTED)
+		RETURN(0);
+
+	/* Unlock the EX layout lock */
+	if (hai->hai_action == HSMA_RESTORE)
+		cdt_restore_handle_del(mti, cdt, &hai->hai_fid);
+
+	larr->arr_status = ARS_CANCELED;
+	larr->arr_req_change = ktime_get_real_seconds();
+	rc = llog_write(env, llh, hdr, hdr->lrh_index);
+	if (rc < 0) {
+		CERROR("%s: cannot update agent log: rc = %d\n",
+		       mdt_obd_name(mti->mti_mdt), rc);
+		rc = LLOG_DEL_RECORD;
+	}
+
+	RETURN(rc);
+}
+
+/**
+ * cancel all actions
+ * \param obd [IN] MDT device
+ */
+static int hsm_cancel_all_actions(struct mdt_device *mdt)
+{
+	struct lu_env env;
+	struct lu_context session;
+	struct mdt_thread_info *mti;
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+	struct cdt_agent_req *car;
+	char fsname[MTI_NAME_MAXLEN];
+	struct hsm_scan_request rq = {
+		.hsr_version = HAL_VERSION,
+		.hsr_fsname = &fsname[0],
+		.hsr_count = 1,};
+	enum cdt_states old_state;
+	int rc;
+
+	ENTRY;
+
+	rc = lu_env_init(&env, LCT_MD_THREAD);
+	if (rc < 0)
+		RETURN(rc);
+
+	/* for mdt_ucred(), lu_ucred stored in lu_ucred_key */
+	rc = lu_context_init(&session, LCT_SERVER_SESSION);
+	if (rc < 0)
+		GOTO(out_env, rc);
+
+	lu_context_enter(&session);
+	env.le_ses = &session;
+
+	mti = lu_context_key_get(&env.le_ctx, &mdt_thread_key);
+	LASSERT(mti != NULL);
+
+	mti->mti_env = &env;
+	mti->mti_mdt = mdt;
+
+	hsm_init_ucred(mdt_ucred(mti));
+	obd_uuid2fsname(rq.hsr_fsname, mdt_obd_name(mdt), MTI_NAME_MAXLEN);
+
+	mutex_lock(&cdt->cdt_state_lock);
+	old_state = cdt->cdt_state;
+
+	/* disable coordinator */
+	rc = set_cdt_state_locked(cdt, CDT_DISABLE);
+	if (rc)
+		GOTO(out_cdt_state_unlock, rc);
+
+	/* waits while coordinator finish work */
+	if (wait_event_interruptible(cdt->cdt_cancel_all, cdt->cdt_idle))
+		GOTO(out_cdt_state, rc = -EINTR);
+
+	/* send cancel to all running requests */
+	down_read(&cdt->cdt_request_lock);
+	list_for_each_entry(car, &cdt->cdt_request_list, car_request_list) {
+		u32 action;
+
+		/* a cdt_agent_req could be at coordinator sending process
+		 * still mdt_coordinator()->mdt_hsm_agent_send() in case
+		 * of network resend inside ptlrpc. Skip it.
+		 */
+		if (!list_empty(&car->car_scan_list))
+			continue;
+
+		mdt_cdt_get_request(car);
+		/* request is not yet removed from list, it will be done
+		 * when copytool will return progress
+		 */
+
+		if (car->car_hai.hai_action == HSMA_CANCEL) {
+			mdt_cdt_put_request(car);
+			continue;
+		}
+
+		INIT_LIST_HEAD(&rq.hsr_cars);
+		list_add_tail(&car->car_scan_list, &rq.hsr_cars);
+		action = car->car_hai.hai_action;
+		car->car_hai.hai_action = HSMA_CANCEL;
+
+		/* no conflict with cdt thread because cdt is disable and we
+		 * have the request lock */
+		mdt_hsm_agent_send(mti, &rq, 1);
+
+		car->car_hai.hai_action = action;
+		/* Unlock the EX layout lock */
+		if (action == HSMA_RESTORE)
+			cdt_restore_handle_del(mti, cdt, &car->car_hai.hai_fid);
+
+		mdt_cdt_put_request(car);
+	}
+	up_read(&cdt->cdt_request_lock);
+
+	/* cancel all on-disk records */
+	rc = cdt_llog_process(mti->mti_env, mti->mti_mdt, mdt_cancel_all_cb,
+			      (void *)mti, 0, 0);
+out_cdt_state:
+	/* Enable coordinator, unless the coordinator was stopping. */
+	set_cdt_state_locked(cdt, old_state);
+out_cdt_state_unlock:
+	mutex_unlock(&cdt->cdt_state_lock);
+
+	lu_context_exit(&session);
+	lu_context_fini(&session);
+out_env:
+	lu_env_fini(&env);
+
+	RETURN(rc);
+}
+
+/**
+ * check if a request is compatible with file status
+ * \param hai [IN] request description
+ * \param archive_id [IN] request archive id
+ * \param rq_flags [IN] request flags
+ * \param hsm [IN] file HSM metadata
+ * \retval boolean
+ */
+bool mdt_hsm_is_action_compat(const struct hsm_action_item *hai,
+			      u32 archive_id, u64 rq_flags,
+			      const struct md_hsm *hsm)
+{
+	int	 is_compat = false;
+	int	 hsm_flags;
+	ENTRY;
+
+	hsm_flags = hsm->mh_flags;
+	switch (hai->hai_action) {
+	case HSMA_ARCHIVE:
+		if (!(hsm_flags & HS_NOARCHIVE) &&
+		    (hsm_flags & HS_DIRTY || !(hsm_flags & HS_ARCHIVED)))
+			is_compat = true;
+
+		if (hsm_flags & HS_EXISTS &&
+		    archive_id != 0 &&
+		    archive_id != hsm->mh_arch_id)
+			is_compat = false;
+
+		break;
+	case HSMA_RESTORE:
+		if (!(hsm_flags & HS_DIRTY) && (hsm_flags & HS_RELEASED) &&
+		    hsm_flags & HS_ARCHIVED && !(hsm_flags & HS_LOST))
+			is_compat = true;
+		break;
+	case HSMA_REMOVE:
+		if (!(hsm_flags & HS_RELEASED) &&
+		    (hsm_flags & (HS_ARCHIVED | HS_EXISTS)))
+			is_compat = true;
+		break;
+	case HSMA_CANCEL:
+		is_compat = true;
+		break;
+	}
+	CDEBUG(D_HSM, "fid="DFID" action=%s flags=%#llx"
+		      " extent=%#llx-%#llx hsm_flags=%.8X %s\n",
+		      PFID(&hai->hai_fid),
+		      hsm_copytool_action2name(hai->hai_action), rq_flags,
+		      hai->hai_extent.offset, hai->hai_extent.length,
+		      hsm->mh_flags,
+		      (is_compat ? "compatible" : "uncompatible"));
+
+	RETURN(is_compat);
+}
+
+/*
+ * sysfs interface used to get/set HSM behaviour (cdt->cdt_policy)
+ */
+static const struct {
+	__u64		 bit;
+	char		*name;
+	char		*nickname;
+} hsm_policy_names[] = {
+	{ CDT_NONBLOCKING_RESTORE,	"NonBlockingRestore",	"NBR"},
+	{ CDT_NORETRY_ACTION,		"NoRetryAction",	"NRA"},
+	{ 0 },
+};
+
+/**
+ * convert a policy name to a bit
+ * \param name [IN] policy name
+ * \retval 0 unknown
+ * \retval   policy bit
+ */
+static __u64 hsm_policy_str2bit(const char *name)
+{
+	int	 i;
+
+	for (i = 0; hsm_policy_names[i].bit != 0; i++)
+		if (strcmp(hsm_policy_names[i].nickname, name) == 0 ||
+		    strcmp(hsm_policy_names[i].name, name) == 0)
+			return hsm_policy_names[i].bit;
+	return 0;
+}
+
+/**
+ * convert a policy bit field to a string
+ * \param mask [IN] policy bit field
+ * \param hexa [IN] print mask before bit names
+ * \param buffer [OUT] string
+ * \param count [IN] size of buffer
+ */
+static void hsm_policy_bit2str(struct seq_file *m, const __u64 mask,
+				const bool hexa)
+{
+	int	 i, j;
+	__u64	 bit;
+	ENTRY;
+
+	if (hexa)
+		seq_printf(m, "(%#llx) ", mask);
+
+	for (i = 0; i < CDT_POLICY_SHIFT_COUNT; i++) {
+		bit = (1ULL << i);
+
+		for (j = 0; hsm_policy_names[j].bit != 0; j++) {
+			if (hsm_policy_names[j].bit == bit)
+				break;
+		}
+		if (bit & mask)
+			seq_printf(m, "[%s] ", hsm_policy_names[j].name);
+		else
+			seq_printf(m, "%s ", hsm_policy_names[j].name);
+	}
+	/* remove last ' ' */
+	m->count--;
+	seq_putc(m, '\n');
+}
+
+/* methods to read/write HSM policy flags */
+static int mdt_hsm_policy_seq_show(struct seq_file *m, void *data)
+{
+	struct mdt_device	*mdt = m->private;
+	struct coordinator	*cdt = &mdt->mdt_coordinator;
+	ENTRY;
+
+	hsm_policy_bit2str(m, cdt->cdt_policy, false);
+	RETURN(0);
+}
+
+static ssize_t
+mdt_hsm_policy_seq_write(struct file *file, const char __user *buffer,
+			 size_t count, loff_t *off)
+{
+	struct seq_file		*m = file->private_data;
+	struct mdt_device	*mdt = m->private;
+	struct coordinator	*cdt = &mdt->mdt_coordinator;
+	char			*start, *token, sign;
+	char			*buf;
+	__u64			 policy;
+	__u64			 add_mask, remove_mask, set_mask;
+	int			 rc;
+	ENTRY;
+
+	if (count + 1 > PAGE_SIZE)
+		RETURN(-EINVAL);
+
+	OBD_ALLOC(buf, count + 1);
+	if (buf == NULL)
+		RETURN(-ENOMEM);
+
+	if (copy_from_user(buf, buffer, count))
+		GOTO(out, rc = -EFAULT);
+
+	buf[count] = '\0';
+
+	start = buf;
+	CDEBUG(D_HSM, "%s: receive new policy: '%s'\n", mdt_obd_name(mdt),
+	       start);
+
+	add_mask = remove_mask = set_mask = 0;
+	do {
+		token = strsep(&start, "\n ");
+		sign = *token;
+
+		if (sign == '\0')
+			continue;
+
+		if (sign == '-' || sign == '+')
+			token++;
+
+		policy = hsm_policy_str2bit(token);
+		if (policy == 0) {
+			CWARN("%s: '%s' is unknown, "
+			      "supported policies are:\n", mdt_obd_name(mdt),
+			      token);
+			hsm_policy_bit2str(m, 0, false);
+			GOTO(out, rc = -EINVAL);
+		}
+		switch (sign) {
+		case '-':
+			remove_mask |= policy;
+			break;
+		case '+':
+			add_mask |= policy;
+			break;
+		default:
+			set_mask |= policy;
+			break;
+		}
+
+	} while (start != NULL);
+
+	CDEBUG(D_HSM, "%s: new policy: rm=%#llx add=%#llx set=%#llx\n",
+	       mdt_obd_name(mdt), remove_mask, add_mask, set_mask);
+
+	/* if no sign in all string, it is a clear and set
+	 * if some sign found, all unsigned are converted
+	 * to add
+	 * P1 P2 = set to P1 and P2
+	 * P1 -P2 = add P1 clear P2 same as +P1 -P2
+	 */
+	if (remove_mask == 0 && add_mask == 0) {
+		cdt->cdt_policy = set_mask;
+	} else {
+		cdt->cdt_policy |= set_mask | add_mask;
+		cdt->cdt_policy &= ~remove_mask;
+	}
+
+	GOTO(out, rc = count);
+
+out:
+	OBD_FREE(buf, count + 1);
+	RETURN(rc);
+}
+LDEBUGFS_SEQ_FOPS(mdt_hsm_policy);
+
+static ssize_t loop_period_show(struct kobject *kobj, struct attribute *attr,
+				char *buf)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n", cdt->cdt_loop_period);
+}
+
+static ssize_t loop_period_store(struct kobject *kobj, struct attribute *attr,
+				 const char *buffer, size_t count)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+	unsigned int val;
+	int rc;
+
+	rc = kstrtouint(buffer, 0, &val);
+	if (rc)
+		return rc;
+
+	if (val != 0)
+		cdt->cdt_loop_period = val;
+
+	return val ? count : -EINVAL;
+}
+LUSTRE_RW_ATTR(loop_period);
+
+static ssize_t grace_delay_show(struct kobject *kobj, struct attribute *attr,
+				char *buf)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n", cdt->cdt_grace_delay);
+}
+
+static ssize_t grace_delay_store(struct kobject *kobj, struct attribute *attr,
+				 const char *buffer, size_t count)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+	unsigned int val;
+	int rc;
+
+	rc = kstrtouint(buffer, 0, &val);
+	if (rc)
+		return rc;
+
+	if (val != 0)
+		cdt->cdt_grace_delay = val;
+
+	return val ? count : -EINVAL;
+}
+LUSTRE_RW_ATTR(grace_delay);
+
+static ssize_t active_request_timeout_show(struct kobject *kobj,
+					   struct attribute *attr,
+					   char *buf)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", cdt->cdt_active_req_timeout);
+}
+
+static ssize_t active_request_timeout_store(struct kobject *kobj,
+					    struct attribute *attr,
+					    const char *buffer, size_t count)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+	unsigned int val;
+	int rc;
+
+	rc = kstrtouint(buffer, 0, &val);
+	if (rc)
+		return rc;
+
+	if (val != 0)
+		cdt->cdt_active_req_timeout = val;
+
+	return val ? count : -EINVAL;
+}
+LUSTRE_RW_ATTR(active_request_timeout);
+
+static ssize_t max_requests_show(struct kobject *kobj, struct attribute *attr,
+				 char *buf)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%llu\n", cdt->cdt_max_requests);
+}
+
+static ssize_t max_requests_store(struct kobject *kobj, struct attribute *attr,
+				  const char *buffer, size_t count)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+	unsigned long long val;
+	int rc;
+
+	rc = kstrtoull(buffer, 0, &val);
+	if (rc)
+		return rc;
+	if (!val)
+		return -EINVAL;
+	rc = mdt_hsm_max_requests_update(cdt, val);
+	if (rc)
+		return rc;
+
+	return count;
+}
+LUSTRE_RW_ATTR(max_requests);
+
+static ssize_t default_archive_id_show(struct kobject *kobj,
+				       struct attribute *attr, char *buf)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n", cdt->cdt_default_archive_id);
+}
+
+static ssize_t default_archive_id_store(struct kobject *kobj,
+					struct attribute *attr,
+					const char *buffer, size_t count)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+	unsigned int val;
+	int rc;
+
+	rc = kstrtouint(buffer, 0, &val);
+	if (rc)
+		return rc;
+
+	if (val != 0)
+		cdt->cdt_default_archive_id = val;
+
+	return val ? count : -EINVAL;
+}
+LUSTRE_RW_ATTR(default_archive_id);
+
+/*
+ * procfs write method for MDT/hsm_control
+ * proc entry is in mdt directory so data is mdt obd_device pointer
+ */
+#define CDT_ENABLE_CMD   "enabled"
+#define CDT_STOP_CMD     "shutdown"
+#define CDT_DISABLE_CMD  "disabled"
+#define CDT_PURGE_CMD    "purge"
+#define CDT_HELP_CMD     "help"
+#define CDT_MAX_CMD_LEN  10
+
+ssize_t hsm_control_store(struct kobject *kobj, struct attribute *attr,
+			  const char *buffer, size_t count)
+{
+	struct obd_device *obd = container_of(kobj, struct obd_device,
+					      obd_kset.kobj);
+	struct mdt_device *mdt = mdt_dev(obd->obd_lu_dev);
+	struct coordinator *cdt = &(mdt->mdt_coordinator);
+	int usage = 0;
+	int rc = 0;
+
+	if (count == 0 || count >= CDT_MAX_CMD_LEN)
+		return -EINVAL;
+
+	if (strncmp(buffer, CDT_ENABLE_CMD, strlen(CDT_ENABLE_CMD)) == 0) {
+		if (cdt->cdt_state == CDT_DISABLE) {
+			rc = set_cdt_state(cdt, CDT_RUNNING);
+			mdt_hsm_cdt_event(cdt);
+			wake_up(&cdt->cdt_waitq);
+		} else if (cdt->cdt_state == CDT_RUNNING) {
+			rc = 0;
+		} else {
+			rc = mdt_hsm_cdt_start(mdt);
+		}
+	} else if (strncmp(buffer, CDT_STOP_CMD, strlen(CDT_STOP_CMD)) == 0) {
+		if (cdt->cdt_state == CDT_STOPPING) {
+			CERROR("%s: Coordinator is already stopping\n",
+			       mdt_obd_name(mdt));
+			rc = -EALREADY;
+		} else if (cdt->cdt_state == CDT_STOPPED) {
+			rc = 0;
+		} else {
+			rc = mdt_hsm_cdt_stop(mdt);
+		}
+	} else if (strncmp(buffer, CDT_DISABLE_CMD,
+			   strlen(CDT_DISABLE_CMD)) == 0) {
+		if ((cdt->cdt_state == CDT_STOPPING) ||
+		    (cdt->cdt_state == CDT_STOPPED)) {
+			/* exit gracefully if coordinator is being stopped
+			 * or stopped already.
+			 */
+			rc = 0;
+		} else {
+			rc = set_cdt_state(cdt, CDT_DISABLE);
+		}
+	} else if (strncmp(buffer, CDT_PURGE_CMD,
+			   strlen(CDT_PURGE_CMD)) == 0) {
+		rc = hsm_cancel_all_actions(mdt);
+	} else if (strncmp(buffer, CDT_HELP_CMD,
+			   strlen(CDT_HELP_CMD)) == 0) {
+		usage = 1;
+	} else {
+		usage = 1;
+		rc = -EINVAL;
+	}
+
+	if (usage == 1)
+		CERROR("%s: Valid coordinator control commands are: "
+		       "%s %s %s %s %s\n", mdt_obd_name(mdt),
+		       CDT_ENABLE_CMD, CDT_STOP_CMD, CDT_DISABLE_CMD,
+		       CDT_PURGE_CMD, CDT_HELP_CMD);
+
+	if (rc)
+		RETURN(rc);
+
+	RETURN(count);
+}
+
+ssize_t hsm_control_show(struct kobject *kobj, struct attribute *attr,
+			 char *buf)
+{
+	struct obd_device *obd = container_of(kobj, struct obd_device,
+					      obd_kset.kobj);
+	struct coordinator *cdt;
+
+	cdt = &(mdt_dev(obd->obd_lu_dev)->mdt_coordinator);
+
+	return scnprintf(buf, PAGE_SIZE, "%s\n",
+			 cdt_mdt_state2str(cdt->cdt_state));
+}
+
+static int
+mdt_hsm_request_mask_show(struct seq_file *m, __u64 mask)
+{
+	bool first = true;
+	int i;
+	ENTRY;
+
+	for (i = 0; i < 8 * sizeof(mask); i++) {
+		if (mask & (1UL << i)) {
+			seq_printf(m, "%s%s", first ? "" : " ",
+				   hsm_copytool_action2name(i));
+			first = false;
+		}
+	}
+	seq_putc(m, '\n');
+
+	RETURN(0);
+}
+
+static int
+mdt_hsm_user_request_mask_seq_show(struct seq_file *m, void *data)
+{
+	struct mdt_device *mdt = m->private;
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+
+	return mdt_hsm_request_mask_show(m, cdt->cdt_user_request_mask);
+}
+
+static int
+mdt_hsm_group_request_mask_seq_show(struct seq_file *m, void *data)
+{
+	struct mdt_device *mdt = m->private;
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+
+	return mdt_hsm_request_mask_show(m, cdt->cdt_group_request_mask);
+}
+
+static int
+mdt_hsm_other_request_mask_seq_show(struct seq_file *m, void *data)
+{
+	struct mdt_device *mdt = m->private;
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+
+	return mdt_hsm_request_mask_show(m, cdt->cdt_other_request_mask);
+}
+
+static inline enum hsm_copytool_action
+hsm_copytool_name2action(const char *name)
+{
+	if (strcasecmp(name, "NOOP") == 0)
+		return HSMA_NONE;
+	else if (strcasecmp(name, "ARCHIVE") == 0)
+		return HSMA_ARCHIVE;
+	else if (strcasecmp(name, "RESTORE") == 0)
+		return HSMA_RESTORE;
+	else if (strcasecmp(name, "REMOVE") == 0)
+		return HSMA_REMOVE;
+	else if (strcasecmp(name, "CANCEL") == 0)
+		return HSMA_CANCEL;
+	else
+		return -1;
+}
+
+static ssize_t
+mdt_write_hsm_request_mask(struct file *file, const char __user *user_buf,
+			    size_t user_count, __u64 *mask)
+{
+	char *buf, *pos, *name;
+	size_t buf_size;
+	__u64 new_mask = 0;
+	int rc;
+	ENTRY;
+
+	if (!(user_count < 4096))
+		RETURN(-ENOMEM);
+
+	buf_size = user_count + 1;
+
+	OBD_ALLOC(buf, buf_size);
+	if (buf == NULL)
+		RETURN(-ENOMEM);
+
+	if (copy_from_user(buf, user_buf, buf_size - 1))
+		GOTO(out, rc = -EFAULT);
+
+	buf[buf_size - 1] = '\0';
+
+	pos = buf;
+	while ((name = strsep(&pos, " \t\v\n")) != NULL) {
+		int action;
+
+		if (*name == '\0')
+			continue;
+
+		action = hsm_copytool_name2action(name);
+		if (action < 0)
+			GOTO(out, rc = -EINVAL);
+
+		new_mask |= (1UL << action);
+	}
+
+	*mask = new_mask;
+	rc = user_count;
+out:
+	OBD_FREE(buf, buf_size);
+
+	RETURN(rc);
+}
+
+static ssize_t
+mdt_hsm_user_request_mask_seq_write(struct file *file, const char __user *buf,
+					size_t count, loff_t *off)
+{
+	struct seq_file		*m = file->private_data;
+	struct mdt_device	*mdt = m->private;
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+
+	return mdt_write_hsm_request_mask(file, buf, count,
+					   &cdt->cdt_user_request_mask);
+}
+
+static ssize_t
+mdt_hsm_group_request_mask_seq_write(struct file *file, const char __user *buf,
+					size_t count, loff_t *off)
+{
+	struct seq_file		*m = file->private_data;
+	struct mdt_device	*mdt = m->private;
+	struct coordinator	*cdt = &mdt->mdt_coordinator;
+
+	return mdt_write_hsm_request_mask(file, buf, count,
+					   &cdt->cdt_group_request_mask);
+}
+
+static ssize_t
+mdt_hsm_other_request_mask_seq_write(struct file *file, const char __user *buf,
+					size_t count, loff_t *off)
+{
+	struct seq_file		*m = file->private_data;
+	struct mdt_device	*mdt = m->private;
+	struct coordinator	*cdt = &mdt->mdt_coordinator;
+
+	return mdt_write_hsm_request_mask(file, buf, count,
+					   &cdt->cdt_other_request_mask);
+}
+
+static ssize_t remove_archive_on_last_unlink_show(struct kobject *kobj,
+						  struct attribute *attr,
+						  char *buf)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n",
+			 cdt->cdt_remove_archive_on_last_unlink);
+}
+
+static ssize_t remove_archive_on_last_unlink_store(struct kobject *kobj,
+						   struct attribute *attr,
+						   const char *buffer,
+						   size_t count)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+	bool val;
+	int rc;
+
+	rc = kstrtobool(buffer, &val);
+	if (rc < 0)
+		return rc;
+
+	cdt->cdt_remove_archive_on_last_unlink = val;
+	return count;
+}
+LUSTRE_RW_ATTR(remove_archive_on_last_unlink);
+
+LDEBUGFS_SEQ_FOPS(mdt_hsm_user_request_mask);
+LDEBUGFS_SEQ_FOPS(mdt_hsm_group_request_mask);
+LDEBUGFS_SEQ_FOPS(mdt_hsm_other_request_mask);
+
+/* Read-only sysfs files for request counters */
+static ssize_t archive_count_show(struct kobject *kobj, struct attribute *attr,
+				  char *buf)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+			 atomic_read(&cdt->cdt_archive_count));
+}
+LUSTRE_RO_ATTR(archive_count);
+
+static ssize_t restore_count_show(struct kobject *kobj, struct attribute *attr,
+				  char *buf)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+			 atomic_read(&cdt->cdt_restore_count));
+}
+LUSTRE_RO_ATTR(restore_count);
+
+static ssize_t remove_count_show(struct kobject *kobj, struct attribute *attr,
+				 char *buf)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+			 atomic_read(&cdt->cdt_remove_count));
+}
+LUSTRE_RO_ATTR(remove_count);
+
+static struct ldebugfs_vars ldebugfs_mdt_hsm_vars[] = {
+	{ .name	=	"agents",
+	  .fops	=	&mdt_hsm_agent_fops			},
+	{ .name	=	"actions",
+	  .fops	=	&mdt_hsm_actions_fops,
+	  .proc_mode =	0444					},
+	{ .name	=	"policy",
+	  .fops	=	&mdt_hsm_policy_fops			},
+	{ .name	=	"active_requests",
+	  .fops	=	&mdt_hsm_active_requests_fops		},
+	{ .name	=	"user_request_mask",
+	  .fops	=	&mdt_hsm_user_request_mask_fops,	},
+	{ .name	=	"group_request_mask",
+	  .fops	=	&mdt_hsm_group_request_mask_fops,	},
+	{ .name	=	"other_request_mask",
+	  .fops	=	&mdt_hsm_other_request_mask_fops,	},
+	{ 0 }
+};
+
+static struct attribute *hsm_attrs[] = {
+	&lustre_attr_loop_period.attr,
+	&lustre_attr_grace_delay.attr,
+	&lustre_attr_active_request_timeout.attr,
+	&lustre_attr_max_requests.attr,
+	&lustre_attr_default_archive_id.attr,
+	&lustre_attr_remove_archive_on_last_unlink.attr,
+	&lustre_attr_archive_count.attr,
+	&lustre_attr_restore_count.attr,
+	&lustre_attr_remove_count.attr,
+	NULL,
+};
+
+ATTRIBUTE_GROUPS(hsm); /* creates hsm_groups from hsm_attrs */
+
+static void hsm_kobj_release(struct kobject *kobj)
+{
+	struct coordinator *cdt = container_of(kobj, struct coordinator,
+					       cdt_hsm_kobj);
+
+	debugfs_remove_recursive(cdt->cdt_debugfs_dir);
+	cdt->cdt_debugfs_dir = NULL;
+
+	complete(&cdt->cdt_kobj_unregister);
+}
+
+static struct kobj_type hsm_ktype = {
+	.default_groups = hsm_groups,
+	.sysfs_ops	= &lustre_sysfs_ops,
+	.release	= hsm_kobj_release,
+};
+
+/**
+ * create sysfs entries for coordinator
+ * \param mdt [IN]
+ * \retval 0 success
+ * \retval -ve failure
+ */
+int hsm_cdt_tunables_init(struct mdt_device *mdt)
+{
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+	struct obd_device *obd = mdt2obd_dev(mdt);
+	int rc;
+
+	init_completion(&cdt->cdt_kobj_unregister);
+	rc = kobject_init_and_add(&cdt->cdt_hsm_kobj, &hsm_ktype,
+				  &obd->obd_kset.kobj, "%s", "hsm");
+	if (rc) {
+		kobject_put(&cdt->cdt_hsm_kobj);
+		return rc;
+	}
+
+	/* init debugfs entries, failure is not critical */
+	cdt->cdt_debugfs_dir = debugfs_create_dir("hsm",
+						  obd->obd_debugfs_entry);
+	ldebugfs_add_vars(cdt->cdt_debugfs_dir, ldebugfs_mdt_hsm_vars, mdt);
+
+	return 0;
+}
+
+/**
+ * remove sysfs entries for coordinator
+ *
+ * @mdt
+ */
+void hsm_cdt_tunables_fini(struct mdt_device *mdt)
+{
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+
+	kobject_put(&cdt->cdt_hsm_kobj);
+	wait_for_completion(&cdt->cdt_kobj_unregister);
+}

@@ -1,0 +1,172 @@
+.TH LLAPI_HSM_COPYTOOL_REGISTER 3 2024-08-27 "Lustre User API" "Lustre Library Functions"
+.SH NAME
+llapi_hsm_copytool_register, llapi_hsm_copytool_unregister, llapi_hsm_copytool_get_fd, llapi_hsm_copytool_recv, hai_first, hai_next \- Lustre API copytool management
+.SH SYNOPSIS
+.nf
+.B #include <lustre/lustreapi.h>
+.PP
+.BI "int llapi_hsm_copytool_register(struct hsm_copytool_private **" priv ,
+.BI "                                const char *" mnt ", int " archive_count ,
+.BI "                                int *" archives ", int " rfd_flags );
+.PP
+.BI "int llapi_hsm_copytool_unregister(struct hsm_copytool_private **" priv );
+.PP
+.BI "int llapi_hsm_copytool_get_fd(struct hsm_copytool_private *" ct );
+.PP
+.BI "int llapi_hsm_copytool_recv(struct hsm_copytool_private *" priv ,
+.BI "                            struct hsm_action_list **" hal ,
+.BI "                            int *" msgsize );
+.PP
+.BI "struct hsm_action_item *hai_first(struct hsm_action_list *" hal );
+.PP
+.BI "struct hsm_action_item *hai_next(struct hsm_action_item *" hai );
+.fi
+.SH DESCRIPTION
+To receive HSM requests from a Lustre filesystem,
+a copytool application must register with Lustre by calling
+.BR llapi_hsm_copytool_register() .
+The mountpoint of the Lustre filesystem to monitor is indicated by
+.IR mnt .
+.I archives
+is an array with up to 32 elements indicating which archive IDs to register for.
+Each element is a number from 1 to 32.
+.I archive_count
+is the number of valid elements in the
+.I archive
+array. If an element in
+.I archives
+is 0, or if
+.I archive_count
+is 0, then all archives will be monitored.
+.I rfd_flags
+determines whether
+.B llapi_hsm_copytool_recv
+will be blocking, with 0, or non\-blocking, with O_NONBLOCK.
+.PP
+.B llapi_hsm_copytool_register
+returns
+.IR priv ,
+an opaque pointer that must be used with the other functions.
+.P
+.B llapi_hsm_copytool_unregister
+unregisters a copytool.
+.I priv
+is the opaque handle returned by
+.BR llapi_hsm_copytool_register .
+.P
+.B llapi_hsm_copytool_get_fd
+returns the file descriptor used by the library to communicate with the kernel.
+This descriptor is only intended to be used with
+.BR select (2)
+or
+.BR poll (2).
+.I rfd_flags
+should have been set to O_NONBLOCK.
+.P
+To receive the requests, the application has to call
+.BR llapi_hsm_copytool_recv .
+When it returns 0, a message is available in
+.IR hal ,
+and its size in bytes is returned in
+.IR msgsize .
+.I hal
+points to a buffer allocated by the Lustre library. It contains one or more
+HSM requests. This buffer is valid until the next call to
+.BR llapi_hsm_copytool_recv .
+.P
+.I hal
+is composed of a header of type
+.B struct hsm_action_list
+followed by one or several HSM requests of type
+.BR "struct hsm_action_item" :
+.PP
+.RS 3.5
+.nf
+struct hsm_action_list {
+   __u32 hal_version;
+   __u32 hal_count;         /* number of hai\(aqs to follow */
+   __u64 hal_compound_id;   /* obsolete and may be ignored */
+   __u64 hal_flags;
+   __u32 hal_archive_id;    /* which archive backend */
+   __u32 padding1;
+   char hal_fsname[];       /* null\-terminated name of filesystem */
+};
+\&
+struct hsm_action_item {
+    __u32      hai_len;     /* valid size of this struct */
+    __u32      hai_action;  /* hsm_copytool_action, but use known size */
+    struct lu_fid hai_fid;     /* Lustre FID to operated on */
+    struct lu_fid hai_dfid;    /* fid used for data access */
+    struct hsm_extent hai_extent;  /* byte range to operate on */
+    __u64      hai_cookie;  /* action cookie from coordinator */
+    __u64      hai_gid;     /* grouplock id */
+    char       hai_data[];  /* variable length */
+};
+.fi
+.RE
+.sp
+To iterate through the requests, use
+.B hai_first
+to get the first request, then
+.BR hai_next .
+.SH RETURN VALUE
+.B llapi_hsm_copytool_register
+and
+.B llapi_hsm_copytool_unregister
+return 0 on success. On error, a negative errno is returned.
+.TP
+.B llapi_hsm_copytool_get_fd
+returns the file descriptor associated with the register copytool. On error, a negative errno is returned.
+.P
+.B llapi_hsm_copytool_recv
+returns 0 when a message is available.
+If the copytool was set to non\-blocking operation,
+\-EAGAIN is immediately returned if no message is available.
+On error, a negative errno is returned.
+.SH ERRORS
+.TP 15
+.B -EINVAL
+An invalid value was passed, the copytool is not registered, ...
+.TP
+.B -ESHUTDOWN
+The transport endpoint shutdown.
+.TP
+.B -EPROTO
+Lustre protocol error.
+.TP
+.B -EAGAIN
+No HSM message is available, and the copytool was set to not block on receives.
+.SH AUTHORS
+Frank Zago
+.SH AVAILABILITY
+.BR llapi_hsm_copytool_register() ,
+.BR llapi_hsm_copytool_unregister() ,
+.B llapi_hsm_copytool_get_fd()
+and
+.B llapi_hsm_copytool_recv()
+are part of the
+.BR lustre (7)
+user application interface library since release 2.4.0.
+.\" Added in commit 2.3.53-7-gf715e4e298
+.B hai_first()
+and
+.B hai_next()
+are part of the
+.BR lustre (7)
+user application interface library.
+.B hai_first
+was added in release 2.5.0.
+.\" Added in commit v2_4_90_0-15-g4b02a71242
+.B hai_next was added in release 2.0.0.
+.\" Added in commit v1_9_230~28
+.SH SEE ALSO
+.BR llapi_hsm_action_begin (3),
+.BR llapi_hsm_action_end (3),
+.BR llapi_hsm_action_get_dfid (3),
+.BR llapi_hsm_action_get_fd (3),
+.BR llapi_hsm_action_progress (3),
+.BR lustreapi (7)
+.P
+See
+.I lhsmtool_posix.c
+in the Lustre sources for a use case of this API.

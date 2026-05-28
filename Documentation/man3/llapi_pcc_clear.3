@@ -1,0 +1,44 @@
+.TH LLAPI_PCC_CLEAR 3 2024-08-28 "Lustre User API" "Lustre Library Functions"
+.SH NAME
+llapi_pcc_clear \- Remove all PCC backends from a client
+.SH SYNOPSIS
+.nf
+.B #include <lustre/lustreapi.h>
+.PP
+.BI "int llapi_pcc_clear(const char *" mntpath ,
+.BI "                    enum lu_pcc_cleanup_flags " flags );
+.fi
+.SH DESCRIPTION
+The function
+.BR llapi_pcc_clear()
+deletes all PCC backends on the client with the mount point referenced by
+.IR mntpath .
+Refer to
+.BR llapi_pcc_del()
+for the usage of the input parameter
+.IR flags .
+.SH RETURN VALUES
+.B llapi_pcc_clear()
+returns 0 on success or a negative errno on failure.
+.SH ERRORS
+.TP 15
+.B -ENOMEM
+Insufficient memory to complete operation.
+.TP
+.B -EFAULT
+Memory region is not properly mapped.
+.TP
+.B -EINVAL
+One or more invalid arguments are given.
+.TP
+.B -EOPNOTSUPP
+PCC backend operation is not supported.
+.SH AVAILABILITY
+.B llapi_pcc_clear()
+is part of the
+.BR lustre (7)
+user application interface library since release 2.16.0
+.\" Added in commit v2_15_63-106-gc74878caa7
+.SH SEE ALSO
+.BR llapi_pcc_del (3),
+.BR lustreapi (7)

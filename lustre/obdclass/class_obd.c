@@ -1,0 +1,1082 @@
+// SPDX-License-Identifier: GPL-2.0
+
+/*
+ * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Use is subject to license terms.
+ *
+ * Copyright (c) 2011, 2017, Intel Corporation.
+ */
+
+/*
+ * This file is part of Lustre, http://www.lustre.org/
+ */
+
+#define DEBUG_SUBSYSTEM S_CLASS
+
+#include <linux/miscdevice.h>
+#include <linux/user_namespace.h>
+#include <linux/uidgid.h>
+#include <linux/atomic.h>
+#include <linux/list.h>
+#include <linux/oom.h>
+
+#include <obd_support.h>
+#include <obd_class.h>
+#include <uapi/linux/lnet/lnetctl.h>
+#include <lustre_kernelcomm.h>
+#include <lprocfs_status.h>
+#include <cl_object.h>
+#ifdef CONFIG_LUSTRE_FS_SERVER
+# include <dt_object.h>
+# include <md_object.h>
+#endif /* CONFIG_LUSTRE_FS_SERVER */
+#include <uapi/linux/lustre/lustre_ioctl.h>
+#include "llog_internal.h"
+#include <lustre_ioctl_old.h>
+
+static __u64 obd_max_alloc;
+
+static DEFINE_SPINLOCK(obd_updatemax_lock);
+
+/* The following are visible and mutable through /proc/sys/lustre/. */
+unsigned int obd_debug_peer_on_timeout;
+EXPORT_SYMBOL(obd_debug_peer_on_timeout);
+unsigned int obd_dump_on_timeout;
+EXPORT_SYMBOL(obd_dump_on_timeout);
+unsigned int obd_dump_on_eviction;
+EXPORT_SYMBOL(obd_dump_on_eviction);
+unsigned int obd_lbug_on_eviction;
+EXPORT_SYMBOL(obd_lbug_on_eviction);
+unsigned long obd_max_dirty_pages;
+EXPORT_SYMBOL(obd_max_dirty_pages);
+atomic_long_t obd_dirty_pages;
+EXPORT_SYMBOL(obd_dirty_pages);
+unsigned int obd_timeout = OBD_TIMEOUT_DEFAULT;   /* seconds */
+EXPORT_SYMBOL(obd_timeout);
+unsigned int ldlm_timeout = LDLM_TIMEOUT_DEFAULT; /* seconds */
+EXPORT_SYMBOL(ldlm_timeout);
+unsigned int ping_interval = (OBD_TIMEOUT_DEFAULT > 4) ?
+			     (OBD_TIMEOUT_DEFAULT / 4) : 1;
+EXPORT_SYMBOL(ping_interval);
+unsigned int obd_timeout_set;
+EXPORT_SYMBOL(obd_timeout_set);
+unsigned int ldlm_timeout_set;
+EXPORT_SYMBOL(ldlm_timeout_set);
+/* bulk transfer timeout, give up after 100s by default */
+unsigned int bulk_timeout = 100; /* seconds */
+EXPORT_SYMBOL(bulk_timeout);
+/* allow new filesystem registration, enabled by default */
+int allow_register = 1;
+EXPORT_SYMBOL(allow_register);
+/* Adaptive timeout defs here instead of ptlrpc module for /proc/sys/ access */
+unsigned int at_min = 5;
+EXPORT_SYMBOL(at_min);
+unsigned int at_max = 600;
+EXPORT_SYMBOL(at_max);
+unsigned int at_history = 600;
+EXPORT_SYMBOL(at_history);
+/* Multiple of at_max when service is thought unhealthy and may be STONITH'd */
+unsigned int at_unhealthy_factor = 3;
+EXPORT_SYMBOL(at_unhealthy_factor);
+int at_early_margin = 5;
+EXPORT_SYMBOL(at_early_margin);
+int at_extra = 30;
+EXPORT_SYMBOL(at_extra);
+
+struct percpu_counter obd_memory;
+EXPORT_SYMBOL(obd_memory);
+
+static int obdclass_oom_handler(struct notifier_block *self,
+				unsigned long notused, void *nfreed)
+{
+	/* in bytes */
+	pr_info("obd_memory max: %llu, obd_memory current: %llu\n",
+		obd_memory_max(), obd_memory_sum());
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block obdclass_oom = {
+	.notifier_call = obdclass_oom_handler
+};
+
+int obd_ioctl_msg(const char *file, const char *func, int line, int level,
+		  const char *name, unsigned int cmd, const char *msg, int rc)
+{
+	static struct cfs_debug_limit_state cdls;
+	char *dirs[] = {
+		[_IOC_NONE]		= "_IO",
+		[_IOC_READ]		= "_IOR",
+		[_IOC_WRITE]		= "_IOW",
+		[_IOC_READ|_IOC_WRITE]	= "_IOWR",
+	};
+	char type;
+
+	type = _IOC_TYPE(cmd);
+	__CDEBUG_WITH_LOC(file, func, line, level, &cdls,
+			  "%s: iocontrol from '%s' cmd=%x %s('%c', %u, %u) %s: rc = %d\n",
+			  name, current->comm, cmd,
+			  dirs[_IOC_DIR(cmd)] ?: "_IO?",
+			  isprint(type) ? type : '?', _IOC_NR(cmd),
+			  _IOC_SIZE(cmd), msg, rc);
+	return rc;
+}
+EXPORT_SYMBOL(obd_ioctl_msg);
+
+static int class_resolve_dev_name(__u32 len, const char *name)
+{
+	int rc;
+	int dev;
+
+	ENTRY;
+	if (!len || !name) {
+		CERROR("No name passed,!\n");
+		GOTO(out, rc = -EINVAL);
+	}
+	if (name[len - 1] != 0) {
+		CERROR("Name not nul terminated!\n");
+		GOTO(out, rc = -EINVAL);
+	}
+
+	CDEBUG(D_IOCTL, "device name %s\n", name);
+	dev = class_name2dev(name);
+	if (dev == -1) {
+		CDEBUG(D_IOCTL, "No device for name %s!\n", name);
+		GOTO(out, rc = -EINVAL);
+	}
+
+	CDEBUG(D_IOCTL, "device name %s, dev %d\n", name, dev);
+	rc = dev;
+
+out:
+	RETURN(rc);
+}
+
+#define OBD_MAX_IOCTL_BUFFER	8192
+
+static int obd_ioctl_is_invalid(struct obd_ioctl_data *data)
+{
+	const int maxlen = 1 << 30;
+	if (data->ioc_len > maxlen) {
+		CERROR("OBD ioctl: ioc_len larger than 1<<30\n");
+		return 1;
+	}
+
+	if (data->ioc_inllen1 > maxlen) {
+		CERROR("OBD ioctl: ioc_inllen1 larger than 1<<30\n");
+		return 1;
+	}
+
+	if (data->ioc_inllen2 > maxlen) {
+		CERROR("OBD ioctl: ioc_inllen2 larger than 1<<30\n");
+		return 1;
+	}
+
+	if (data->ioc_inllen3 > maxlen) {
+		CERROR("OBD ioctl: ioc_inllen3 larger than 1<<30\n");
+		return 1;
+	}
+
+	if (data->ioc_inllen4 > maxlen) {
+		CERROR("OBD ioctl: ioc_inllen4 larger than 1<<30\n");
+		return 1;
+	}
+
+	if (data->ioc_inlbuf1 && data->ioc_inllen1 == 0) {
+		CERROR("OBD ioctl: inlbuf1 pointer but 0 length\n");
+		return 1;
+	}
+
+	if (data->ioc_inlbuf2 && data->ioc_inllen2 == 0) {
+		CERROR("OBD ioctl: inlbuf2 pointer but 0 length\n");
+		return 1;
+	}
+
+	if (data->ioc_inlbuf3 && data->ioc_inllen3 == 0) {
+		CERROR("OBD ioctl: inlbuf3 pointer but 0 length\n");
+		return 1;
+	}
+
+	if (data->ioc_inlbuf4 && data->ioc_inllen4 == 0) {
+		CERROR("OBD ioctl: inlbuf4 pointer but 0 length\n");
+		return 1;
+	}
+
+	if (data->ioc_pbuf1 && data->ioc_plen1 == 0) {
+		CERROR("OBD ioctl: pbuf1 pointer but 0 length\n");
+		return 1;
+	}
+
+	if (data->ioc_pbuf2 && data->ioc_plen2 == 0) {
+		CERROR("OBD ioctl: pbuf2 pointer but 0 length\n");
+		return 1;
+	}
+
+	if (!data->ioc_pbuf1 && data->ioc_plen1 != 0) {
+		CERROR("OBD ioctl: plen1 set but NULL pointer\n");
+		return 1;
+	}
+
+	if (!data->ioc_pbuf2 && data->ioc_plen2 != 0) {
+		CERROR("OBD ioctl: plen2 set but NULL pointer\n");
+		return 1;
+	}
+
+	if (obd_ioctl_packlen(data) > data->ioc_len) {
+		CERROR("OBD ioctl: packlen exceeds ioc_len (%d > %d)\n",
+		       obd_ioctl_packlen(data), data->ioc_len);
+		return 1;
+	}
+
+	return 0;
+}
+
+/* buffer MUST be at least the size of obd_ioctl_hdr */
+int obd_ioctl_getdata(struct obd_ioctl_data **datap, int *len, void __user *arg)
+{
+	struct obd_ioctl_hdr hdr;
+	struct obd_ioctl_data *data;
+	int offset = 0;
+	int rc = -EINVAL;
+
+	ENTRY;
+	if (copy_from_user(&hdr, arg, sizeof(hdr)))
+		RETURN(-EFAULT);
+
+	if (hdr.ioc_version != OBD_IOCTL_VERSION) {
+		CERROR("%s: kernel/user version mismatch (%x != %x): rc = %d\n",
+		       current->comm, OBD_IOCTL_VERSION, hdr.ioc_version, rc);
+		RETURN(rc);
+	}
+
+	if (hdr.ioc_len > OBD_MAX_IOCTL_BUFFER) {
+		CERROR("%s: user buffer len %d exceeds %d max: rc = %d\n",
+		       current->comm, hdr.ioc_len, OBD_MAX_IOCTL_BUFFER, rc);
+		RETURN(rc);
+	}
+
+	if (hdr.ioc_len < sizeof(*data)) {
+		CERROR("%s: user buffer %d too small for ioctl %zu: rc = %d\n",
+		       current->comm, hdr.ioc_len, sizeof(*data), rc);
+		RETURN(rc);
+	}
+
+	/* When there are lots of processes calling vmalloc on multi-core
+	 * system, the high lock contention will hurt performance badly,
+	 * obdfilter-survey is an example, which relies on ioctl. So we'd
+	 * better avoid vmalloc on ioctl path. LU-66
+	 */
+	OBD_ALLOC_LARGE(data, hdr.ioc_len);
+	if (!data) {
+		rc = -ENOMEM;
+		CERROR("%s: cannot allocate control buffer len %d: rc = %d\n",
+		       current->comm, hdr.ioc_len, rc);
+		RETURN(rc);
+	}
+	*len = hdr.ioc_len;
+
+	if (copy_from_user(data, arg, hdr.ioc_len))
+		GOTO(out_free, rc = -EFAULT);
+
+	if (obd_ioctl_is_invalid(data))
+		GOTO(out_free, rc = -EINVAL);
+
+	if (data->ioc_inllen1) {
+		data->ioc_inlbuf1 = &data->ioc_bulk[0];
+		offset += ALIGN(data->ioc_inllen1, 8);
+	}
+
+	if (data->ioc_inllen2) {
+		data->ioc_inlbuf2 = &data->ioc_bulk[0] + offset;
+		offset += ALIGN(data->ioc_inllen2, 8);
+	}
+
+	if (data->ioc_inllen3) {
+		data->ioc_inlbuf3 = &data->ioc_bulk[0] + offset;
+		offset += ALIGN(data->ioc_inllen3, 8);
+	}
+
+	if (data->ioc_inllen4)
+		data->ioc_inlbuf4 = &data->ioc_bulk[0] + offset;
+
+	*datap = data;
+
+	RETURN(0);
+
+out_free:
+	OBD_FREE_LARGE(data, *len);
+	RETURN(rc);
+}
+EXPORT_SYMBOL(obd_ioctl_getdata);
+
+int class_handle_ioctl(unsigned int cmd, void __user *uarg)
+{
+	struct obd_ioctl_data *data;
+	struct obd_device *obd = NULL;
+	int rc, len = 0;
+
+	ENTRY;
+	CDEBUG(D_IOCTL, "obdclass: cmd=%x len=%u uarg=%pK\n", cmd, len, uarg);
+	if (unlikely(_IOC_TYPE(cmd) != 'f' && !OBD_IOC_BARRIER_ALLOW(cmd) &&
+		     !IOC_OSC_SET_ACTIVE_ALLOW(cmd)))
+		RETURN(OBD_IOC_ERROR("obdclass", cmd, "unknown", -ENOTTY));
+
+	rc = obd_ioctl_getdata(&data, &len, uarg);
+	if (rc) {
+		CERROR("%s: ioctl data error: rc = %d\n", current->comm, rc);
+		RETURN(rc);
+	}
+
+	switch (cmd) {
+	case OBD_IOC_PROCESS_CFG: {
+		struct lustre_cfg *lcfg;
+
+		if (!data->ioc_plen1 || !data->ioc_pbuf1) {
+			rc = OBD_IOC_ERROR("obdclass", cmd, "no config buffer",
+					   -EINVAL);
+			GOTO(out, rc);
+		}
+		OBD_ALLOC(lcfg, data->ioc_plen1);
+		if (lcfg == NULL)
+			GOTO(out, rc = -ENOMEM);
+		if (copy_from_user(lcfg, data->ioc_pbuf1, data->ioc_plen1))
+			GOTO(out_lcfg, rc = -EFAULT);
+		rc = lustre_cfg_sanity_check(lcfg, data->ioc_plen1);
+		if (rc)
+			GOTO(out_lcfg, rc);
+		rc = class_process_config(lcfg, NULL);
+
+out_lcfg:
+		OBD_FREE(lcfg, data->ioc_plen1);
+		GOTO(out, rc);
+	}
+
+#ifdef OBD_GET_VERSION
+	case_OBD_IOC_DEPRECATED(OBD_GET_VERSION, "obdclass", 2, 15) {
+		size_t vstr_size = sizeof(LUSTRE_VERSION_STRING);
+
+		if (!data->ioc_inlbuf1) {
+			rc = OBD_IOC_ERROR("obdclass", cmd, "no buffer passed",
+					   -EINVAL);
+			GOTO(out, rc);
+		}
+
+		if (vstr_size > data->ioc_inllen1) {
+			rc = OBD_IOC_ERROR("obdclass", cmd, "buffer too small",
+					   -EINVAL);
+			GOTO(out, rc);
+		}
+
+		strscpy(data->ioc_bulk, LUSTRE_VERSION_STRING, vstr_size);
+
+		if (copy_to_user(uarg, data, len))
+			rc = -EFAULT;
+		GOTO(out, rc);
+	}
+#endif
+	case OBD_IOC_NAME2DEV: {
+		/* Resolve device name, does not change current selected dev */
+		int dev;
+
+		dev = class_resolve_dev_name(data->ioc_inllen1,
+					     data->ioc_inlbuf1);
+		data->ioc_dev = dev;
+		if (dev < 0)
+			GOTO(out, rc = -EINVAL);
+
+		if (copy_to_user(uarg, data, sizeof(*data)))
+			rc = -EFAULT;
+		GOTO(out, rc);
+	}
+
+	case OBD_IOC_UUID2DEV: {
+		/* Resolve device uuid, does not change current selected dev */
+		struct obd_uuid uuid;
+		int dev;
+
+		if (!data->ioc_inllen1 || !data->ioc_inlbuf1) {
+			rc = OBD_IOC_ERROR("obdclass", cmd, "no UUID passed",
+					   -EINVAL);
+			GOTO(out, rc);
+		}
+		if (data->ioc_inlbuf1[data->ioc_inllen1 - 1] != 0) {
+			rc = OBD_IOC_ERROR("obdclass", cmd, "unterminated UUID",
+					   -EINVAL);
+			GOTO(out, rc);
+		}
+
+		CDEBUG(D_IOCTL, "device name %s\n", data->ioc_inlbuf1);
+		obd_str2uuid(&uuid, data->ioc_inlbuf1);
+		dev = class_uuid2dev(&uuid);
+		data->ioc_dev = dev;
+		if (dev == -1) {
+			CDEBUG(D_IOCTL, "No device for UUID %s!\n",
+			       data->ioc_inlbuf1);
+			GOTO(out, rc = -EINVAL);
+		}
+
+		CDEBUG(D_IOCTL, "device name %s, dev %d\n", data->ioc_inlbuf1,
+		       dev);
+		if (copy_to_user(uarg, data, sizeof(*data)))
+			rc = -EFAULT;
+		GOTO(out, rc);
+	}
+
+	case OBD_IOC_GETDEVICE: {
+		int index = data->ioc_count;
+		char *status, *str;
+
+		if (!data->ioc_inlbuf1) {
+			rc = OBD_IOC_ERROR("obdclass", cmd, "no buffer passed",
+					   -EINVAL);
+			GOTO(out, rc);
+		}
+		if (data->ioc_inllen1 < 128) {
+			rc = OBD_IOC_ERROR("obdclass", cmd, "too small version",
+					   -EINVAL);
+			GOTO(out, rc);
+		}
+
+		obd = class_num2obd(index);
+		if (!obd)
+			GOTO(out, rc = -ENOENT);
+
+		if (test_bit(OBDF_STOPPING, obd->obd_flags))
+			status = "ST";
+		else if (obd->obd_inactive)
+			status = "IN";
+		else if (test_bit(OBDF_SET_UP, obd->obd_flags))
+			status = "UP";
+		else if (test_bit(OBDF_ATTACHED, obd->obd_flags))
+			status = "AT";
+		else
+			status = "--";
+
+		str = data->ioc_bulk;
+		snprintf(str, len - sizeof(*data), "%3d %s %s %s %s %d",
+			 index, status, obd->obd_type->typ_name,
+			 obd->obd_name, obd->obd_uuid.uuid,
+			 kref_read(&obd->obd_refcount));
+
+		if (copy_to_user(uarg, data, len))
+			rc = -EFAULT;
+
+		GOTO(out, rc);
+	}
+	}
+
+	if (data->ioc_dev == OBD_DEV_BY_DEVNAME) {
+		if (data->ioc_inllen4 <= 0 || data->ioc_inlbuf4 == NULL)
+			GOTO(out, rc = -EINVAL);
+		if (strnlen(data->ioc_inlbuf4, MAX_OBD_NAME) >= MAX_OBD_NAME)
+			GOTO(out, rc = -EINVAL);
+		obd = class_name2obd(data->ioc_inlbuf4);
+	} else {
+		obd = class_num2obd(data->ioc_dev);
+	}
+
+	if (obd == NULL) {
+		rc = OBD_IOC_ERROR(data->ioc_inlbuf4, cmd, "no device found",
+				   -EINVAL);
+		GOTO(out, rc);
+	}
+	LASSERT(obd->obd_magic == OBD_DEVICE_MAGIC);
+
+	if (!test_bit(OBDF_SET_UP, obd->obd_flags) ||
+	    test_bit(OBDF_STOPPING, obd->obd_flags)) {
+		rc = -EINVAL;
+		CERROR("obdclass: device %d not set up: rc = %d\n",
+		       data->ioc_dev, rc);
+		GOTO(out, rc);
+	}
+
+	rc = obd_iocontrol(cmd, obd->obd_self_export, len, data, NULL);
+	if (rc)
+		GOTO(out, rc);
+
+	if (copy_to_user(uarg, data, len))
+		rc = -EFAULT;
+out:
+	OBD_FREE_LARGE(data, len);
+	RETURN(rc);
+} /* class_handle_ioctl */
+
+/* to control /dev/obd */
+static long obd_class_ioctl(struct file *filp, unsigned int cmd,
+			    unsigned long arg)
+{
+	int err = 0;
+
+	ENTRY;
+	/* Allow non-root access for some limited ioctls */
+	if (!capable(CAP_SYS_ADMIN))
+		RETURN(-EACCES);
+
+	if ((cmd & 0xffffff00) == ((int)'T') << 8) /* ignore all tty ioctls */
+		RETURN(-ENOTTY);
+
+	err = class_handle_ioctl(cmd, (void __user *)arg);
+
+	RETURN(err);
+}
+
+/* declare character device */
+static const struct file_operations obd_psdev_fops = {
+	.owner		= THIS_MODULE,
+	.unlocked_ioctl	= obd_class_ioctl,	/* unlocked_ioctl */
+};
+
+/* modules setup */
+static struct miscdevice obd_psdev = {
+	.minor	= MISC_DYNAMIC_MINOR,
+	.name	= OBD_DEV_NAME,
+	.fops	= &obd_psdev_fops,
+};
+
+#define test_string_to_size_err_total(value, expect, total, def_unit, __rc)    \
+({									       \
+	u64 __size;							       \
+	int __ret;							       \
+									       \
+	if (total == 0)							       \
+		__ret = sysfs_memparse(value, sizeof(value) - 1, &__size,      \
+				       def_unit);			       \
+	else								       \
+		__ret = sysfs_memparse_total(value, sizeof(value) - 1,         \
+					     &__size, total, def_unit);	       \
+	if (__ret != __rc) {						       \
+		CERROR("string_helper: parsing '%s' expect rc %d != got %d\n", \
+		       value, __rc, __ret);				       \
+		__ret = -EINVAL;					       \
+	} else if (!__ret && (u64)expect != __size) {			       \
+		CERROR("string_helper: parsing '%s' expect %llu != got %llu\n",\
+		       value, (u64)expect, __size);			       \
+		__ret = -EINVAL;					       \
+	} else {							       \
+		__ret = 0;						       \
+	}								       \
+	__ret;								       \
+})
+#define test_string_to_size_total(value, expect, total, def_unit) \
+	test_string_to_size_err_total(value, expect, total, def_unit, 0)
+
+#define test_string_to_size_err(value, expect, def_unit, __rc) \
+	test_string_to_size_err_total(value, expect, 0, def_unit, __rc)
+
+#define test_string_to_size_one(value, expect, def_unit) \
+	test_string_to_size_err_total(value, expect, 0, def_unit, 0)
+
+
+static int __init obd_init_checks(void)
+{
+	__u64 u64val, div64val;
+	char buf[64];
+	int len, ret = 0;
+
+	CDEBUG(D_INFO, "OBD_OBJECT_EOF = %#llx\n", (__u64)OBD_OBJECT_EOF);
+
+	u64val = OBD_OBJECT_EOF;
+	CDEBUG(D_INFO, "u64val OBD_OBJECT_EOF = %#llx\n", u64val);
+	if (u64val != OBD_OBJECT_EOF) {
+		CERROR("__u64 %#llx(%d) != 0xffffffffffffffff\n",
+		       u64val, (int)sizeof(u64val));
+		ret = -EINVAL;
+	}
+	len = snprintf(buf, sizeof(buf), "%#llx", u64val);
+	if (len != 18) {
+		CERROR("u64 hex wrong length, strlen(%s)=%d != 18\n", buf, len);
+		ret = -EINVAL;
+	}
+
+	div64val = OBD_OBJECT_EOF;
+	CDEBUG(D_INFO, "u64val OBD_OBJECT_EOF = %#llx\n", u64val);
+	if (u64val != OBD_OBJECT_EOF) {
+		CERROR("__u64 %#llx(%d) != 0xffffffffffffffff\n",
+		       u64val, (int)sizeof(u64val));
+		ret = -EOVERFLOW;
+	}
+	if (u64val >> 8 != OBD_OBJECT_EOF >> 8) {
+		CERROR("__u64 %#llx(%d) != 0xffffffffffffffff\n",
+		       u64val, (int)sizeof(u64val));
+		ret = -EOVERFLOW;
+	}
+	if (do_div(div64val, 256) != (u64val & 255)) {
+		CERROR("do_div(%#llx,256) != %llu\n", u64val, u64val & 255);
+		ret = -EOVERFLOW;
+	}
+	if (u64val >> 8 != div64val) {
+		CERROR("do_div(%#llx,256) %llu != %llu\n",
+		       u64val, div64val, u64val >> 8);
+		ret = -EOVERFLOW;
+	}
+	len = snprintf(buf, sizeof(buf), "%#llx", u64val);
+	if (len != 18) {
+		CERROR("u64 hex wrong length! strlen(%s)=%d != 18\n", buf, len);
+		ret = -EINVAL;
+	}
+	len = snprintf(buf, sizeof(buf), "%llu", u64val);
+	if (len != 20) {
+		CERROR("u64 wrong length! strlen(%s)=%d != 20\n", buf, len);
+		ret = -EINVAL;
+	}
+	len = snprintf(buf, sizeof(buf), "%lld", u64val);
+	if (len != 2) {
+		CERROR("s64 wrong length! strlen(%s)=%d != 2\n", buf, len);
+		ret = -EINVAL;
+	}
+	if ((u64val & ~PAGE_MASK) >= PAGE_SIZE) {
+		CERROR("mask failed: u64val %llu >= %llu\n", u64val,
+		       (__u64)PAGE_SIZE);
+		ret = -EINVAL;
+	}
+	if (ret)
+		RETURN(ret);
+
+	/* invalid string */
+	if (test_string_to_size_err("256B34", 256, "B", -EINVAL)) {
+		CERROR("string_helpers: format should be number then units\n");
+		ret = -EINVAL;
+	}
+	if (test_string_to_size_err("132OpQ", 132, "B", -EINVAL)) {
+		CERROR("string_helpers: invalid units should be rejected\n");
+		ret = -EINVAL;
+	}
+	if (test_string_to_size_err("1.82B", 1, "B", -EINVAL)) {
+		CERROR("string_helpers: 'B' with '.' should be invalid\n");
+		ret = -EINVAL;
+	}
+	if (test_string_to_size_err("10.badMib", 1, "B", -EINVAL)) {
+		CERROR("string_helpers: '10.badMib' should be invalid\n");
+		ret = -EINVAL;
+	}
+	if (test_string_to_size_err("10MiBbad", 1, "B", -EINVAL)) {
+		CERROR("string_helpers: '10MiBbad' should be invalid\n");
+		ret = -EINVAL;
+	}
+	if (test_string_to_size_err("10MBAD", 1, "B", -EINVAL)) {
+		CERROR("string_helpers: '10MBAD' should be invalid\n");
+		ret = -EINVAL;
+	}
+	if (test_string_to_size_err("10.123badMib", 1, "B", -EINVAL)) {
+		CERROR("string_helpers: '10.123badMib' should be invalid\n");
+		ret = -EINVAL;
+	}
+	if (test_string_to_size_err("1024.KG", 1, "B", -EINVAL)) {
+		CERROR("string_helpers: '1024.KG' should be invalid\n");
+		ret = -EINVAL;
+	}
+	if (test_string_to_size_err("102345678910234567891023456789.82M",
+				     1, "B", -EOVERFLOW)) {
+		CERROR("string_helpers: too long decimal string should be rejected\n");
+		ret = -EINVAL;
+	}
+	if (test_string_to_size_err(".1023456789M",
+				     1, "B", -EOVERFLOW)) {
+		CERROR("string_helpers: too long string for the fractional part should be rejected\n");
+		ret = -EINVAL;
+	}
+	if (test_string_to_size_one("343\n", 343, "B")) {
+		CERROR("string_helpers: should ignore newline\n");
+		ret = -EINVAL;
+	}
+	if (ret)
+		RETURN(ret);
+
+	/* memparse unit handling */
+	ret = 0;
+	ret = ret ?: test_string_to_size_one("0B", 0, "B");
+	ret = ret ?: test_string_to_size_one("512B", 512, "B");
+	ret = ret ?: test_string_to_size_one("1.067kB", 1067, "B");
+	ret = ret ?: test_string_to_size_one("1.042KiB", 1067, "B");
+	ret = ret ?: test_string_to_size_one("8", 8388608, "M");
+	ret = ret ?: test_string_to_size_one("65536", 65536, "B");
+	ret = ret ?: test_string_to_size_one("128", 131072, "K");
+	ret = ret ?: test_string_to_size_one("1M", 1048576, "B");
+	ret = ret ?: test_string_to_size_one("0.5T", 549755813888ULL, "T");
+	ret = ret ?: test_string_to_size_one("256.5G", 275414777856ULL, "G");
+	ret = ret ?: test_string_to_size_one("0.0625M", 1ULL << 16, "M");
+	ret = ret ?: test_string_to_size_one(".03125M", 1ULL << 15, "M");
+	ret = ret ?: test_string_to_size_one(".015625M", 1ULL << 14, "M");
+	if (ret)
+		RETURN(ret);
+
+	/* percent_memparse unit handling */
+	ret = 0;
+	ret = ret ?: test_string_to_size_total("0B", 0, 1, "B");
+	ret = ret ?: test_string_to_size_total("512B", 512, 512, "B");
+	ret = ret ?: test_string_to_size_total("1.067kB", 1067, 1 << 20, "B");
+	ret = ret ?: test_string_to_size_total("1.042KiB", 1067, 1 << 20, "B");
+	ret = ret ?: test_string_to_size_total("8", 8388608, 8 << 20, "M");
+	ret = ret ?: test_string_to_size_total("65536", 65536, 1 << 20, "B");
+	ret = ret ?: test_string_to_size_total("128", 131072, 128 << 10, "K");
+	ret = ret ?: test_string_to_size_total("1M", 1048576, 1 << 20, "B");
+	ret = ret ?: test_string_to_size_total("0.5T", 549755813888ULL,
+					 1ULL << 40, "K");
+	ret = ret ?: test_string_to_size_total("256.5G", 275414777856ULL,
+					 1ULL << 40, "G");
+
+	ret = ret ?: test_string_to_size_total("50%", 50, 100, "G");
+	ret = ret ?: test_string_to_size_total("31%", 31, 100, "G");
+	ret = ret ?: test_string_to_size_total("32.2 ", 322, 1000, "%");
+	ret = ret ?: test_string_to_size_total("32.21 ", 3221, 10000, "%");
+	ret = ret ?: test_string_to_size_total("50.5%", 505, 1000, "G");
+	ret = ret ?: test_string_to_size_total("0.5%", 5, 1000, "G");
+	ret = ret ?: test_string_to_size_total(".5%", 5, 1000, "G");
+	ret = ret ?: test_string_to_size_total("0%", 0, 1000, "G");
+	ret = ret ?: test_string_to_size_total("100%", 1000, 1000, "G");
+	ret = ret ?: test_string_to_size_total("50.012345678%", 50012,
+					       100000, "G");
+	ret = ret ?: test_string_to_size_total("50.012345678%", 500123,
+					       1000000, "G");
+	ret = ret ?: test_string_to_size_total("50.012345678%", 5001234,
+					       10000000, "G");
+
+	if (ret)
+		RETURN(ret);
+
+	if (test_string_to_size_err_total("200%", 2000, 1000, "B", -ERANGE)) {
+		CERROR("string_helpers: percent values > 100 should be rejected\n");
+		ret = -EINVAL;
+	}
+	if (test_string_to_size_err_total("2K", 2048, 1024, "K", -ERANGE)) {
+		CERROR("string_helpers: size values > total should be rejected\n");
+		ret = -EINVAL;
+	}
+
+	/* string helper values */
+	ret = ret ?: test_string_to_size_one("16", 16777216, "MiB");
+	ret = ret ?: test_string_to_size_one("8.39MB", 8390000, "MiB");
+	ret = ret ?: test_string_to_size_one("8.00MiB", 8388608, "MiB");
+	ret = ret ?: test_string_to_size_one("256GB", 256000000000ULL, "GiB");
+	ret = ret ?: test_string_to_size_one("238.731GiB", 256335459385ULL,
+					     "GiB");
+	if (ret)
+		RETURN(ret);
+
+	/* huge values */
+	ret = ret ?: test_string_to_size_one("0.4TB", 400000000000ULL, "TiB");
+	ret = ret ?: test_string_to_size_one("12.5TiB", 13743895347200ULL,
+					     "TiB");
+	ret = ret ?: test_string_to_size_one("2PB", 2000000000000000ULL, "PiB");
+	ret = ret ?: test_string_to_size_one("16PiB", 18014398509481984ULL,
+					     "PiB");
+	ret = ret ?: test_string_to_size_one("0.5EiB", 1ULL << 59, "EiB");
+	ret = ret ?: test_string_to_size_total("50%", 1ULL << 62, 1ULL << 63,
+					       "%");
+	ret = ret ?: test_string_to_size_total("50%", (~0ULL) >> 1, ~0ULL, "%");
+	if (ret)
+		RETURN(ret);
+
+	/* huge values should overflow */
+	if (test_string_to_size_err("1000EiB", 0, "EiB", -EOVERFLOW)) {
+		CERROR("string_helpers: failed to detect binary overflow\n");
+		ret = -EINVAL;
+	}
+	if (test_string_to_size_err("1000EB", 0, "EiB", -EOVERFLOW)) {
+		CERROR("string_helpers: failed to detect decimal overflow\n");
+		ret = -EINVAL;
+	}
+
+	return ret;
+}
+
+static int __init obdclass_init(void)
+{
+	int err;
+
+	LCONSOLE_INFO("Lustre: Build Version: "LUSTRE_VERSION_STRING"\n");
+
+	err = libcfs_setup();
+	if (err)
+		return err;
+
+	err = obd_init_checks();
+	if (err)
+		return err;
+
+	err = percpu_counter_init(&obd_memory, 0, GFP_KERNEL);
+	if (err < 0) {
+		CERROR("obdclass: initializing 'obd_memory' failed: rc = %d\n",
+		       err);
+		return err;
+	}
+
+	register_oom_notifier(&obdclass_oom);
+
+	err = libcfs_kkuc_init();
+	if (err)
+		goto cleanup_obd_memory;
+
+	err = obd_zombie_impexp_init();
+	if (err)
+		goto cleanup_kkuc;
+
+	err = class_handle_init();
+	if (err)
+		goto cleanup_zombie_impexp;
+
+	err = misc_register(&obd_psdev);
+	if (err) {
+		CERROR("cannot register OBD miscdevice: rc = %d\n", err);
+		goto cleanup_class_handle;
+	}
+
+	/* Default the dirty page cache cap to 1/2 of system memory.
+	 * For clients with less memory, a larger fraction is needed
+	 * for other purposes (mostly for BGL). */
+	if (compat_totalram_pages() <= 512 << (20 - PAGE_SHIFT))
+		obd_max_dirty_pages = compat_totalram_pages() / 4;
+	else
+		obd_max_dirty_pages = compat_totalram_pages() / 2;
+
+	err = obd_init_caches();
+	if (err)
+		goto cleanup_deregister;
+
+	err = class_procfs_init();
+	if (err)
+		goto cleanup_caches;
+
+	err = lu_global_init();
+	if (err)
+		goto cleanup_class_procfs;
+
+	err = cl_global_init();
+	if (err != 0)
+		goto cleanup_lu_global;
+
+	err = llog_info_init();
+	if (err)
+		goto cleanup_cl_global;
+
+	err = obd_pool_init();
+	if (err)
+		goto cleanup_llog_info;
+
+	err = cfs_hash_init();
+	if (err)
+		goto cleanup_obd_pool;
+#ifdef CONFIG_LUSTRE_FS_SERVER
+	err = dt_global_init();
+	if (err != 0)
+		goto cleanup_cfs_hash;
+
+	err = lu_ucred_global_init();
+	if (err != 0)
+		goto cleanup_dt_global;
+#endif /* CONFIG_LUSTRE_FS_SERVER */
+
+	/* simulate a late OOM situation now to require all
+	 * alloc'ed/initialized resources to be freed
+	 */
+	if (CFS_FAIL_CHECK(OBD_FAIL_OBDCLASS_MODULE_LOAD)) {
+		/* force error to ensure module will be unloaded/cleaned */
+		err = -ENOMEM;
+		goto cleanup_all;
+	}
+	return 0;
+
+cleanup_all:
+#ifdef CONFIG_LUSTRE_FS_SERVER
+	lu_ucred_global_fini();
+
+cleanup_dt_global:
+	dt_global_fini();
+
+cleanup_cfs_hash:
+#endif /* CONFIG_LUSTRE_FS_SERVER */
+	cfs_hash_fini();
+cleanup_obd_pool:
+	obd_pool_fini();
+
+cleanup_llog_info:
+	llog_info_fini();
+
+cleanup_cl_global:
+	cl_global_fini();
+
+cleanup_lu_global:
+	lu_global_fini();
+
+cleanup_class_procfs:
+	class_procfs_clean();
+
+cleanup_caches:
+	obd_cleanup_caches();
+
+cleanup_deregister:
+	misc_deregister(&obd_psdev);
+
+cleanup_class_handle:
+	class_handle_cleanup();
+
+cleanup_zombie_impexp:
+	obd_zombie_impexp_stop();
+
+cleanup_kkuc:
+	libcfs_kkuc_fini();
+
+cleanup_obd_memory:
+	percpu_counter_destroy(&obd_memory);
+
+	unregister_oom_notifier(&obdclass_oom);
+	return err;
+}
+
+void obd_update_maxusage(void)
+{
+	__u64 max;
+
+	max = obd_memory_sum();
+
+	spin_lock(&obd_updatemax_lock);
+	if (max > obd_max_alloc)
+		obd_max_alloc = max;
+	spin_unlock(&obd_updatemax_lock);
+}
+EXPORT_SYMBOL(obd_update_maxusage);
+
+__u64 obd_memory_max(void)
+{
+	__u64 ret;
+
+	obd_update_maxusage();
+	spin_lock(&obd_updatemax_lock);
+	ret = obd_max_alloc;
+	spin_unlock(&obd_updatemax_lock);
+
+	return ret;
+}
+EXPORT_SYMBOL(obd_memory_max);
+
+static void __exit obdclass_exit(void)
+{
+	__u64 memory_leaked;
+	__u64 memory_max;
+	ENTRY;
+
+	misc_deregister(&obd_psdev);
+#ifdef CONFIG_LUSTRE_FS_SERVER
+	lu_ucred_global_fini();
+	dt_global_fini();
+#endif /* CONFIG_LUSTRE_FS_SERVER */
+	cfs_hash_fini();
+	obd_pool_fini();
+	llog_info_fini();
+	cl_global_fini();
+	lu_global_fini();
+
+	obd_cleanup_caches();
+
+	class_procfs_clean();
+
+	class_handle_cleanup();
+	class_del_uuid(NULL); /* Delete all UUIDs. */
+	obd_zombie_impexp_stop();
+	libcfs_kkuc_fini();
+
+	memory_leaked = obd_memory_sum();
+	memory_max = obd_memory_max();
+
+	percpu_counter_destroy(&obd_memory);
+	/* the below message is checked in test-framework.sh check_mem_leak() */
+	CDEBUG((memory_leaked) ? D_ERROR : D_INFO,
+	       "obd_memory max: %llu, leaked: %llu\n",
+	       memory_max, memory_leaked);
+
+	unregister_oom_notifier(&obdclass_oom);
+
+	EXIT;
+}
+
+void obd_heat_clear(struct obd_heat_instance *instance, int count)
+{
+	ENTRY;
+
+	memset(instance, 0, sizeof(*instance) * count);
+	RETURN_EXIT;
+}
+EXPORT_SYMBOL(obd_heat_clear);
+
+/*
+ * The file heat is calculated for every time interval period I. The access
+ * frequency during each period is counted. The file heat is only recalculated
+ * at the end of a time period.  And a percentage of the former file heat is
+ * lost when recalculated. The recursion formula to calculate the heat of the
+ * file f is as follow:
+ *
+ * Hi+1(f) = (1-P)*Hi(f)+ P*Ci
+ *
+ * Where Hi is the heat value in the period between time points i*I and
+ * (i+1)*I; Ci is the access count in the period; the symbol P refers to the
+ * weight of Ci. The larger the value the value of P is, the more influence Ci
+ * has on the file heat.
+ */
+void obd_heat_decay(struct obd_heat_instance *instance,  __u64 time_second,
+		    unsigned int weight, unsigned int period_second)
+{
+	u64 second;
+
+	ENTRY;
+
+	if (instance->ohi_time_second > time_second) {
+		obd_heat_clear(instance, 1);
+		RETURN_EXIT;
+	}
+
+	if (instance->ohi_time_second == 0)
+		RETURN_EXIT;
+
+	for (second = instance->ohi_time_second + period_second;
+	     second < time_second;
+	     second += period_second) {
+		instance->ohi_heat = instance->ohi_heat *
+				(256 - weight) / 256 +
+				instance->ohi_count * weight / 256;
+		instance->ohi_count = 0;
+		instance->ohi_time_second = second;
+	}
+	RETURN_EXIT;
+}
+EXPORT_SYMBOL(obd_heat_decay);
+
+__u64 obd_heat_get(struct obd_heat_instance *instance, unsigned int time_second,
+		   unsigned int weight, unsigned int period_second)
+{
+	ENTRY;
+
+	obd_heat_decay(instance, time_second, weight, period_second);
+
+	if (instance->ohi_count == 0)
+		RETURN(instance->ohi_heat);
+
+	RETURN(instance->ohi_heat * (256 - weight) / 256 +
+	       instance->ohi_count * weight / 256);
+}
+EXPORT_SYMBOL(obd_heat_get);
+
+void obd_heat_add(struct obd_heat_instance *instance,
+		  unsigned int time_second,  __u64 count,
+		  unsigned int weight, unsigned int period_second)
+{
+	ENTRY;
+
+	obd_heat_decay(instance, time_second, weight, period_second);
+	if (instance->ohi_time_second == 0) {
+		instance->ohi_time_second = time_second;
+		instance->ohi_heat = 0;
+		instance->ohi_count = count;
+	} else {
+		instance->ohi_count += count;
+	}
+	RETURN_EXIT;
+}
+EXPORT_SYMBOL(obd_heat_add);
+
+MODULE_AUTHOR("OpenSFS, Inc. <http://www.lustre.org/>");
+MODULE_DESCRIPTION("Lustre Class Driver");
+MODULE_VERSION(LUSTRE_VERSION_STRING);
+MODULE_LICENSE("GPL");
+
+late_initcall_sync(obdclass_init);
+module_exit(obdclass_exit);

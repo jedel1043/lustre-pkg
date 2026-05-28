@@ -1,0 +1,1342 @@
+// SPDX-License-Identifier: GPL-2.0
+
+/*
+ * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Use is subject to license terms.
+ *
+ * Copyright (c) 2015, 2017, Intel Corporation.
+ */
+
+/*
+ * This file is part of Lustre, http://www.lustre.org/
+ *
+ * Kernel <-> userspace communication routines.
+ * Using pipes for all arches.
+ *
+ * Author: Nathan Rutman <nathan.rutman@sun.com>
+ */
+
+#define DEBUG_SUBSYSTEM S_CLASS
+
+#include <linux/file.h>
+#include <linux/glob.h>
+#include <linux/types.h>
+#include <lustre_compat/net/genetlink.h>
+
+#include <obd_class.h>
+#include <obd_support.h>
+#include <lustre_kernelcomm.h>
+
+static struct genl_family lustre_family;
+
+static struct ln_key_list device_list = {
+	.lkl_maxattr			= LUSTRE_DEVICE_ATTR_MAX,
+	.lkl_list			= {
+		[LUSTRE_DEVICE_ATTR_HDR]	= {
+			.lkp_value		= "devices",
+			.lkp_key_format		= LNKF_SEQUENCE | LNKF_MAPPING,
+			.lkp_data_type		= NLA_NUL_STRING,
+		},
+		[LUSTRE_DEVICE_ATTR_INDEX]	= {
+			.lkp_value		= "index",
+			.lkp_data_type		= NLA_U16
+		},
+		[LUSTRE_DEVICE_ATTR_STATUS]	= {
+			.lkp_value		= "status",
+			.lkp_data_type		= NLA_STRING
+		},
+		[LUSTRE_DEVICE_ATTR_CLASS]	= {
+			.lkp_value		= "type",
+			.lkp_data_type		= NLA_STRING
+		},
+		[LUSTRE_DEVICE_ATTR_NAME]	= {
+			.lkp_value		= "name",
+			.lkp_data_type		= NLA_STRING
+		},
+		[LUSTRE_DEVICE_ATTR_UUID]	= {
+			.lkp_value		= "uuid",
+			.lkp_data_type		= NLA_STRING
+		},
+		[LUSTRE_DEVICE_ATTR_REFCOUNT]	= {
+			.lkp_value		= "refcount",
+			.lkp_data_type		= NLA_U32
+		},
+	},
+};
+
+struct genl_dev_list {
+	struct obd_device	*gdl_target;
+	unsigned int		gdl_start;
+};
+
+static inline struct genl_dev_list *
+device_dump_ctx(struct netlink_callback *cb)
+{
+	return (struct genl_dev_list *)cb->args[0];
+}
+
+/* For 'value' packet it contains
+ *	minor		u16
+ *	status		(2 characters)
+ *	typ_name	(16 for enough space for things like osd-ldiskfs)
+ *	obd_name	MAX_OBD_NAME
+ *	obd_uuid	UUID_MAX
+ *	refcount	u32
+ */
+#define DEVICE_VALUE_PACKET_SIZE	(2 + 2 + 16 + MAX_OBD_NAME + UUID_MAX + 4)
+#define DEVICE_KEY_TABLE_PACKET_SIZE	(44 + 28 + 28 + 28 + 28 + 28 + 32)
+
+/* generic ->start() handler for GET requests */
+static int lustre_device_list_start(struct netlink_callback *cb)
+{
+	struct genlmsghdr *gnlh = nlmsg_data(cb->nlh);
+	struct netlink_ext_ack *extack = cb->extack;
+	struct genl_dev_list *glist;
+	unsigned long len = 0;
+	int msg_len, rc = 0;
+
+	OBD_ALLOC(glist, sizeof(*glist));
+	if (!glist)
+		return -ENOMEM;
+
+	cb->args[0] = (long)glist;
+	glist->gdl_target = NULL;
+	glist->gdl_start = 0;
+
+	msg_len = genlmsg_len(gnlh);
+	if (msg_len > 0) {
+		struct nlattr *params = genlmsg_data(gnlh);
+		struct nlattr *dev;
+		int rem;
+
+		if (!(nla_type(params) & LN_SCALAR_ATTR_LIST)) {
+			NL_SET_ERR_MSG(extack, "no configuration");
+			GOTO(report_err, rc);
+		}
+
+		nla_for_each_nested(dev, params, rem) {
+			struct nlattr *prop;
+			int rem2;
+
+			nla_for_each_nested(prop, dev, rem2) {
+				char name[MAX_OBD_NAME];
+				struct obd_device *obd;
+
+				if (nla_type(prop) != LN_SCALAR_ATTR_VALUE ||
+				    nla_strcmp(prop, "name") != 0)
+					continue;
+
+				prop = nla_next(prop, &rem2);
+				if (nla_type(prop) != LN_SCALAR_ATTR_VALUE)
+					GOTO(report_err, rc = -EINVAL);
+
+				rc = nla_strscpy(name, prop, sizeof(name));
+				if (rc < 0)
+					GOTO(report_err, rc);
+				rc = 0;
+
+				obd = class_name2obd(name);
+				if (obd)
+					glist->gdl_target = obd;
+			}
+		}
+		if (!glist->gdl_target) {
+			NL_SET_ERR_MSG(extack, "No devices found");
+			rc = -ENOENT;
+		}
+		len = DEVICE_VALUE_PACKET_SIZE;
+	} else {
+		len = class_obd_devs_count() * DEVICE_VALUE_PACKET_SIZE;
+	}
+
+	len += DEVICE_KEY_TABLE_PACKET_SIZE;
+	if (len > BIT(sizeof(cb->min_dump_alloc) << 3)) {
+		NL_SET_ERR_MSG(extack, "Netlink msg is too large");
+		rc = -EMSGSIZE;
+	} else {
+		cb->min_dump_alloc = len;
+	}
+report_err:
+	if (rc < 0) {
+		OBD_FREE(glist, sizeof(*glist));
+		cb->args[0] = 0;
+	}
+	return rc;
+}
+
+static int lustre_device_list_dump(struct sk_buff *msg,
+				   struct netlink_callback *cb)
+{
+	struct genl_dev_list *glist = device_dump_ctx(cb);
+	struct obd_device *filter = glist->gdl_target;
+	struct obd_device *obd = NULL;
+	struct netlink_ext_ack *extack = cb->extack;
+	int portid = NETLINK_CB(cb->skb).portid;
+	int seq = cb->nlh->nlmsg_seq;
+	unsigned long idx = 0;
+	int rc = 0;
+
+	if (glist->gdl_start == 0) {
+		const struct ln_key_list *all[] = {
+			&device_list, NULL
+		};
+
+		rc = lnet_genl_send_scalar_list(msg, portid, seq,
+						&lustre_family,
+						NLM_F_CREATE | NLM_F_MULTI,
+						LUSTRE_CMD_DEVICES, all);
+		if (rc < 0) {
+			NL_SET_ERR_MSG(extack, "failed to send key table");
+			goto send_err;
+		}
+	}
+
+	obd_device_lock();
+	obd_device_for_each_start(idx, obd, glist->gdl_start) {
+		const char *status;
+		void *hdr;
+
+		if (filter && filter != obd)
+			continue;
+
+		hdr = genlmsg_put(msg, portid, seq, &lustre_family,
+				  NLM_F_MULTI, LUSTRE_CMD_DEVICES);
+		if (!hdr) {
+			NL_SET_ERR_MSG(extack, "failed to send values");
+			genlmsg_cancel(msg, hdr);
+			rc = -EMSGSIZE;
+			break;
+		}
+
+		if (idx == 0)
+			nla_put_string(msg, LUSTRE_DEVICE_ATTR_HDR, "");
+
+		nla_put_u16(msg, LUSTRE_DEVICE_ATTR_INDEX, obd->obd_minor);
+
+		/* Collect only the index value for a single obd */
+		if (filter) {
+			genlmsg_end(msg, hdr);
+			idx++;
+			break;
+		}
+
+		if (test_bit(OBDF_STOPPING, obd->obd_flags))
+			status = "ST";
+		else if (obd->obd_inactive)
+			status = "IN";
+		else if (test_bit(OBDF_SET_UP, obd->obd_flags))
+			status = "UP";
+		else if (test_bit(OBDF_ATTACHED, obd->obd_flags))
+			status = "AT";
+		else
+			status = "--";
+
+		nla_put_string(msg, LUSTRE_DEVICE_ATTR_STATUS, status);
+
+		nla_put_string(msg, LUSTRE_DEVICE_ATTR_CLASS,
+			       obd->obd_type->typ_name);
+
+		nla_put_string(msg, LUSTRE_DEVICE_ATTR_NAME,
+			       obd->obd_name);
+
+		nla_put_string(msg, LUSTRE_DEVICE_ATTR_UUID,
+			       obd->obd_uuid.uuid);
+
+		nla_put_u32(msg, LUSTRE_DEVICE_ATTR_REFCOUNT,
+			    kref_read(&obd->obd_refcount));
+
+		genlmsg_end(msg, hdr);
+	}
+	obd_device_unlock();
+
+	glist->gdl_start = idx + 1;
+send_err:
+	return rc < 0 ? rc : msg->len;
+}
+
+static int lustre_device_done(struct netlink_callback *cb)
+{
+	struct genl_dev_list *glist;
+
+	glist = device_dump_ctx(cb);
+	if (glist) {
+		OBD_FREE(glist, sizeof(*glist));
+		cb->args[0] = 0;
+	}
+
+	return 0;
+}
+
+/* target_obd handling */
+struct lu_tgt_list {
+	char			ltl_src[MAX_OBD_NAME * 3];
+	struct lu_tgt_descs	*ltl_desc;
+};
+
+struct genl_tgts_list {
+	unsigned int			gol_index;
+	unsigned int			gol_count;
+	GENRADIX(struct lu_tgt_list)	gol_list;
+};
+
+static inline struct genl_tgts_list *
+target_dump_ctx(struct netlink_callback *cb)
+{
+	return (struct genl_tgts_list *)cb->args[0];
+}
+
+static int lustre_targets_done(struct netlink_callback *cb)
+{
+	struct genl_tgts_list *tlist = target_dump_ctx(cb);
+
+	if (tlist) {
+		genradix_free(&tlist->gol_list);
+		LIBCFS_FREE(tlist, sizeof(*tlist));
+		cb->args[0] = 0;
+	}
+
+	return 0;
+}
+
+/* generic ->start() handler for GET requests */
+static int lustre_targets_start(struct netlink_callback *cb)
+{
+	struct genlmsghdr *gnlh = nlmsg_data(cb->nlh);
+	struct netlink_ext_ack *extack = cb->extack;
+	int msg_len = genlmsg_len(gnlh);
+	struct genl_tgts_list *tlist;
+	unsigned long idx = 0;
+	int rc = 0;
+
+	LIBCFS_ALLOC(tlist, sizeof(*tlist));
+	if (!tlist) {
+		NL_SET_ERR_MSG(extack, "failed to setup obd list");
+		return -ENOMEM;
+	}
+	genradix_init(&tlist->gol_list);
+	tlist->gol_index = 0;
+	tlist->gol_count = 0;
+	cb->args[0] = (long)tlist;
+
+	if (msg_len > 0) {
+		struct nlattr *params = genlmsg_data(gnlh);
+		struct nlattr *target;
+		int rem;
+
+		if (!(nla_type(params) & LN_SCALAR_ATTR_LIST)) {
+			NL_SET_ERR_MSG(extack, "no configuration");
+			GOTO(report_err, rc = -EINVAL);
+		}
+
+		nla_for_each_nested(target, params, rem) {
+			struct nlattr *prop;
+			int rem2;
+
+			nla_for_each_nested(prop, target, rem2) {
+				char name[MAX_OBD_NAME * 3], *filter;
+				struct obd_device *obd;
+				char type[5];
+				ssize_t len;
+
+				if (nla_type(prop) != LN_SCALAR_ATTR_VALUE ||
+				    nla_strcmp(prop, "source") != 0)
+					continue;
+
+				prop = nla_next(prop, &rem2);
+				if (nla_type(prop) != LN_SCALAR_ATTR_VALUE)
+					GOTO(report_err, rc = -EINVAL);
+
+				len = nla_strscpy(name, prop, sizeof(name));
+				if (len < 0)
+					GOTO(report_err, rc = (int)len);
+
+				filter = strim(name); /* remove any whitespaces */
+				len = strcspn(filter, ".") + 1;
+				strscpy(type, name, min_t(size_t, len, sizeof(type)));
+
+				obd_device_lock();
+				obd_device_for_each(idx, obd) {
+					struct lu_tgt_descs *ltd = NULL;
+					struct lu_tgt_list *ltl;
+
+					/* Only look at specific obds */
+					if (strncmp(obd->obd_type->typ_name,
+						    LUSTRE_LMV_NAME,
+						    strlen(LUSTRE_LMV_NAME)) == 0)
+						ltd = &obd->u.lmv.lmv_mdt_descs;
+					else if (strncmp(obd->obd_type->typ_name,
+							 LUSTRE_LOV_NAME,
+							 strlen(LUSTRE_LOV_NAME)) == 0)
+						ltd = &obd->u.lov.lov_ost_descs;
+					if (!ltd)
+						continue;
+
+					/* Now filter by obd_type */
+					if (!glob_match(type,
+							obd->obd_type->typ_name))
+						continue;
+
+					/* Filter by obd_name */
+					if (!glob_match(filter + len,
+							obd->obd_name))
+						continue;
+
+					ltl = genradix_ptr_alloc(&tlist->gol_list,
+								 tlist->gol_count++,
+								 GFP_ATOMIC);
+					if (!ltl) {
+						NL_SET_ERR_MSG(extack,
+							       "failed to allocate target desc");
+						obd_device_unlock();
+						GOTO(report_err, rc = -ENOMEM);
+					}
+					scnprintf(ltl->ltl_src,
+						 sizeof(ltl->ltl_src), "%s.%s",
+						 obd->obd_type->typ_name,
+						 obd->obd_name);
+					ltl->ltl_desc = ltd;
+				}
+				obd_device_unlock();
+			}
+		}
+		if (!tlist->gol_count)
+			rc = -ENOENT;
+	} else {
+		struct obd_device *obd;
+
+		obd_device_lock();
+		obd_device_for_each(idx, obd) {
+			struct lu_tgt_descs *ltd = NULL;
+			struct lu_tgt_list *ltl;
+
+			if (strcmp(obd->obd_type->typ_name,
+				   LUSTRE_LMV_NAME) == 0)
+				ltd = &obd->u.lmv.lmv_mdt_descs;
+			else if (strcmp(obd->obd_type->typ_name,
+					LUSTRE_LOV_NAME) == 0)
+				ltd = &obd->u.lov.lov_ost_descs;
+			if (!ltd)
+				continue;
+
+			ltl = genradix_ptr_alloc(&tlist->gol_list,
+						 tlist->gol_count++,
+						 GFP_ATOMIC);
+			if (!ltl) {
+				NL_SET_ERR_MSG(extack,
+					       "failed to allocate target desc");
+				obd_device_unlock();
+				GOTO(report_err, rc = -ENOMEM);
+			}
+
+			ltl->ltl_desc = ltd;
+		}
+		obd_device_unlock();
+	}
+report_err:
+	if (rc < 0)
+		lustre_targets_done(cb);
+
+	return rc;
+}
+
+static struct ln_key_list tgt_keys = {
+	.lkl_maxattr			= LUSTRE_TARGET_ATTR_MAX,
+	.lkl_list			= {
+		[LUSTRE_TARGET_ATTR_HDR]	= {
+			.lkp_value		= "target_obd",
+			.lkp_key_format		= LNKF_SEQUENCE | LNKF_MAPPING,
+			.lkp_data_type		= NLA_NUL_STRING,
+		},
+		[LUSTRE_TARGET_ATTR_SOURCE]	= {
+			.lkp_value		= "source",
+			.lkp_data_type		= NLA_STRING,
+		},
+		[LUSTRE_TARGET_ATTR_PROP_LIST]	= {
+			.lkp_value		= "targets",
+			.lkp_key_format		= LNKF_SEQUENCE | LNKF_MAPPING,
+			.lkp_data_type		= NLA_NESTED,
+		},
+	},
+};
+
+static struct ln_key_list tgt_prop_keys = {
+	.lkl_maxattr			= LUSTRE_TARGET_PROP_ATTR_MAX,
+	.lkl_list			= {
+		[LUSTRE_TARGET_PROP_ATTR_INDEX]	= {
+			.lkp_value		= "index",
+			.lkp_data_type		= NLA_U16
+		},
+		[LUSTRE_TARGET_PROP_ATTR_UUID]	= {
+			.lkp_value		= "uuid",
+			.lkp_data_type		= NLA_STRING
+		},
+		[LUSTRE_TARGET_PROP_ATTR_STATUS] = {
+			.lkp_value		= "status",
+			.lkp_data_type		= NLA_STRING
+		},
+	},
+};
+
+static int lustre_targets_dump(struct sk_buff *msg,
+			       struct netlink_callback *cb)
+{
+	struct genl_tgts_list *tlist = target_dump_ctx(cb);
+	struct genlmsghdr *gnlh = nlmsg_data(cb->nlh);
+	struct netlink_ext_ack *extack = cb->extack;
+	int portid = NETLINK_CB(cb->skb).portid;
+	int seq = cb->nlh->nlmsg_seq;
+	int idx = tlist->gol_index;
+	int rc = 0;
+
+	if (!idx) {
+		const struct ln_key_list *all[] = {
+			&tgt_keys, &tgt_prop_keys, NULL
+		};
+
+		rc = lnet_genl_send_scalar_list(msg, portid, seq,
+						&lustre_family,
+						NLM_F_CREATE | NLM_F_MULTI,
+						LUSTRE_CMD_TARGETS, all);
+		if (rc < 0) {
+			NL_SET_ERR_MSG(extack, "failed to send key table");
+			GOTO(send_error, rc);
+		}
+		rc = 0;
+	}
+
+	while (idx < tlist->gol_count) {
+		struct lu_tgt_list *ltl;
+		struct lu_tgt_desc *tgt;
+		struct nlattr *tgt_list;
+		int j = 1;
+		void *hdr;
+
+		ltl = genradix_ptr(&tlist->gol_list, idx++);
+		if (!ltl)
+			continue;
+
+		hdr = genlmsg_put(msg, portid, seq, &lustre_family,
+				  NLM_F_MULTI, LUSTRE_CMD_TARGETS);
+		if (!hdr) {
+			NL_SET_ERR_MSG(extack, "failed to send values");
+			genlmsg_cancel(msg, hdr);
+			GOTO(send_error, rc = -EMSGSIZE);
+		}
+
+		if (idx == 1)
+			nla_put_string(msg, LUSTRE_TARGET_ATTR_HDR, "");
+
+		nla_put_string(msg, LUSTRE_TARGET_ATTR_SOURCE,
+			       ltl->ltl_src);
+
+		/* We just want the source */
+		if (!gnlh->version)
+			goto skip_details;
+
+		tgt_list = nla_nest_start(msg, LUSTRE_TARGET_ATTR_PROP_LIST);
+		ltd_foreach_tgt(ltl->ltl_desc, tgt) {
+			struct nlattr *tgt_attr;
+
+			tgt_attr = nla_nest_start(msg, j++);
+			nla_put_u16(msg, LUSTRE_TARGET_PROP_ATTR_INDEX, tgt->ltd_index);
+
+			nla_put_string(msg, LUSTRE_TARGET_PROP_ATTR_STATUS,
+				       tgt->ltd_active ? "ACTIVE" : "INACTIVE");
+
+			nla_put_string(msg, LUSTRE_TARGET_PROP_ATTR_UUID,
+				       obd_uuid2str(&tgt->ltd_uuid));
+			nla_nest_end(msg, tgt_attr);
+		}
+		nla_nest_end(msg, tgt_list);
+skip_details:
+		genlmsg_end(msg, hdr);
+	}
+
+	tlist->gol_index = idx;
+send_error:
+	return rc;
+}
+
+static struct ln_key_list stats_params = {
+	.lkl_maxattr	= LUSTRE_PARAM_ATTR_MAX,
+	.lkl_list	= {
+		[LUSTRE_PARAM_ATTR_HDR] = {
+			.lkp_value	= "stats",
+			.lkp_key_format	= LNKF_SEQUENCE | LNKF_MAPPING,
+			.lkp_data_type	= NLA_NUL_STRING,
+		},
+		[LUSTRE_PARAM_ATTR_SOURCE] = {
+			.lkp_value	= "source",
+			.lkp_data_type	= NLA_STRING,
+		},
+	},
+};
+
+static const struct ln_key_list stats_list = {
+	.lkl_maxattr			= LUSTRE_STATS_ATTR_MAX,
+	.lkl_list			= {
+		[LUSTRE_STATS_ATTR_HDR]	= {
+			.lkp_value		= "stats",
+			.lkp_key_format		= LNKF_SEQUENCE | LNKF_MAPPING,
+			.lkp_data_type		= NLA_NUL_STRING,
+		},
+		[LUSTRE_STATS_ATTR_SOURCE]	= {
+			.lkp_value		= "source",
+			.lkp_data_type		= NLA_STRING,
+		},
+		[LUSTRE_STATS_ATTR_TIMESTAMP]	= {
+			.lkp_value		= "snapshot_time",
+			.lkp_data_type		= NLA_S64,
+		},
+		[LUSTRE_STATS_ATTR_START_TIME]	= {
+			.lkp_value		= "start_time",
+			.lkp_data_type		= NLA_S64,
+		},
+		[LUSTRE_STATS_ATTR_ELAPSE_TIME]	= {
+			.lkp_value		= "elapsed_time",
+			.lkp_data_type		= NLA_S64,
+		},
+		[LUSTRE_STATS_ATTR_DATASET]	= {
+			.lkp_key_format		= LNKF_FLOW | LNKF_MAPPING,
+			.lkp_data_type		= NLA_NESTED,
+		},
+	},
+};
+
+static const struct ln_key_list stats_dataset_list = {
+	.lkl_maxattr				= LUSTRE_STATS_ATTR_DATASET_MAX,
+	.lkl_list				= {
+		[LUSTRE_STATS_ATTR_DATASET_NAME]	= {
+			.lkp_data_type			= NLA_NUL_STRING,
+		},
+		[LUSTRE_STATS_ATTR_DATASET_COUNT]	= {
+			.lkp_value			= "samples",
+			.lkp_data_type			= NLA_U64,
+		},
+		[LUSTRE_STATS_ATTR_DATASET_UNITS]	= {
+			.lkp_value			= "units",
+			.lkp_data_type			= NLA_STRING,
+		},
+		[LUSTRE_STATS_ATTR_DATASET_MINIMUM]	= {
+			.lkp_value			= "min",
+			.lkp_data_type			= NLA_U64,
+		},
+		[LUSTRE_STATS_ATTR_DATASET_MAXIMUM]	= {
+			.lkp_value			= "max",
+			.lkp_data_type			= NLA_U64,
+		},
+		[LUSTRE_STATS_ATTR_DATASET_SUM]		= {
+			.lkp_value			= "sum",
+			.lkp_data_type			= NLA_U64,
+		},
+		[LUSTRE_STATS_ATTR_DATASET_SUMSQUARE]	= {
+			.lkp_value			= "stddev",
+			.lkp_data_type			= NLA_U64,
+		},
+	},
+};
+
+#ifdef HAVE_GENL_DUMPIT_INFO
+static struct compat_genl_info service_info;
+#endif
+
+static inline struct lustre_stats_list *
+stats_dump_ctx(struct netlink_callback *cb)
+{
+	return (struct lustre_stats_list *)cb->args[0];
+}
+
+int lustre_stats_done(struct netlink_callback *cb)
+{
+	struct lustre_stats_list *list = stats_dump_ctx(cb);
+
+	if (list) {
+		genradix_free(&list->gfl_list);
+		OBD_FREE(list, sizeof(*list));
+		cb->args[0] = 0;
+	}
+	return 0;
+}
+EXPORT_SYMBOL(lustre_stats_done);
+
+/* Min size for key table and its matching values. Key value
+ * measurements are collected from lnet_genl_parse_list:
+ *
+ *	header		strlen("stats")
+ *	source		strlen("source") + MAX_OBD_NAME * 4
+ *	timestamp	strlen("snapshot_time") + s64
+ *	start time	strlen("start time") + s64
+ *	elapsed_time	strlen("elapse time") + s64
+ */
+#define STATS_MSG_MIN_SIZE	(44 + 28 + 36 + 32 + 36 + 536)
+
+/* key table + values for each dataset entry. Key value
+ * measurements are collected from lnet_genl_parse_list:
+ *
+ *	dataset name	25
+ *	dataset count	strlen("samples") + u64
+ *	dataset units	strlen("units") + 5
+ *	dataset min	strlen("min") + u64
+ *	dataset max	strlen("max") + u64
+ *	dataset sum	strlen("sum") + u64
+ *	dataset stdev	strlen("stddev") + u64
+ */
+#define STATS_MSG_DATASET_SIZE	(236 + 25 + 5 + 8 * 5)
+
+static int lustre_stats_start(struct netlink_callback *cb)
+{
+	struct genlmsghdr *gnlh = nlmsg_data(cb->nlh);
+	unsigned long len = STATS_MSG_MIN_SIZE;
+	struct netlink_ext_ack *extack = cb->extack;
+	struct lustre_stats_list *slist;
+	int msg_len = genlmsg_len(gnlh);
+	int rc = 0;
+
+#ifdef HAVE_GENL_DUMPIT_INFO
+	cb->args[1] = (unsigned long)&service_info;
+#endif
+	OBD_ALLOC(slist, sizeof(*slist));
+	if (!slist) {
+		NL_SET_ERR_MSG(extack, "failed to setup obd list");
+		return -ENOMEM;
+	}
+
+	genradix_init(&slist->gfl_list);
+	slist->gfl_index = 0;
+	cb->args[0] = (long)slist;
+
+	if (msg_len > 0) {
+		struct nlattr *params = genlmsg_data(gnlh);
+		struct nlattr *dev;
+		int rem;
+
+		if (!(nla_type(params) & LN_SCALAR_ATTR_LIST)) {
+			NL_SET_ERR_MSG(extack, "no configuration");
+			GOTO(report_err, rc);
+		}
+
+		nla_for_each_nested(dev, params, rem) {
+			struct nlattr *item;
+			int rem2;
+
+			nla_for_each_nested(item, dev, rem2) {
+				char filter[MAX_OBD_NAME * 4];
+
+				if (nla_type(item) != LN_SCALAR_ATTR_VALUE ||
+				    nla_strcmp(item, "source") != 0)
+					continue;
+
+				item = nla_next(item, &rem2);
+				if (!nla_ok(item, rem2) ||
+				    nla_type(item) != LN_SCALAR_ATTR_VALUE) {
+					NL_SET_ERR_MSG(extack,
+						       "source has invalid value");
+					GOTO(report_err, rc = -EINVAL);
+				}
+
+				memset(filter, 0, sizeof(filter));
+				rc = nla_strscpy(filter, item, sizeof(filter));
+				if (rc < 0) {
+					NL_SET_ERR_MSG(extack,
+						       "source key string is invalid");
+					GOTO(report_err, rc);
+				}
+
+				rc = lustre_stats_scan(slist, filter);
+				if (rc < 0) {
+					NL_SET_ERR_MSG(extack,
+						       "stat scan failure");
+					GOTO(report_err, rc);
+				}
+
+				if (gnlh->version)
+					len += STATS_MSG_DATASET_SIZE * rc;
+				rc = 0;
+			}
+		}
+	} else {
+		rc = lustre_stats_scan(slist, NULL);
+		if (rc < 0) {
+			NL_SET_ERR_MSG(extack, "stat scan failure");
+			GOTO(report_err, rc);
+		}
+
+		if (gnlh->version)
+			len += STATS_MSG_DATASET_SIZE * rc;
+		rc = 0;
+	}
+
+	/* Older kernels only support 64K. Our stats can be huge. */
+	if (len >= (1UL << (sizeof(cb->min_dump_alloc) << 3))) {
+		struct lprocfs_stats **stats;
+		struct genradix_iter iter;
+
+		genradix_for_each(&slist->gfl_list, iter, stats)
+			lprocfs_stats_free(stats);
+		NL_SET_ERR_MSG(extack, "Netlink msg is too large");
+		rc = -EMSGSIZE;
+	} else {
+		cb->min_dump_alloc = len;
+	}
+report_err:
+	if (rc < 0)
+		lustre_stats_done(cb);
+
+	return rc;
+}
+
+int lustre_stats_dump(struct sk_buff *msg, struct netlink_callback *cb)
+{
+	const struct compat_genl_info *info = compat_genl_info_dump(cb);
+	struct lustre_stats_list *slist = stats_dump_ctx(cb);
+	struct genlmsghdr *gnlh = nlmsg_data(cb->nlh);
+	struct netlink_ext_ack *extack = cb->extack;
+	int portid = NETLINK_CB(cb->skb).portid;
+	struct lprocfs_stats *prev = NULL;
+	int seq = cb->nlh->nlmsg_seq;
+	int idx = slist->gfl_index;
+	int count, i, rc = 0;
+	bool started = true;
+
+	while (idx < slist->gfl_count) {
+		struct lprocfs_stats **tmp, *stats;
+		struct nlattr *dataset = NULL;
+		void *ghdr = NULL;
+		char *src;
+
+		tmp = genradix_ptr(&slist->gfl_list, idx);
+		stats = tmp[0];
+		if (!stats)
+			continue;
+
+		if (gnlh->version &&
+		   (!idx || (prev && strcmp(stats->ls_cnt_header[2].lc_name,
+					    prev->ls_cnt_header[2].lc_name) != 0))) {
+			size_t len = sizeof(struct ln_key_list);
+			int flags = NLM_F_CREATE | NLM_F_MULTI;
+			const struct ln_key_list **all;
+			struct ln_key_list *start;
+
+			/* LUSTRE_STATS_ATTR_MAX includes one stat entry
+			 * by default since we need to define what a stat
+			 * entry is.
+			 */
+			count = LUSTRE_STATS_ATTR_MAX + stats->ls_num - 1;
+			len += sizeof(struct ln_key_props) * count;
+			OBD_ALLOC(start, len);
+			if (!start) {
+				NL_SET_ERR_MSG(extack,
+					       "first key list allocation failure");
+				GOTO(out_cancel, rc = -ENOMEM);
+			}
+			*start = stats_list; /* Set initial values */
+			start->lkl_maxattr += stats->ls_num;
+			for (i = LUSTRE_STATS_ATTR_MAX + 1;
+			     i <= start->lkl_maxattr; i++)
+				start->lkl_list[i] =
+					stats_list.lkl_list[LUSTRE_STATS_ATTR_DATASET];
+
+			OBD_ALLOC_PTR_ARRAY(all, stats->ls_num + 2);
+			if (!all) {
+				NL_SET_ERR_MSG(extack,
+					       "key list allocation failure");
+				OBD_FREE(start, len);
+				GOTO(out_cancel, rc = -ENOMEM);
+			}
+
+			all[0] = start;
+			for (i = 1; i <= stats->ls_num; i++)
+				all[i] = &stats_dataset_list;
+			all[i] = NULL;
+
+			if (idx)
+				flags |= NLM_F_REPLACE;
+			rc = lnet_genl_send_scalar_list(msg, portid, seq,
+							info->family, flags,
+							gnlh->cmd, all);
+			OBD_FREE_PTR_ARRAY(all, stats->ls_num + 2);
+			OBD_FREE(start, len);
+			if (rc < 0) {
+				NL_SET_ERR_MSG(extack,
+					       "failed to send key table");
+				GOTO(out_cancel, rc);
+			}
+		} else if (!gnlh->version && !idx) {
+			/* We just want the source of the stats */
+			const struct ln_key_list *all[] = {
+				&stats_params, NULL
+			};
+
+			rc = lnet_genl_send_scalar_list(msg, portid, seq,
+							info->family,
+							NLM_F_CREATE | NLM_F_MULTI,
+							gnlh->cmd, all);
+			if (rc < 0) {
+				NL_SET_ERR_MSG(extack,
+					       "failed to send key table");
+				GOTO(out_cancel, rc);
+			}
+		}
+		prev = stats;
+
+		ghdr = genlmsg_put(msg, portid, seq, info->family, NLM_F_MULTI,
+				  gnlh->cmd);
+		if (!ghdr)
+			GOTO(out_cancel, rc = -EMSGSIZE);
+
+		if (started) {
+			nla_put_string(msg, LUSTRE_STATS_ATTR_HDR, "");
+			started = false;
+		}
+
+		src = stats->ls_source;
+		if (strstarts(stats->ls_source, ".fs.lustre."))
+			src += strlen(".fs.lustre.");
+		nla_put_string(msg, LUSTRE_STATS_ATTR_SOURCE, src);
+
+		if (!gnlh->version) { /* We just want the source of the stats */
+			idx++;
+			GOTO(out_cancel, rc = 0);
+		}
+
+		rc = nla_put_s64(msg, LUSTRE_STATS_ATTR_TIMESTAMP,
+				 ktime_get_real_ns(), LUSTRE_STATS_ATTR_PAD);
+		if (rc < 0)
+			GOTO(out_cancel, rc);
+
+		if (gnlh->version > 1) {
+			rc = nla_put_s64(msg, LUSTRE_STATS_ATTR_START_TIME,
+					 ktime_to_ns(stats->ls_init),
+					 LUSTRE_STATS_ATTR_PAD);
+			if (rc < 0)
+				GOTO(out_cancel, rc);
+
+			rc = nla_put_s64(msg, LUSTRE_STATS_ATTR_ELAPSE_TIME,
+					 ktime_to_ns(ktime_sub(stats->ls_init,
+							       ktime_get())),
+					 LUSTRE_STATS_ATTR_PAD);
+			if (rc < 0)
+				GOTO(out_cancel, rc);
+		}
+
+		i = 0;
+		for (count = 0; count < stats->ls_num; count++) {
+			struct lprocfs_counter_header *hdr;
+			struct lprocfs_counter ctr;
+			struct nlattr *stat_attr;
+
+			lprocfs_stats_collect(stats, count, &ctr);
+
+			if (ctr.lc_count == 0)
+				continue;
+
+			hdr = &stats->ls_cnt_header[count];
+			dataset = nla_nest_start(msg,
+						 LUSTRE_STATS_ATTR_DATASET + i++);
+			stat_attr = nla_nest_start(msg, 0);
+
+			nla_put_string(msg, LUSTRE_STATS_ATTR_DATASET_NAME,
+				       hdr->lc_name);
+			nla_put_u64_64bit(msg, LUSTRE_STATS_ATTR_DATASET_COUNT,
+					  ctr.lc_count,
+					  LUSTRE_STATS_ATTR_DATASET_PAD);
+
+			nla_put_string(msg, LUSTRE_STATS_ATTR_DATASET_UNITS,
+				       hdr->lc_units);
+
+			if (hdr->lc_config & LPROCFS_CNTR_AVGMINMAX) {
+				nla_put_u64_64bit(msg,
+						  LUSTRE_STATS_ATTR_DATASET_MINIMUM,
+						  ctr.lc_min,
+						  LUSTRE_STATS_ATTR_DATASET_PAD);
+
+				nla_put_u64_64bit(msg,
+						  LUSTRE_STATS_ATTR_DATASET_MAXIMUM,
+						  ctr.lc_max,
+						  LUSTRE_STATS_ATTR_DATASET_PAD);
+
+				nla_put_u64_64bit(msg,
+						  LUSTRE_STATS_ATTR_DATASET_SUM,
+						  ctr.lc_sum,
+						  LUSTRE_STATS_ATTR_DATASET_PAD);
+
+				if (hdr->lc_config & LPROCFS_CNTR_STDDEV) {
+					nla_put_u64_64bit(msg,
+							  LUSTRE_STATS_ATTR_DATASET_SUMSQUARE,
+							  ctr.lc_sumsquare,
+							  LUSTRE_STATS_ATTR_DATASET_PAD);
+				}
+			}
+			nla_nest_end(msg, stat_attr);
+			nla_nest_end(msg, dataset);
+		}
+		idx++;
+out_cancel:
+		lprocfs_stats_free(&stats);
+		if (rc < 0) {
+			genlmsg_cancel(msg, ghdr);
+			return rc;
+		}
+		genlmsg_end(msg, ghdr);
+	}
+	slist->gfl_index = idx;
+
+	return rc;
+}
+EXPORT_SYMBOL(lustre_stats_dump);
+
+static int lustre_stats_cmd(struct sk_buff *skb, struct genl_info *info)
+{
+	struct nlmsghdr *nlh = nlmsg_hdr(skb);
+	struct genlmsghdr *gnlh = nlmsg_data(nlh);
+	struct nlattr *params = genlmsg_data(gnlh);
+	int msg_len, rem, idx = 0, rc = 0;
+	struct lustre_stats_list slist;
+	struct nlattr *attr;
+
+	msg_len = genlmsg_len(gnlh);
+	if (!msg_len) {
+		GENL_SET_ERR_MSG(info, "no configuration");
+		GOTO(report_err, rc = -ENOMSG);
+	}
+
+	if (!(nla_type(params) & LN_SCALAR_ATTR_LIST)) {
+		GENL_SET_ERR_MSG(info, "invalid configuration");
+		GOTO(report_err, rc = -EINVAL);
+	}
+
+	genradix_init(&slist.gfl_list);
+	slist.gfl_count = 0;
+
+	nla_for_each_nested(attr, params, rem) {
+		struct nlattr *prop;
+		int rem2;
+
+		if (nla_type(attr) != LN_SCALAR_ATTR_LIST)
+			continue;
+
+		nla_for_each_nested(prop, attr, rem2) {
+			char source[MAX_OBD_NAME * 4];
+
+			if (nla_type(prop) != LN_SCALAR_ATTR_VALUE ||
+			    nla_strcmp(prop, "source") != 0)
+				continue;
+
+			prop = nla_next(prop, &rem2);
+			if (!nla_ok(prop, rem2) ||
+			    nla_type(prop) != LN_SCALAR_ATTR_VALUE)
+				GOTO(report_err, rc = -EINVAL);
+
+			memset(source, 0, sizeof(source));
+			rc = nla_strscpy(source, prop, sizeof(source));
+			if (rc < 0)
+				GOTO(report_err, rc);
+
+			rc = lustre_stats_scan(&slist, source);
+			if (rc < 0) {
+				GENL_SET_ERR_MSG(info,
+						 "stat scan failure");
+				GOTO(report_err, rc);
+			}
+			rc = 0;
+		}
+	}
+
+	while (idx < slist.gfl_count) {
+		struct lprocfs_stats **stats;
+
+		stats = genradix_ptr(&slist.gfl_list, idx++);
+		if (!stats[0])
+			continue;
+
+		lprocfs_stats_clear(stats[0]);
+	}
+report_err:
+	return rc;
+}
+
+static const struct genl_multicast_group lustre_mcast_grps[] = {
+	{ .name		= "devices",		},
+	{ .name		= "target_obd",		},
+	{ .name		= "stats",		},
+};
+
+static const struct genl_ops lustre_genl_ops[] = {
+	{
+		.cmd		= LUSTRE_CMD_DEVICES,
+		.start		= lustre_device_list_start,
+		.dumpit		= lustre_device_list_dump,
+		.done		= lustre_device_done,
+	},
+	{
+		.cmd		= LUSTRE_CMD_TARGETS,
+		.start		= lustre_targets_start,
+		.dumpit		= lustre_targets_dump,
+		.done		= lustre_targets_done,
+	},
+	{
+		.cmd		= LUSTRE_CMD_STATS,
+		.start		= lustre_stats_start,
+		.dumpit		= lustre_stats_dump,
+		.done		= lustre_stats_done,
+		.doit		= lustre_stats_cmd,
+	},
+};
+
+static struct genl_family lustre_family = {
+	.name		= LUSTRE_GENL_NAME,
+	.version	= LUSTRE_GENL_VERSION,
+	.module		= THIS_MODULE,
+	.ops		= lustre_genl_ops,
+	.n_ops		= ARRAY_SIZE(lustre_genl_ops),
+	.mcgrps		= lustre_mcast_grps,
+	.n_mcgrps	= ARRAY_SIZE(lustre_mcast_grps),
+#ifdef GENL_FAMILY_HAS_RESV_START_OP
+	.resv_start_op	= __LUSTRE_CMD_MAX_PLUS_ONE,
+#endif
+};
+
+/**
+ * libcfs_kkuc_msg_put() - send an message from kernel to userspace
+ * @filp: file pointer to send the message to
+ * @payload: Payload data.
+ *
+ * First field of payload is always struct kuc_hdr
+ *
+ * Return:
+ * * %0 on success
+ * * %negative on error
+ */
+int libcfs_kkuc_msg_put(struct file *filp, void *payload)
+{
+	struct kuc_hdr *kuch = (struct kuc_hdr *)payload;
+	ssize_t count = kuch->kuc_msglen;
+	loff_t offset = 0;
+	int rc = 0;
+
+	if (IS_ERR_OR_NULL(filp))
+		return -EBADF;
+
+	if (kuch->kuc_magic != KUC_MAGIC) {
+		CERROR("KernelComm: bad magic %x\n", kuch->kuc_magic);
+		return -ENOSYS;
+	}
+
+	while (count > 0) {
+		rc = kernel_write(filp, payload, count, &offset);
+		if (rc < 0)
+			break;
+		count -= rc;
+		payload += rc;
+		rc = 0;
+	}
+
+	if (rc < 0)
+		CWARN("message send failed (%d)\n", rc);
+	else
+		CDEBUG(D_HSM, "Sent message rc=%d, fp=%p\n", rc, filp);
+
+	return rc;
+}
+EXPORT_SYMBOL(libcfs_kkuc_msg_put);
+
+/* Broadcast groups are global across all mounted filesystems;
+ * i.e. registering for a group on 1 fs will get messages for that
+ * group from any fs */
+/** A single group registration has a uid and a file pointer */
+struct kkuc_reg {
+	struct list_head kr_chain;
+	struct obd_uuid	 kr_uuid;
+	int		 kr_uid;
+	struct file	*kr_fp;
+	char		 kr_data[];
+};
+
+static struct list_head kkuc_groups[KUC_GRP_MAX + 1];
+/* Protect message sending against remove and adds */
+static DECLARE_RWSEM(kg_sem);
+
+static inline bool libcfs_kkuc_group_is_valid(int group)
+{
+	return 0 <= group && group < ARRAY_SIZE(kkuc_groups);
+}
+
+int libcfs_kkuc_init(void)
+{
+	int group;
+
+	for (group = 0; group < ARRAY_SIZE(kkuc_groups); group++)
+		INIT_LIST_HEAD(&kkuc_groups[group]);
+
+	return genl_register_family(&lustre_family);
+}
+
+void libcfs_kkuc_fini(void)
+{
+	genl_unregister_family(&lustre_family);
+}
+
+/**
+ * libcfs_kkuc_group_add() - Add a receiver to a broadcast group
+ * @filp: pipe to write into
+ * @uuid: uuid of the device
+ * @uid: identifier for this receiver
+ * @group: group number
+ * @data: user data
+ * @data_len: length of @data
+ *
+ * Return:
+ * * %0 on success
+ * * %negative on error
+ */
+int libcfs_kkuc_group_add(struct file *filp, const struct obd_uuid *uuid,
+			  int uid, int group, void *data, size_t data_len)
+{
+	struct kkuc_reg *reg;
+
+	if (!libcfs_kkuc_group_is_valid(group)) {
+		CDEBUG(D_WARNING, "Kernelcomm: bad group %d\n", group);
+		return -EINVAL;
+	}
+
+	/* fput in group_rem */
+	if (filp == NULL)
+		return -EBADF;
+
+	/* freed in group_rem */
+	reg = kzalloc(sizeof(*reg) + data_len, 0);
+	if (reg == NULL)
+		return -ENOMEM;
+
+	reg->kr_uuid = *uuid;
+	reg->kr_fp = filp;
+	reg->kr_uid = uid;
+	memcpy(reg->kr_data, data, data_len);
+
+	down_write(&kg_sem);
+	list_add(&reg->kr_chain, &kkuc_groups[group]);
+	up_write(&kg_sem);
+
+	CDEBUG(D_HSM, "Added uid=%d fp=%p to group %d\n", uid, filp, group);
+
+	return 0;
+}
+EXPORT_SYMBOL(libcfs_kkuc_group_add);
+
+int libcfs_kkuc_group_rem(const struct obd_uuid *uuid, int uid, int group)
+{
+	struct kkuc_reg *reg, *next;
+	ENTRY;
+
+	if (!libcfs_kkuc_group_is_valid(group)) {
+		CDEBUG(D_WARNING, "Kernelcomm: bad group %d\n", group);
+		return -EINVAL;
+	}
+
+	if (uid == 0) {
+		/* Broadcast a shutdown message */
+		struct kuc_hdr lh;
+
+		lh.kuc_magic = KUC_MAGIC;
+		lh.kuc_transport = KUC_TRANSPORT_GENERIC;
+		lh.kuc_msgtype = KUC_MSG_SHUTDOWN;
+		lh.kuc_msglen = sizeof(lh);
+		libcfs_kkuc_group_put(uuid, group, &lh);
+	}
+
+	down_write(&kg_sem);
+	list_for_each_entry_safe(reg, next, &kkuc_groups[group], kr_chain) {
+		if (obd_uuid_equals(uuid, &reg->kr_uuid) &&
+		    (uid == 0 || uid == reg->kr_uid)) {
+			list_del(&reg->kr_chain);
+			CDEBUG(D_HSM, "Removed uid=%d fp=%p from group %d\n",
+				reg->kr_uid, reg->kr_fp, group);
+			if (reg->kr_fp != NULL)
+				fput(reg->kr_fp);
+			kfree(reg);
+		}
+	}
+	up_write(&kg_sem);
+
+	RETURN(0);
+}
+EXPORT_SYMBOL(libcfs_kkuc_group_rem);
+
+int libcfs_kkuc_group_put(const struct obd_uuid *uuid, int group, void *payload)
+{
+	struct kkuc_reg	*reg;
+	int		 rc = 0;
+	int one_success = 0;
+	ENTRY;
+
+	if (!libcfs_kkuc_group_is_valid(group)) {
+		CDEBUG(D_WARNING, "Kernelcomm: bad group %d\n", group);
+		return -EINVAL;
+	}
+
+	down_write(&kg_sem);
+
+	if (unlikely(list_empty(&kkuc_groups[group])) ||
+	    unlikely(CFS_FAIL_CHECK(OBD_FAIL_MDS_HSM_CT_REGISTER_NET))) {
+		/* no agent have fully registered, CDT will retry */
+		up_write(&kg_sem);
+		RETURN(-EAGAIN);
+	}
+
+	list_for_each_entry(reg, &kkuc_groups[group], kr_chain) {
+		if (obd_uuid_equals(uuid, &reg->kr_uuid) &&
+		    reg->kr_fp != NULL) {
+			rc = libcfs_kkuc_msg_put(reg->kr_fp, payload);
+			if (rc == 0)
+				one_success = 1;
+			else if (rc == -EPIPE) {
+				fput(reg->kr_fp);
+				reg->kr_fp = NULL;
+			}
+		}
+	}
+	up_write(&kg_sem);
+
+	/* don't return an error if the message has been delivered
+	 * at least to one agent */
+	if (one_success)
+		rc = 0;
+
+	RETURN(rc);
+}
+EXPORT_SYMBOL(libcfs_kkuc_group_put);
+
+/**
+ * libcfs_kkuc_group_foreach() - Calls a callback function for each link of the
+ * given kuc group.
+ * @uuid: uuid of the device
+ * @group: the group to call the function on.
+ * @cb_func: the function to be called.
+ * @cb_arg: extra argument to be passed to the callback function.
+ *
+ * Return:
+ * * %0 on success
+ * * %negative on error
+ */
+int libcfs_kkuc_group_foreach(const struct obd_uuid *uuid, int group,
+			      libcfs_kkuc_cb_t cb_func, void *cb_arg)
+{
+	struct kkuc_reg	*reg;
+	int		 rc = 0;
+	ENTRY;
+
+	if (!libcfs_kkuc_group_is_valid(group)) {
+		CDEBUG(D_WARNING, "Kernelcomm: bad group %d\n", group);
+		RETURN(-EINVAL);
+	}
+
+	down_read(&kg_sem);
+	list_for_each_entry(reg, &kkuc_groups[group], kr_chain) {
+		if (obd_uuid_equals(uuid, &reg->kr_uuid) && reg->kr_fp != NULL)
+			rc = cb_func(reg->kr_data, cb_arg);
+	}
+	up_read(&kg_sem);
+
+	RETURN(rc);
+}
+EXPORT_SYMBOL(libcfs_kkuc_group_foreach);

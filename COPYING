@@ -1,0 +1,22 @@
+The Lustre kernel modules are provided under:
+
+	SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
+
+Being under the terms of the GNU General Public License version 2 only,
+according with:
+
+	LICENSES/preferred/GPL-2.0
+
+With an explicit syscall exception, as stated at:
+
+	LICENSES/exceptions/Linux-syscall-note
+
+In addition, other licenses may also apply to the kernel modules. For
+details, see:
+
+	Documentation/process/license-rules.rst
+
+All remaining components of Lustre are provided under the licenses
+listed in the individual files - each compatible with the GPL-2.0.
+
+All contributions to Lustre are subject to this COPYING file.

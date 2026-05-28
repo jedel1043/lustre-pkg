@@ -1,0 +1,17 @@
+This bundle includes four tools:
+In order of preference:
+
+sgpdd-survey: - a test of the 'bare metal' performance, bypassing
+as much of the kernel as we can. Does not require Lustre, does
+require the sgp_dd package.  WILL ERASE ALL DATA ON DEVICE.
+
+obdfilter-survey:
+Shell script - tests performance of isolated OSTS, network 
+via echo clients, end-to-end test. 
+
+ior-survey:
+A script to run the IOR benchmark. Version 2.8.6 of IOR is included
+
+ost-survey:
+This is OST performance survey, designed to test the client-to-disk 
+performance of the individual OSTs in a Lustre filesystem.

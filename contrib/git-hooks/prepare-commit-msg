@@ -1,0 +1,135 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# This file is part of Lustre, http://www.lustre.org/
+#
+# contrib/git-hooks/prepare-commit-msg
+#
+# A Git hook script to prepare the commit log message.  Install into
+# lustre/.git/hooks/prepare-commit-msg to enable for Lustre commits.
+#
+# Called by git-commit with the name of the file that has the
+# commit message, followed by the description of the commit
+# message's source.  The hook's purpose is to edit the commit
+# message file.  If the hook fails with a non-zero status,
+# the commit is aborted.
+#
+# Commit hook to check the patch against the Lustre coding style.
+# It adds any checkpatch warnings/errors as commit comments, which
+# means that they can currently be ignored, but are at least visible.
+#
+
+CHECKPATCH=${CHECKPATCH:-contrib/scripts/checkpatch.pl}
+CHECKPATCH_OPTS=${CHECKPATCH_OPTS:-"--no-signoff --no-tree"}
+SHELLCHECK=${SHELLCHECK:-$(which shellcheck)}
+SHELLCHECK_OPTS=${SHELLCHECK_OPTS:-" -f gcc "}
+SHELLCHECK_RUN=${SHELLCHECK_RUN:-"yes"} # run everytime by default
+
+# If there are no comments in the commit, it is likely a rebase and
+# this shouldn't be adding new comments, or they appear in the commit.
+grep -q "^#" "$1" || exit 0
+
+# Add a commented-out Test-Parameters: line. This will let the developer
+# uncomment it out if they think it's appropriate.
+echo "#" >> "$1"
+echo "# If this patch makes only non-functional changes, or test-only" >> "$1"
+echo "# changes, consider adding this 'Test-Parameters' in the" >> "$1"
+echo "# commit message:" >> "$1"
+echo "#" >> "$1"
+echo "# Test-Parameters: trivial" >> "$1"
+echo "#" >> "$1"
+echo "# If you need to repeat the same subtest many times, consider" >> "$1"
+echo "# this instead:" >> "$1"
+echo "#" >> "$1"
+echo "# Test-Parameters: trivial testlist=sanity env=ONLY=1,ONLY_REPEAT=100" >> "$1"
+echo "#" >> "$1"
+echo "# https://wiki.whamcloud.com/display/PUB/Changing+Test+Parameters+with+Gerrit+Commit+Messages" >> "$1"
+echo "#" >> "$1"
+
+# Add a commented-out Signed-off-by: line.  This shouldn't be added in an
+# uncommented form, otherwise sanity checking for an emtpy commit fails.
+# The developer should uncomment it to include it in the commit message.
+echo "#" >> "$1"
+echo "# The 'Signed-off-by' line signifies that you agree to the Developer" >> "$1"
+echo "# Certificate of Origin - https://developercertificate.org/" >> "$1"
+echo "#" >> "$1"
+SIGNOFF=$(git var GIT_AUTHOR_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
+grep -qs "^$SIGNOFF" "$1" || echo "# $SIGNOFF" >> "$1"
+
+# Add the checkpatch.pl output as comments, but don't cause a commit error
+# yet, as there may be exceptions and it is better let a person decide.
+if [ -x "$CHECKPATCH" ]; then
+	echo "" >> "$1"
+	echo "#" >> "$1"
+	[ -d ".git/rebase-apply" -o -d ".git/rebase-merge" ] &&
+		DIFFOPT="HEAD" || DIFFOPT="--cached"
+	git diff $DIFFOPT | $CHECKPATCH $CHECKPATCH_OPTS - |
+		sed -e 's/^/# /' >> "$1"
+fi
+
+# Add the shellcheck output as comments, but don't cause a commit error.
+if [[ -x "$SHELLCHECK" && "$SHELLCHECK_RUN" == "yes" ]]; then
+	# Add header
+	echo "#" >> "$1"
+	echo "# shellcheck output:" >> "$1"
+	echo "#" >> "$1"
+	# Get file that needs to be shellchecked. We only consider *.sh files
+	# Example Start --
+	#       modified:   lustre/tests/sanity.sh
+	#       modified:   contrib/git-hooks/prepare-commit-msg
+	#            new:   lustre/utils/liblustreapi_error.c
+	# Example End   --
+	mod_files=($(awk '/modified:.*\.sh|new:.*\.sh/ { print $3 }' $1))
+	for cur_file in ${mod_files[@]}; do
+		# Shebangs should prefer bash over regular sh. This allows
+		# scripts to freely use bash-isms and lowers the risks of
+		# failures on Debian based platforms. Output a small warning
+		# if #!/bin/sh is found.
+		echo "#" $(grep -Hn "#\!/bin/sh" "$cur_file" && \
+			echo " : Please don't use sh in shebangs.") >> "$1"
+
+		# Get start/end range of lines that needs to be reported
+		# range presently not used will come in handy when dealing with
+		# warnings reported by shellcheck
+		# Example 'git show' output Start --
+		#       @@ -29,6 +29,7 @@ DEF_STRIPE_COUNT=-1
+		# Example 'git show' output End   --
+		range=($(git show $cur_file | awk '/^@@/ { print $3 }' | \
+			sed -e 's/+//' -e 's/,/ /'))
+		start_line=${range[0]}
+		end_line=$((start_line + ${range[1]}))
+
+		# 'shellcheck' reports errors/warnings/notes as below:
+		# Example start ---
+		#        sanity-lnet.sh:2319:13: error: Double quote array \
+		#        expansions to avoid re-splitting elements. [SC2068]
+		#
+		#        sanity-lnet.sh:2421:27: note: Double quote to prevent \
+		#        globbing and word splitting. [SC2086]
+		#
+		#        sanity-lnet.sh:2411:8: warning: Declare and assign \
+		#        separately to avoid masking return values. [SC2155]
+		# Example end   ---
+		$SHELLCHECK $SHELLCHECK_OPTS $cur_file |
+			while IFS=": " read -r file line char mtype msg; do
+			# Only filter out "errors" reported by shellcheck
+			# We ignore "warnings" and "notes" for now.
+			# TODO "Warnings" reported by shellcheck will come later
+			[[ "$mtype" == "error" ]] || continue
+			# Empty line we skip it.
+			[[ -n "$line" ]] || continue
+			echo "# $file:$line:$char $mtype: $msg" >> "$1"
+		done
+	done
+	echo "#" >> "$1"
+fi
+
+# Cause Vim to wrap text at 70 columns to match commit message style.
+# Adding a matching emacs modeline would be good, if I knew how to do that.
+echo "# vim:textwidth=70:" >> "$1"
+
+# Add these comments at the end
+# So that Vim does not pretend
+# The "echo" above is actually
+# A modeline for this file. Savvy?

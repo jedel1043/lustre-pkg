@@ -1,0 +1,57 @@
+commit ecb68b84807e5165dd8c513023b3d2a6ddadf5ad
+Author:     Alex Zhuravlev <bzzz@whamcloud.com>
+AuthorDate: Mon Feb 24 06:57:24 2020 +0300
+LU-13291 ldiskfs: mballoc don't skip uninit-on-disk groups
+
+as those need no IO to initialize buddy structures and the best
+candidates for new blocks.
+
+Fixes: 6a7a700a1490 ("LU-12988 ldiskfs: skip non-loaded groups at cr=0/1")
+Signed-off-by: Alex Zhuravlev <bzzz@whamcloud.com>
+Reviewed-by: Andreas Dilger <adilger@whamcloud.com>
+Reviewed-by: Wang Shilong <wshilong@ddn.com>
+Reviewed-by: Oleg Drokin <green@whamcloud.com>
+Change-Id: Ic3c5a238d8825024d7a0fec6a25e842b7ba1f100
+Reviewed-on: https://review.whamcloud.com/37687
+
+--- linux-4.18/fs/ext4/mballoc.c	2019-11-28 14:55:26.500545920 +0300
++++ linux-4.18/fs/ext4/mballoc.c	2019-11-28 14:53:18.600086008 +0300
+@@ -1885,6 +1885,21 @@ void ext4_mb_scan_aligned(struct ext4_allocation_context *ac,
+
+ 	return 0;
+ }
++
++static inline int ext4_mb_uninit_on_disk(struct super_block *sb,
++				    ext4_group_t group)
++{
++	struct ext4_group_desc *desc;
++
++	if (!ext4_has_group_desc_csum(sb))
++		return 0;
++
++	desc = ext4_get_group_desc(sb, group, NULL);
++	if (desc->bg_flags & cpu_to_le16(EXT4_BG_BLOCK_UNINIT))
++		return 1;
++
++	return 0;
++}
+
+ /*
+  * The routine scans buddy structures (not bitmap!) from given order
+@@ -2060,7 +2060,15 @@ static int ext4_mb_good_group(struct
+ 
+ 	/* We only do this if the grp has never been initialized */
+ 	if (unlikely(EXT4_MB_GRP_NEED_INIT(grp))) {
+-		int ret = ext4_mb_init_group(ac->ac_sb, group, GFP_NOFS);
++		int ret;
++
++		/* cr=0/1 is a very optimistic search to find large
++		 * good chunks almost for free. if buddy data is
++		 * not ready, then this optimization makes no sense */
++
++		if (cr < 2 && !ext4_mb_uninit_on_disk(ac->ac_sb, group))
++			return 0;
++		ret = ext4_mb_init_group(ac->ac_sb, group, GFP_NOFS);
+ 		if (ret)
+ 			return ret;
+ 	}

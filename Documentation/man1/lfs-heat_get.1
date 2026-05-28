@@ -1,0 +1,94 @@
+.TH LFS-HEAT 1 2024-08-30 Lustre "Lustre User Utilities"
+.SH NAME
+lfs-heat_get, lfs-heat_set \- commands used to interact with file heat features
+.SH SYNOPSIS
+.SY "lfs heat_get"
+.IR FILE ...
+.SY "lfs heat_set"
+.RB [ --help | -h ]
+.RB [ --clear | -c ]
+.RB [ --on | -O ]
+.RB [ --off | -o ]
+.IR FILE ...
+.YS
+.SH DESCRIPTION
+These are a set of lfs commands used to interact with Lustre file heat feature.
+Currently file heat is only stored in memory with file inode, it might be reset
+to be zero at any time with the release of the inode due to memory reclaim.
+.B lfs heat_get
+gets the file heat on the file list.
+.B lfs heat_set
+sets the provided file with heat flags on the file list.
+.SH OPTIONS
+.TP
+.BR -c ", " --clear
+Clear file heat on given files.
+.TP
+.BR -h ", " --help
+Print usage message.
+.TP
+.BR -o ", " --off
+Turn off file heat on given files.
+.TP
+.BR -O ", " --on
+Turn on file heat on given files.
+.SH EXAMPLES
+Turn on file heat support for the Lustre filesystem:
+.RS
+.EX
+.B # lctl set_param llite.$FSNAME*.file_heat=1
+.EE
+.RE
+.PP
+Turn off file heat support for the Lustre filesystem:
+.RS
+.EX
+.B # lctl set_param llite.$FSNAME*.file_heat=0
+.EE
+.RE
+.PP
+Display current file heat for foo:
+.RS
+.EX
+.B # lfs heat_get /mnt/lustre/foo
+flags: 0
+\&
+readsample: 0
+writesample: 16
+readbyte: 0
+writebyte: 16777216
+.EE
+.RE
+.PP
+Clear the file heat for foo:
+.RS
+.EX
+.B # lfs heat_set -c /mnt/lustre/foo
+.EE
+.RE
+.PP
+Turn off file heat for foo:
+.RS
+.EX
+.B # lfs heat_set -o /mnt/lustre/foo
+.EE
+.RE
+.PP
+Turn on file heat for foo:
+.RS
+.EX
+.B # lfs heat_set -O /mnt/lustre/foo
+.EE
+.RE
+.SH AVAILABILITY
+The
+.B lfs heat_get
+and
+.B lfs heat_set
+commands are part of the
+.BR lustre (7)
+filesystem package since release 2.13.0
+.\" Added in commit v2_12_52-52-gae723cf816
+.SH SEE ALSO
+.BR lfs (1),
+.BR lustre (7)

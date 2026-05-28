@@ -1,0 +1,86 @@
+.TH ROUTERSTAT 8 2024-08-28 Lustre "Lustre Configuration Utilities"
+.SH NAME
+routerstat \- print Lustre router statistics
+.SH SYNOPSIS
+.SY routerstat
+.RI [ INTERVAL ]
+.YS
+.SH DESCRIPTION
+.B routerstat
+displays LNET router statistics. If no
+.I INTERVAL
+is specified, the statistics are sampled and printed only once;
+otherwise, statistics are sampled and printed every
+.I interval
+seconds. Type Control-C to stop statistics printing.
+.PP
+Output includes the following fields:
+.TP 4
+.BR M " -"
+Number of messages currently being processed by LNET
+(The maximum number of messages ever processed by LNET concurrently)
+.TP
+.BR E " -"
+Number of LNET errors
+.TP
+.BR S " -"
+Total size (length) of messages sent in bytes. Number of messages sent
+.TP
+.BR R " -"
+Total size (length) of messages received in bytes. Number of messages received
+.TP
+.BR F " -"
+Total size (length) of messages routed in bytes. Number of messages routed
+.TP
+.BR D " -"
+Total size (length) of messages dropped in bytes. Number of messages dropped
+.PP
+When an
+.I interval
+is specified,
+additional lines of statistics are printed including the following fields:
+.PP
+.TP 4
+.BR M " -"
+Number of messages currently being processed by LNET
+(The maximum number of messages ever processed by LNET concurrently)
+.TP
+.BR E " -"
+Number of LNET errors per second
+.TP
+.BR S " -"
+Rate of data sent in Mbytes per second. Count of messages sent per second
+.TP
+.BR R " -"
+Rate of data received in Mbytes per second.
+Count of messages received per second
+.TP
+.BR F " -"
+Rate of data routed in Mbytes per second. Count of messages routed per second
+.TP
+.BR D " -"
+Rate of data dropped in Mbytes per second. Count of messages dropped per second
+.SH FILES
+/proc/sys/lnet/stats
+.SH EXAMPLES
+.EX
+.B # routerstat 1
+M 0(13) E 0 S 117379184/4250 R 878480/4356 F 0/0 D 0/0
+M   0( 13) E 0 S    7.00/     7 R    0.00/    14 F    0.00/     0 D 0.00/0
+M   0( 13) E 0 S    7.00/     7 R    0.00/    14 F    0.00/     0 D 0.00/0
+M   0( 13) E 0 S    8.00/     8 R    0.00/    16 F    0.00/     0 D 0.00/0
+M   0( 13) E 0 S    7.00/     7 R    0.00/    14 F    0.00/     0 D 0.00/0
+M   0( 13) E 0 S    7.00/     7 R    0.00/    14 F    0.00/     0 D 0.00/0
+M   0( 13) E 0 S    7.00/     7 R    0.00/    14 F    0.00/     0 D 0.00/0
+M   0( 13) E 0 S    7.00/     7 R    0.00/    14 F    0.00/     0 D 0.00/0
+M   0( 13) E 0 S    8.00/     8 R    0.00/    16 F    0.00/     0 D 0.00/0
+M   0( 13) E 0 S    7.00/     7 R    0.00/    14 F    0.00/     0 D 0.00/0
+\&...
+.EE
+.SH AVAILABILITY
+.B routerstat
+is part of the
+.BR lustre (7)
+filesystem package since release 0.7.0
+.\" Added in commit 0.7.0
+.SH SEE ALSO
