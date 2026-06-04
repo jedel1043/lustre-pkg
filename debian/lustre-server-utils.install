@@ -1,0 +1,10 @@
+sbin/*
+usr/sbin/*
+usr/bin/*
+usr/lib/*/*.so.*
+usr/lib/*/lustre/*.so*
+usr/lib/systemd/system/*
+usr/lib/udev/rules.d/*
+usr/libexec/*
+etc/*
+usr/share/bash-completion/completions/*

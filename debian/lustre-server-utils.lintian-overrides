@@ -1,0 +1,32 @@
+# Lintian overrides for lustre-server-utils
+
+# Upstream binaries lack manual pages for internal/HA scripts
+lustre-server-utils: no-manual-page *
+
+# Upstream man page formatting issues
+lustre-server-utils: bad-whatis-entry *
+lustre-server-utils: groff-message *
+lustre-server-utils: acute-accent-in-manual-page *
+lustre-server-utils: typo-in-manual-page *
+
+# Shared libraries are bundled in utils package, not separate lib packages
+lustre-server-utils: package-name-doesnt-match-sonames *
+lustre-server-utils: no-symbols-control-file *
+
+# AppStream metadata not needed for Lustre
+lustre-server-utils: appstream-metadata-missing-modalias-provide *
+
+# Upstream modprobe configuration uses deprecated syntax
+lustre-server-utils: obsolete-command-in-modprobe.d-file *
+
+# Upstream binary spelling errors
+lustre-server-utils: spelling-error-in-binary *
+
+# Upstream man page without corresponding executable (GSS not built)
+lustre-server-utils: spare-manual-page *
+
+# Upstream systemd service files
+lustre-server-utils: systemd-service-file-missing-documentation-key *
+
+# Upstream uses /usr/bin/bash instead of /bin/bash
+lustre-server-utils: wrong-path-for-interpreter /usr/bin/bash != /bin/bash *

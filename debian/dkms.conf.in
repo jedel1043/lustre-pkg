@@ -1,0 +1,238 @@
+# SPDX-License-Identifier: NOASSERTION
+
+#
+# Copyright 2012 Genome Research Ltd.
+#           2017-2018 Universität Hamburg
+#
+
+#
+# This file is part of Lustre, http://www.lustre.org/
+#
+# debian/dkms.conf.in
+#
+# Lustre Linux kernel module (DKMS)
+#
+# Created by Guy Coates
+# Updated by Michael Kuhn
+#
+
+PACKAGE_NAME="@PACKAGE_NAME@"
+PACKAGE_CONFIG="/etc/sysconfig/dkms-lustre"
+PACKAGE_CONFIG_FALLBACK="/etc/sysconfig/lustre"
+PACKAGE_VERSION="@UPVERSION@"
+
+no_weak_modules=yes
+strip_default=no
+# If any of these packages exist they need to be autoinstall'd before lustre
+for m in $(ls -1 $dkms_tree); do
+	[[ $m == "mlnx-ofed-kernel" ]] &&
+		BUILD_DEPENDS[${#BUILD_DEPENDS[@]}]=$m
+	[[ $m == "cray-kfabric" ]] &&
+		BUILD_DEPENDS[${#BUILD_DEPENDS[@]}]=$m
+	[[ $m == "zfs" ]] &&
+		BUILD_DEPENDS[${#BUILD_DEPENDS[@]}]=$m
+	[[ $m == "cray-cxi-driver" ]] &&
+		BUILD_DEPENDS[${#BUILD_DEPENDS[@]}]=$m
+	[[ $m == "cray-slingshot-base-link" ]] &&
+		BUILD_DEPENDS[${#BUILD_DEPENDS[@]}]=$m
+	[[ $m == "kdreg2" ]] &&
+		BUILD_DEPENDS[${#BUILD_DEPENDS[@]}]=$m
+	[[ $m == "sl-driver" ]] &&
+		BUILD_DEPENDS[${#BUILD_DEPENDS[@]}]=$m
+done
+OPTS=""
+if [[ "x${PACKAGE_NAME}" = "xlustre-client-modules" ]] ; then
+    OPTS="${OPTS} --disable-server --disable-quilt"
+else
+    OPTS="${OPTS} --enable-server"
+fi
+[[ -f /usr/src/kfabric/default/Module.symvers ]] &&
+    OPTS="${OPTS} --with-kfi=/usr/src/kfabric/default"
+[[ -d /usr/src/ofa_kernel/default ]] &&
+    OPTS="${OPTS} --with-o2ib=/usr/src/ofa_kernel/default"
+OPTS="${OPTS} --disable-dependency-tracking --disable-doc"
+OPTS="${OPTS} --disable-utils --disable-iokit --disable-tests"
+OPTS="${OPTS} --enable-quota --with-kmp-moddir=updates"
+
+[[ -r ${PACKAGE_CONFIG} ]] || PACKAGE_CONFIG=${PACKAGE_CONFIG_FALLBACK}
+if [[ -r ${PACKAGE_CONFIG} ]] ; then
+   source ${PACKAGE_CONFIG}
+   shopt -q -s extglob
+   if [[ -n ${LUSTRE_DKMS_DISABLE_STRIP} ]] ; then
+        [[ ${LUSTRE_DKMS_DISABLE_STRIP,,} == @(y|yes) ]] && strip_default=no
+   fi
+   if [[ -n ${LUSTRE_DKMS_ENABLE_STRIP} ]] ; then
+        [[ ${LUSTRE_DKMS_ENABLE_STRIP,,} == @(y|yes) ]] && strip_default=yes
+   fi
+   if [[ -n ${LUSTRE_DKMS_DISABLE_CDEBUG} ]] ; then
+      [[ ${LUSTRE_DKMS_DISABLE_CDEBUG,,} == @(y|yes) ]] &&
+         OPTS="${OPTS} --disable-libcfs-cdebug" ||
+         OPTS="${OPTS} --enable-libcfs-cdebug"
+   fi
+   if [[ -n ${LUSTRE_DKMS_DISABLE_TRACE} ]] ; then
+      [[ ${LUSTRE_DKMS_DISABLE_TRACE,,} == @(y|yes) ]] &&
+         OPTS="${OPTS} --disable-libcfs-trace" ||
+         OPTS="${OPTS} --enable-libcfs-trace"
+   fi
+   if [[ -n ${LUSTRE_DKMS_DISABLE_ASSERT} ]] ; then
+      [[ ${LUSTRE_DKMS_DISABLE_ASSERT,,} == @(y|yes) ]] &&
+         OPTS="${OPTS} --disable-libcfs-assert" ||
+         OPTS="${OPTS} --enable-libcfs-assert"
+   fi
+   if [[ -n ${LUSTRE_DKMS_ENABLE_GSS} ]] ; then
+      [[ ${LUSTRE_DKMS_ENABLE_GSS,,} == @(y|yes) ]] &&
+         OPTS="${OPTS} --enable-gss" || OPTS="${OPTS} --disable-gss"
+   fi
+   if [[ -n ${LUSTRE_DKMS_ENABLE_GSS_KEYRING} ]] ; then
+      [[ ${LUSTRE_DKMS_ENABLE_GSS_KEYRING,,} == @(y|yes) ]] &&
+         OPTS="${OPTS} --enable-gss-keyring" ||
+         OPTS="${OPTS} --disable-gss-keyring"
+   fi
+   if [[ -n ${LUSTRE_DKMS_ENABLE_CRYPTO} ]] ; then
+      [[ ${LUSTRE_DKMS_ENABLE_CRYPTO,,} == @(y|yes) ]] &&
+         OPTS="${OPTS} --enable-crypto" || OPTS="${OPTS} --disable-crypto"
+   fi
+   [[ -n ${LUSTRE_DKMS_CONFIGURE_EXTRA} ]] &&
+       OPTS="${OPTS} ${LUSTRE_DKMS_CONFIGURE_EXTRA}"
+   if [[ -n ${LUSTRE_DKMS_WEAK_MODULES} ]] ; then
+      [[ ${LUSTRE_DKMS_WEAK_MODULES,,} == @(y|yes) ]] &&
+         no_weak_modules="no"
+   fi
+fi
+echo "${OPTS} " | grep -E -q -- '--disable-gss[^-]|--enable-gss[^-]' ||
+  dpkg -l | grep libkrb5-dev | grep -q ^ii &&
+      OPTS="${OPTS} --enable-gss" || OPTS="${OPTS} --disable-gss"
+
+AUTOGEN="sh ./autogen.sh"
+CONFIGURE="./configure --with-linux=$kernel_source_dir"
+CONFIGURE="${CONFIGURE} --with-linux-obj=$kernel_source_dir ${OPTS}"
+
+# Note OPTS, AUTOGEN, CONFIGURE are not exposed to dkms parser
+
+MAKE="${AUTOGEN} && ${CONFIGURE} && make -j `nproc`"
+CLEAN="make distclean || true"
+
+NO_WEAK_MODULES="$no_weak_modules"
+AUTOINSTALL="yes"
+STRIP="no"
+
+# Where modules are installed
+kmoddir="updates/kernel"
+
+module() {
+  built_name=$1
+  built_loc=$2
+  dest=$3
+  do_strip=$4
+
+  [[ -z $do_strip ]] && do_strip=${STRIP}
+  BUILT_MODULE_NAME[${#BUILT_MODULE_NAME[@]}]=${built_name}
+  BUILT_MODULE_LOCATION[${#BUILT_MODULE_LOCATION[@]}]=${built_loc}/
+  DEST_MODULE_LOCATION[${#DEST_MODULE_LOCATION[@]}]="/updates/kernel/${dest}/"
+  STRIP[${#STRIP[@]}]=${do_strip}
+}
+
+# Common modules for both Client & Server
+module libcfs        libcfs/libcfs      net/lustre
+module lnet          lnet/lnet          net/lustre
+module lnet_selftest lnet/selftest      net/lustre
+module ksocklnd      lnet/klnds/socklnd net/lustre
+
+# LNet lnd modules
+lnds="socklnd"
+if [ -f /usr/src/kfabric/default/Module.symvers ] ; then
+    module kkfilnd   lnet/klnds/kfilnd  net/lustre
+fi
+if pkg-config --cflags cray-gni cray-gni-headers cray-krca lsb-cray-hss > /dev/null 2>&1 ; then
+    module kgnilnd   lnet/klnds/gnilnd  net/lustre
+fi
+# Determine which, if any, o2ib to install:
+can_o2ib_mofed=no
+can_o2ib_in_kernel=no
+ext_mofed=no
+int_mofed=no
+[[ -f ${kernel_source_dir}/include/rdma/rdma_cm.h ]] &&
+[[ -f ${kernel_source_dir}/include/rdma/ib_cm.h ]] &&
+[[ -f ${kernel_source_dir}/include/rdma/ib_verbs.h ]] &&
+   can_o2ib_in_kernel=yes
+# Now check if ext_o2ib is explicit, or will be auto-detected:
+o2ib=$(echo ${OPTS} | tr ' ' '\n' | grep -- '--with-o2ib=' | cut -c 13-)
+if [[ "x$o2ib" = "xno" ]] ; then
+   can_o2ib_in_kernel=no
+elif [[ -d $o2ib ]] ; then
+   # User specified path, if the build completes it will be ext_ofed
+   can_o2ib_mofed=yes
+   ext_mofed=yes
+else
+   # could be either, ext_ofed will be preferred by default
+   if command -v ofed_info >/dev/null ; then
+      pkgs="mlnx-ofed-kernel-dkms|mlnx-ofed-kernel-modules|mlnx-ofa_kernel-devel"
+      pkgs="${pkgs}|compat-rdma-devel|kernel-ib-devel|ofa_kernel-devel"
+      paths=$(dpkg -l | awk '{print $2}' |
+              grep -E -w "${pkgs}" | xargs dpkg --listfiles 2>/dev/null |
+              grep -E '/ofa_kernel|/ofa_kernel/default|/openib' |
+              grep -v /ofed_scripts/ | head -n1)
+      if [[ -n "$paths" ]]; then
+          [[ ! -d $paths/$(uname -m)/$(uname -r) ]] ||
+              paths=$paths/$(uname -m)/$(uname -r)
+          epaths=$(find -H $paths -name rdma_cm.h |
+                   grep -F -e "$(uname -r)" -e default |
+                   sed -e 's:/include/rdma/rdma_cm.h::')
+          if [ $(echo $epaths | wc -w) -eq 1 ]; then
+             can_o2ib_mofed=yes
+             ext_mofed=yes
+          fi
+      fi
+   fi
+fi
+[[ "x${ext_mofed}" = "xno" ]] && [[ x${can_o2ib_in_kernel} = "xyes" ]] &&
+   int_mofed=yes
+
+if [ "x${ext_mofed}" = "xyes" ] ; then
+    module ko2iblnd lnet/klnds/o2iblnd net/lustre
+elif [ "x${int_mofed}" = "xyes" ] ; then
+    module ko2iblnd lnet/klnds/in-kernel-o2iblnd net/lustre
+fi
+# Lustre client modules:
+# MODULE NAME    PATH TO MODULE               INSTALL PATH
+# -------------  -------------------------    ------------
+module ec        lustre/ec                    fs/lustre
+module fid       lustre/fid                   fs/lustre
+module fld       lustre/fld                   fs/lustre
+module lmv       lustre/lmv                   fs/lustre
+module lov       lustre/lov                   fs/lustre
+module lustre    lustre/llite                 fs/lustre
+module mdc       lustre/mdc                   fs/lustre
+module mgc       lustre/mgc                   fs/lustre
+module obdclass  lustre/obdclass              fs/lustre
+module obdecho   lustre/obdecho               fs/lustre
+module osc       lustre/osc                   fs/lustre
+module ptlrpc    lustre/ptlrpc                fs/lustre
+# Lustre optional gss module:
+if grep -E -q -- '--enable-gss[^-]' <<< ${OPTS}; then
+    module ptlrpc_gss lustre/ptlrpc/gss fs/lustre
+fi
+# client kunit modules, --enable-tests
+if grep -q ' --enable-tests' <<< ${OPTS}; then
+   # MODULE NAME              PATH TO MODULE   INSTALL PATH
+   # ----------------------   --------------   ------------
+   module ec_test             lustre/kunit     fs/lustre
+   module kinode              lustre/kunit     fs/lustre
+   module obd_mod_rpcs_test   lustre/kunit     fs/lustre
+   module obd_test            lustre/kunit     fs/lustre
+fi
+# Lustre server modules:
+if [[ "x${PACKAGE_NAME}" != "xlustre-client-modules" ]] ; then
+    # MODULE NAME     PATH TO MODULE    INSTALL PATH
+    # -------------   ---------------   ------------
+    module ofd        lustre/ofd        fs/lustre
+    module lfsck      lustre/lfsck      fs/lustre
+    module mgs        lustre/mgs        fs/lustre
+    module lquota     lustre/quota      fs/lustre
+    module mdt        lustre/mdt        fs/lustre
+    module osp        lustre/osp        fs/lustre
+    module mdd        lustre/mdd        fs/lustre
+    module lod        lustre/lod        fs/lustre
+    module osd_wbcfs  lustre/osd-wbcfs  fs/lustre
+    module osd_zfs    lustre/osd-zfs    fs/lustre
+fi

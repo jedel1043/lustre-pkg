@@ -1,0 +1,4 @@
+usr/include/lustre/*
+usr/lib/*/pkgconfig/*
+usr/lib/*/*.so
+usr/lib/*/*.a

@@ -1,0 +1,4 @@
+usr/lib/*.la
+usr/lib/*/*.la
+usr/include/linux/
+usr/lib/firewalld/

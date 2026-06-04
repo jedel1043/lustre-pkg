@@ -1,0 +1,80 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+include /usr/share/dpkg/architecture.mk
+include /usr/share/dpkg/pkg-info.mk
+
+UPVER := $(DEB_VERSION_UPSTREAM)
+
+DKMS_RSYNC_EXCLUDES = \
+	--exclude='.git/' \
+	--exclude='.gitignore' \
+	--exclude='.gitreview' \
+	--exclude='.mailmap' \
+	--exclude='.pc/' \
+	--exclude='debian/' \
+	--exclude='contrib/contrib-kernel-coverage.spec' \
+	--exclude='docs/' \
+	--exclude='rustreapi/' \
+	--exclude='*.md' \
+	--exclude='*.rst' \
+	--exclude='*.txt' \
+	--exclude='README'
+
+%:
+	dh $@ --with dkms
+
+override_dh_auto_configure:
+	rm -rf ../pristine-src
+	rsync -a --exclude='.git/' --exclude='debian/' ./ ../pristine-src/
+
+	./autogen.sh
+	dh_auto_configure -- \
+		--enable-utils \
+		--enable-server \
+		--with-zfs=yes \
+		--disable-ldiskfs \
+		--disable-modules \
+		--disable-tests \
+		--disable-iokit \
+		--disable-doc \
+		--with-systemdsystemunitdir=/usr/lib/systemd/system
+
+override_dh_auto_build:
+	dh_auto_build -- undef.h
+	dh_auto_build -- utils
+
+override_dh_install:
+	dh_install
+
+	install -d debian/lustre-server-modules-dkms/usr/src/lustre-server-modules-$(UPVER)
+	rsync -a --delete $(DKMS_RSYNC_EXCLUDES) \
+		../pristine-src/ debian/lustre-server-modules-dkms/usr/src/lustre-server-modules-$(UPVER)/
+
+	install -d debian/lustre-client-modules-dkms/usr/src/lustre-client-modules-$(UPVER)
+	rsync -a --delete $(DKMS_RSYNC_EXCLUDES) \
+		../pristine-src/ debian/lustre-client-modules-dkms/usr/src/lustre-client-modules-$(UPVER)/
+
+override_dh_auto_install:
+	dh_auto_install -- pkgconfigdir=/usr/lib/$(DEB_HOST_MULTIARCH)/pkgconfig
+
+	# Generate dkms.conf files
+	sed -e 's/@PACKAGE_NAME@/lustre-server-modules/g' \
+	    -e 's/@UPVERSION@/$(UPVER)/g' \
+	    debian/dkms.conf.in > debian/lustre-server-modules-dkms.dkms
+	sed -e 's/@PACKAGE_NAME@/lustre-client-modules/g' \
+	    -e 's/@UPVERSION@/$(UPVER)/g' \
+	    debian/dkms.conf.in > debian/lustre-client-modules-dkms.dkms
+
+override_dh_dkms:
+	dh_dkms -plustre-client-modules-dkms -V
+	dh_dkms -plustre-server-modules-dkms -V
+
+override_dh_auto_clean:
+	dh_auto_clean
+	rm -rf ../pristine-src
+
+override_dh_auto_test:
+	# Disable tests for now

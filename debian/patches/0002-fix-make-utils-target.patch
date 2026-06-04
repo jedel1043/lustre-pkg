@@ -1,0 +1,74 @@
+From: =?utf-8?q?Jos=C3=A9_Juli=C3=A1n_Espina?= <julian.espina@canonical.com>
+Date: Wed, 3 Jun 2026 10:10:12 -0600
+Subject: Fix make utils target
+
+Forwarded: no
+---
+ autoMakefile.am        |  4 ++--
+ config/lustre-build.m4 | 17 ++++++++++++++++-
+ 2 files changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/autoMakefile.am b/autoMakefile.am
+index 0fdb8bd..b1f05d5 100644
+--- a/autoMakefile.am
++++ b/autoMakefile.am
+@@ -15,7 +15,7 @@ SUBDIRS := @LDISKFS_SUBDIR@ \
+ 	@LUSTREIOKIT_SUBDIR@ \
+ 	Documentation \
+ 	lib \
+-	libcfs \
++	@LIBCFS_SUBDIR@ \
+ 	lnet/utils \
+ 	lustre/utils \
+ 	lustre/tests \
+@@ -132,7 +132,7 @@ checkpatch:
+ 	@git diff HEAD~1 | ./contrib/scripts/checkpatch.pl
+ 
+ utils:
+-	$(MAKE) -C libcfs/libcfs/util
++	$(MAKE) -C lib/libcfs
+ 	$(MAKE) -C lnet/utils
+ 	$(MAKE) -C lustre/utils
+ 
+diff --git a/config/lustre-build.m4 b/config/lustre-build.m4
+index 3ca1350..147a03c 100644
+--- a/config/lustre-build.m4
++++ b/config/lustre-build.m4
+@@ -111,6 +111,16 @@ AS_IF([test "x$enable_iokit" = xyes],
+ 	[LUSTREIOKIT_SUBDIR=""])
+ AC_SUBST(LUSTREIOKIT_SUBDIR)
+ AM_CONDITIONAL([BUILD_LUSTREIOKIT], [test "x$enable_iokit" = xyes])
++
++#
++# LIBCFS_SUBDIR
++#
++# Only build libcfs kernel module when modules are enabled
++#
++AS_IF([test "x$enable_modules" = xyes],
++	[LIBCFS_SUBDIR="libcfs"],
++	[LIBCFS_SUBDIR=""])
++AC_SUBST(LIBCFS_SUBDIR)
+ ]) # LB_PATH_LUSTREIOKIT
+ 
+ #
+@@ -263,6 +273,12 @@ AC_ARG_ENABLE([utils],
+ 		[disable building of Lustre utility programs]),
+ 	[], [enable_utils="yes"])
+ AC_MSG_RESULT([$enable_utils])
++
++# Set up UAPI include paths for utils-only builds
++# These paths are needed when building utils without kernel modules
++AS_IF([test "x$enable_utils" = xyes -a "x$enable_modules" != xyes], [
++	CPPFLAGS="-I$PWD/lnet/include/uapi -I$PWD/lustre/include/uapi $CPPFLAGS"
++])
+ ]) # LB_CONFIG_UTILS
+ 
+ #
+@@ -472,7 +488,6 @@ AC_ARG_ENABLE([server],
+ # call it here.
+ LB_CONFIG_MODULES
+ LC_CONFIG_COVERAGE
+-AS_IF([test x$enable_modules = xno], [enable_server=no])
+ LB_CONFIG_LDISKFS
+ LB_CONFIG_ZFS
+ AS_IF([test "x$enable_modules" = xyes], [

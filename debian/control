@@ -1,0 +1,175 @@
+Source: lustre
+Section: admin
+Priority: optional
+Maintainer: José Julián Espina <julian.espina@canonical.com>
+Original-Maintainer: Lustre Developers <lustre-devel@lists.lustre.org>
+Build-Depends: debhelper-compat (= 13),
+               dh-dkms,
+               rsync,
+               autoconf,
+               automake,
+               libtool,
+               libyaml-dev,
+               libnl-genl-3-dev,
+               libselinux-dev,
+               libssl-dev,
+               libkeyutils-dev,
+               libmount-dev,
+               zlib1g-dev,
+               pkgconf,
+               libzfslinux-dev,
+Standards-Version: 4.6.2
+Homepage: https://www.lustre.org/
+Vcs-Git: https://github.com/lustre/lustre-release.git
+Vcs-Browser: https://github.com/lustre/lustre-release
+
+Package: lustre-client-utils
+Section: utils
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         ${perl:Depends},
+         libyaml-0-2,
+         libselinux1,
+         zlib1g,
+         libnl-genl-3-200,
+         libmount1,
+         libkeyutils1,
+         python3
+Suggests: bash-completion
+Description: Userspace utilities for the Lustre filesystem (client)
+ Lustre is a scalable, secure, robust, highly-available cluster file system.
+ This release is maintained by Whamcloud and available from
+ https://wiki.whamcloud.com/
+ .
+ This package provides a number of userspace utilities for accessing a
+ remote Lustre filesystems from a client. If you need to serve local
+ storage from this node to other clients, use lustre-server-utils instead.
+
+Package: lustre-server-utils
+Section: utils
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         ${perl:Depends},
+         libyaml-0-2,
+         libselinux1,
+         zlib1g,
+         libnl-genl-3-200,
+         libmount1,
+         libkeyutils1,
+         python3
+Suggests: bash-completion
+Provides: lustre-client-utils (= ${binary:Version})
+Conflicts: lustre-client-utils
+Replaces: lustre-client-utils
+Description: Userspace utilities for the Lustre filesystem (server)
+ Lustre is a scalable, secure, robust, highly-available cluster file system.
+ This release is maintained by Whamcloud and available from
+ https://wiki.whamcloud.com/
+ .
+ This package provides a number of userspace utilities for
+ accessing and maintaining Lustre filesystems from a server.
+ If you only need to access the filesystem hosted on remote
+ servers, the lustre-client-utils package may be used instead.
+
+Package: lustre-resource-agents
+Architecture: any
+Depends: ${misc:Depends},
+         lustre-server-utils (= ${binary:Version}),
+         resource-agents
+Description: HA Reusable Cluster Resource Scripts for Lustre
+ Lustre is a scalable, secure, robust, highly-available cluster file system.
+ This release is maintained by Whamcloud and available from
+ https://wiki.whamcloud.com/
+ .
+ This package provides a set of scripts to operate Lustre
+ resources in a High Availability environment for both Pacemaker
+ and rgmanager on a server.
+
+Package: lustre-dev
+Section: libdevel
+Architecture: any
+Depends: ${misc:Depends},
+         lustre-client-utils (= ${binary:Version})
+Description: Development files for the Lustre filesystem
+ Lustre is a scalable, secure, robust, highly-available cluster file system.
+ This release is maintained by Whamcloud and available from
+ https://wiki.whamcloud.com/
+ .
+ This package provides development libraries for the Lustre filesystem.
+
+Package: lustre-client-modules-dkms
+Section: kernel
+Architecture: any
+Depends: ${misc:Depends},
+	 ${perl:Depends},
+         dkms,
+         autoconf,
+         automake,
+         bison,
+         build-essential,
+         flex,
+         libaio-dev,
+         libkeyutils-dev,
+         libkrb5-dev,
+         libtool,
+         libselinux1-dev,
+         libssl-dev,
+         libyaml-dev,
+         linux-base,
+         linux-headers-generic | linux-headers-amd64 | linux-headers-arm64,
+         pkgconf,
+         python3-dev,
+         libnl-genl-3-dev,
+         zlib1g-dev,
+         libmount-dev,
+         libkeyutils1
+Provides: lustre-client-modules
+Description: Lustre Linux kernel module (DKMS)
+ This package contains the loadable kernel modules for the patchless client
+ for the Lustre cluster filesystem.
+ .
+ These modules are compiled using DKMS.
+
+Package: lustre-server-modules-dkms
+Section: kernel
+Architecture: any
+Depends: ${misc:Depends},
+	 ${perl:Depends},
+         dkms,
+         autoconf,
+         automake,
+         bison,
+         build-essential,
+         flex,
+         libaio-dev,
+         libkeyutils-dev,
+         libkrb5-dev,
+         libtool,
+         libselinux1-dev,
+         libssl-dev,
+         libyaml-dev,
+         linux-base,
+         linux-headers-generic | linux-headers-amd64 | linux-headers-arm64,
+         pkgconf,
+         python3-dev,
+         libnl-genl-3-dev,
+         zlib1g-dev,
+         libmount-dev,
+         libkeyutils1,
+         zfs-dkms | zfs-modules,
+         libzfslinux-dev (>= 2.0.7)
+Provides: lustre-client-modules,
+          lustre-server-modules,
+          lustre-osd-zfs
+Conflicts: lustre-client-modules-dkms
+Replaces: lustre-client-modules-dkms
+Description: Lustre Linux server kernel module with ZFS support (DKMS)
+ This package contains the loadable kernel modules for Lustre servers
+ with ZFS backend support.
+ .
+ This package includes client functionality and conflicts with
+ lustre-client-modules-dkms.
+ .
+ These modules are compiled using DKMS.

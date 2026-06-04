@@ -1,0 +1,22 @@
+From: =?utf-8?q?Jos=C3=A9_Juli=C3=A1n_Espina?= <julian.espina@canonical.com>
+Date: Wed, 3 Jun 2026 17:30:46 -0600
+Subject: Switch to StandardOutput=journal for lsvcgss service
+
+Forwarded: not-needed
+---
+ lustre/scripts/systemd/lsvcgss.service | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lustre/scripts/systemd/lsvcgss.service b/lustre/scripts/systemd/lsvcgss.service
+index 9d998e6..00f8fea 100644
+--- a/lustre/scripts/systemd/lsvcgss.service
++++ b/lustre/scripts/systemd/lsvcgss.service
+@@ -6,7 +6,7 @@ After=network-online.target openibd.service rdma.service opa.service
+ [Service]
+ Type=forking
+ RemainAfterExit=yes
+-StandardOutput=syslog
++StandardOutput=journal
+ ExecStart=/usr/bin/lsvcgss_sysd
+ ExecReload=/bin/kill -HUP $MAINPID
+ 

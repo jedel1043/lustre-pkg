@@ -1,0 +1,2 @@
+# Upstream uses /usr/bin/bash instead of /bin/bash
+lustre-resource-agents: wrong-path-for-interpreter /usr/bin/bash != /bin/bash *

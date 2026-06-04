@@ -1,0 +1,22 @@
+From: =?utf-8?q?Jos=C3=A9_Juli=C3=A1n_Espina?= <julian.espina@canonical.com>
+Date: Thu, 4 Jun 2026 11:55:08 -0600
+Subject: Explicitly link against libyaml on liblustreapi
+
+Forwarded: no
+---
+ lustre/utils/Makefile.am | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lustre/utils/Makefile.am b/lustre/utils/Makefile.am
+index 873623c..050562e 100644
+--- a/lustre/utils/Makefile.am
++++ b/lustre/utils/Makefile.am
+@@ -131,7 +131,7 @@ liblustreapi_la_LDFLAGS = $(LIBREADLINE) -version-info 1:0:0 \
+ 			  -Wl,--version-script=liblustreapi.map
+ liblustreapi_la_LIBADD = $(top_builddir)/lib/libcfs/libcfs.la \
+ 			 $(top_builddir)/lnet/utils/lnetconfig/liblnetconfig.la \
+-			 $(LIBNL3_LIBS) -lpthread
++			 $(LIBNL3_LIBS) -lpthread -lyaml
+ 
+ pkgconfigdir = $(libdir)/pkgconfig
+ pkgconfig_DATA = lustre.pc
