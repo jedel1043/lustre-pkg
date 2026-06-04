@@ -1,0 +1,11 @@
+lustre (2.17.53-0ubuntu1~ppa1) noble; urgency=medium
+
+  * Initial release for PPA.
+  * Explicitly link against libyaml on liblustreapi.
+  * Fix execute permissions on lsvcgss service.
+  * Switch to StandardOutput=journal for lsvcgss service.
+  * Fix make utils target.
+  * Add shebang to iokit config script.
+  * Add initial packaging.
+
+ -- José Julián Espina Del Ángel <julian.espina@canonical.com>  Thu, 04 Jun 2026 12:58:56 -0600
