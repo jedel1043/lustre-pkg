@@ -158,7 +158,7 @@ Depends: ${misc:Depends},
          zlib1g-dev,
          libmount-dev,
          libkeyutils1,
-         zfs-dkms | zfs-modules,
+         zfs-dkms,
          libzfslinux-dev (>= 2.0.7)
 Provides: lustre-client-modules,
           lustre-server-modules,
