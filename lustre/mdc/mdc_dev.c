@@ -1063,7 +1063,6 @@ static int mdc_io_setattr_start(const struct lu_env *env,
 	struct osc_async_cbargs *cbargs = &oio->oi_cbarg;
 	__u64 size = io->u.ci_setattr.sa_attr.lvb_size;
 	unsigned int ia_avalid = io->u.ci_setattr.sa_avalid;
-	enum op_xvalid ia_xvalid = io->u.ci_setattr.sa_xvalid;
 	int rc = 0;
 
 	/* silently ignore non-truncate setattr for Data-on-MDT object */
@@ -1099,7 +1098,7 @@ static int mdc_io_setattr_start(const struct lu_env *env,
 				attr->cat_atime = lvb->lvb_atime;
 				cl_valid |= CAT_ATIME;
 			}
-			if (ia_xvalid & OP_XVALID_CTIME_SET) {
+			if (ia_avalid & ATTR_CTIME_SET) {
 				attr->cat_ctime = lvb->lvb_ctime;
 				cl_valid |= CAT_CTIME;
 			}
@@ -1177,7 +1176,6 @@ static int mdc_io_read_ahead_prep(const struct lu_env *env,
 	ra->cra_end_idx = CL_PAGE_EOF;
 	ra->cra_release = osc_read_ahead_release;
 	ra->cra_dlmlock = dlmlock;
-	ra->cra_oio = oio;
 
 	RETURN(0);
 }

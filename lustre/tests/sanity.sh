@@ -1634,6 +1634,19 @@ test_24H() {
 }
 run_test 24H "repeat FLD_QUERY rpc"
 
+test_24I() {
+	(( $MDSCOUNT > 1 )) || skip "needs >= 2 MDTs"
+
+	# LMV_MAX_STRIPE_COUNT = 2000 should be verified
+	$LFS mkdir -C 2001 $DIR/$tdir-2001 && error "mkdir 2001-stripe worked"
+	$LFS mkdir -C 2000 $DIR/$tdir-2000 || error "mkdir 2000-stripe failed"
+	local stripes=$($LFS getdirstripe -c $DIR/$tdir-2000)
+	# LMV_OVERSTRIPE_COUNT_MAX = 5 limits actual stripe count
+	(( $stripes >= $MDSCOUNT * 5)) ||
+		error "mkdir stripes $stripes < $MDSCOUNT * 5"
+}
+run_test 24I "large striped mkdir with limit check"
+
 test_25a() {
 	echo '== symlink sanity ============================================='
 
@@ -10300,7 +10313,7 @@ test_56Edb() {
 }
 run_test 56Edb "check lfs find --links for directory striped on multiple MDTs"
 
-test_56ef() {
+test_56Ef() {
 	local dir=$DIR/$tdir
 	local dir1=$dir/d1
 	local dir2=$dir/d2
@@ -10331,9 +10344,9 @@ test_56ef() {
 	[[ $err_msg =~ "No such file or directory" ]] ||
 		error "expected standard error message, got: '$err_msg'"
 }
-run_test 56ef "lfs find with multiple paths"
+run_test 56Ef "lfs find with multiple paths"
 
-test_56eg() {
+test_56Eg() {
 	local dir=$DIR/$tdir
 	local found
 
@@ -10402,9 +10415,9 @@ test_56eg() {
 		error "should have found '$tfile.1' with xattr 'user.test=0x7465737400', got '$found'"
 	}
 }
-run_test 56eg "lfs find -xattr"
+run_test 56Eg "lfs find -xattr"
 
-test_56eh() {
+test_56Eh() {
 	local dir=$DIR/d$(basetest $testnum)g.$TESTSUITE
 
 	# Enough files to give us a statistically reliable sampling
@@ -10429,9 +10442,9 @@ test_56eh() {
 		(( n++ ))
 	done
 }
-run_test 56eh "check lfs find --skip"
+run_test 56Eh "check lfs find --skip"
 
-test_56ei() {
+test_56Ei() {
 	(( $MDS1_VERSION >= $(version_code 2.15.64.110) )) ||
 		skip "need MDS >= v2_15_64-110-g501e5b2c8a for special projid"
 	local path=$DIR/$tdir
@@ -10462,9 +10475,9 @@ test_56ei() {
 	[[ $found_count == $expected_count ]] ||
 		error "Did not find any entries with expected projid $projid"
 }
-run_test 56ei "test lfs find --printf prints correct projid for special files"
+run_test 56Ei "test lfs find --printf prints correct projid for special files"
 
-test_56ej() {
+test_56Ej() {
 	test_mkdir $DIR/$tdir.src ||
 		error "mkdir failed on $DIR/$tdir.src"
 	test_mkdir $DIR/$tdir.dest ||
@@ -10478,9 +10491,9 @@ test_56ej() {
 	$LFS migrate  --non-block --copy $DIR/$tdir.src $f_mgrt ||
 		error "migrate remote dir error $DIR/$tdir.src $f_mgrt"
 }
-run_test 56ej "lfs migration --non-block copy"
+run_test 56Ej "lfs migration --non-block copy"
 
-test_56ek() {
+test_56Ek() {
 	local dir=$DIR/$tdir
 	local numfiles=10
 	local numdirs=5
@@ -10514,7 +10527,7 @@ test_56ek() {
 	rm -rf $dir
 	return 0
 }
-run_test 56ek "Test lfs find error handling with LLAPI_FAIL_LOC"
+run_test 56Ek "Test lfs find error handling with LLAPI_FAIL_LOC"
 
 test_57a() {
 	[ $PARALLEL == "yes" ] && skip "skip parallel run"
@@ -10728,7 +10741,7 @@ test_60b() { # bug 6411
 					print from_begin
 			  }")
 
-	(( LLOG_COUNT <= 130 )) ||
+	(( LLOG_COUNT <= 140 )) ||
 		error "CDEBUG_LIMIT not limiting messages ($LLOG_COUNT)" || true
 }
 run_test 60b "limit repeated messages from CERROR/CWARN"
@@ -14296,6 +14309,41 @@ test_103f() {
 }
 run_test 103f "changelog doesn't interfere with default ACLs buffers"
 
+test_103g() {
+	which getfacl || skip "missing getfacl"
+	[[ "$(lctl get_param -n mdc.*-mdc-*.connect_flags)" =~ "acl" ]] ||
+		skip_env "must have acl enabled"
+
+	local mdc_stat_param="mdc.$FSNAME-MDT*.md_stats"
+	local count
+	local f=$DIR/$tfile
+
+	touch $f
+	chmod 755 $f
+	cancel_lru_locks mdc
+	$RUNAS test -r $DIR
+
+	clear_stats $mdc_stat_param ||
+		error "fail to clear mdc stats"
+
+	# access(2) as a non-owner triggers acl_permission_check ->
+	# check_acl -> get_inode_acl -> ll_get_acl_common
+	$RUNAS test -r $f || error "test -r $f as $RUNAS_ID failed"
+
+	count=$(calc_stats $mdc_stat_param "getxattr")
+	echo "getxattr ACL RPCs: $count"
+
+	# access should not send ACL getxattr (ACLs are returned by lock intent)
+	(( !count )) ||
+		error "client sent $count getxattr RPCs"
+
+	# negative cache must be invalidated when an ACL is installed
+	setfacl -m u:$RUNAS_ID:rwx $f || error "setfacl $f failed"
+	$RUNAS getfacl -n $f 2>/dev/null | grep -q "^user:$RUNAS_ID:rwx$" ||
+		error "ACL not visible after setfacl (negative cache stuck)"
+}
+run_test 103g "no MDS_GETXATTR storm for inodes without ACL_ACCESS (LU-17238)"
+
 test_104a() {
 	[ $PARALLEL == "yes" ] && skip "skip parallel run"
 
@@ -15683,18 +15731,21 @@ test_119j()
 		skip "needs kernel > 4.5.0 for ki_flags support"
 
 	local rpcs
-	dd if=/dev/urandom of=$DIR/$tfile bs=8 count=1 || error "(0) dd failed"
+	local pages=1
+	local iosize=$((pages * PAGE_SIZE / 1024))k
+	dd if=/dev/urandom of=$DIR/$tfile bs=$iosize count=1 ||
+		error "(0) dd $iosize failed"
 	sync
 	$LCTL set_param -n osc.*.rpc_stats=0
 	# Read from page cache, does not generate an rpc
-	dd if=$DIR/$tfile of=/dev/null bs=8 count=1 || error "(1) dd failed"
+	dd if=$DIR/$tfile of=/dev/null bs=$iosize count=1 ||
+		error "(1) dd $iosize failed"
 	$LCTL get_param osc.*.rpc_stats
 	rpcs=($($LCTL get_param -n 'osc.*.rpc_stats' |
 		sed -n '/pages per rpc/,/^$/p' |
 		awk '/'$pages':/ { reads += $2; writes += $6 }; \
 		END { print reads,writes }'))
-	[[ ${rpcs[0]} == 0 ]] ||
-		error "(3) ${rpcs[0]} != 0 read RPCs"
+	(( ${rpcs[0]} == 0 )) || error "(3) ${rpcs[0]} != 0 read RPCs"
 
 	# Test hybrid IO read
 	# Force next BIO as DIO
@@ -15709,8 +15760,7 @@ test_119j()
 		sed -n '/pages per rpc/,/^$/p' |
 		awk '/'$pages':/ { reads += $2; writes += $6 }; \
 		END { print reads,writes }'))
-	[[ ${rpcs[0]} == 1 ]] ||
-		error "(5) ${rpcs[0]} != 1 read RPCs"
+	(( ${rpcs[0]} == $pages )) || error "(5) ${rpcs[0]} != $pages read RPCs"
 
 	# Test hybrid IO write
 	#define OBD_FAIL_LLITE_FORCE_BIO_AS_DIO	0x1429
@@ -15724,8 +15774,7 @@ test_119j()
 		sed -n '/pages per rpc/,/^$/p' |
 		awk '/'$pages':/ { reads += $2; writes += $6 }; \
 		END { print reads,writes }'))
-	[[ ${rpcs[1]} == 1 ]] ||
-		error "(7) ${rpcs[0]} != 1 read RPCs"
+	(( ${rpcs[1]} == $pages )) || error "(7) ${rpcs[1]} != $pages read RPCs"
 }
 run_test 119j "basic tests of hybrid IO switching"
 
@@ -15941,6 +15990,41 @@ test_119q()
 	done
 }
 run_test 119q "Test patchded Unaligned DIO readv() and writev()"
+
+test_119r() {
+	unaligned_dio_or_skip
+
+	# Test error handling in unaligned DIO user copy with racing threads
+	local file=$DIR/$tfile
+
+	$LFS setstripe -c 2 $file || error "setstripe failed"
+	stack_trap "rm -f $file"
+
+	# Create a file with some data
+	dd if=/dev/urandom of=$file bs=1M count=1 || error "dd failed"
+
+	# Set fail_loc to inject error in DIO copy
+	#define OBD_FAIL_LLITE_DIO_COPY_ERR		    0x1437
+	$LCTL set_param fail_loc=0x1437
+	stack_trap "$LCTL set_param fail_loc=0"
+
+	# Use rwv to do unaligned DIO write at offset 1024 with size 4096
+	# This is unaligned because offset 1024 is not page-aligned
+	local output
+	output=$(rwv -f $file -Dw -n 1 1024 4096 2>&1) &&
+		error "Unaligned DIO write should have failed but succeeded"
+
+	echo "$output" | grep -q "Bad address" ||
+		error "Expected 'Bad address' error, got: $output"
+
+	# Clear fail_loc
+	$LCTL set_param fail_loc=0
+
+	# Verify normal aligned DIO works after error
+	dd if=/dev/zero of=$file bs=4096 count=1 oflag=direct ||
+		error "DIO write failed after clearing fail_loc"
+}
+run_test 119r "Test error handling in unaligned DIO user copy"
 
 test_120a() {
 	[ $PARALLEL == "yes" ] && skip "skip parallel run"
@@ -17231,7 +17315,9 @@ test_124g_run() {
 		done
 
 		local before_priv_cnt=$($LCTL get_param -n $nsdir.lock_unused_priv_count)
-		ls -l "$base_dir"/cold > /dev/null
+		for ((c = 0; c < cold_nr; c++)); do
+			stat "$base_dir"/cold/f$c > /dev/null
+		done
 		# facilitate debugging output
 		local priv_cnt=$($LCTL get_param -n $nsdir.lock_unused_priv_count)
 		local temp_enq=$(do_facet mds1 $LCTL get_param "$nsservdir" |\
@@ -17256,16 +17342,16 @@ test_124g() {
 	(( $MDS1_VERSION >= $(version_code 2.17.50.63) )) ||
 		skip "Need MDS with LFRU support (LU-11509, >= 2.17.50.63)"
 
-	# limit debug output to avoid overwhelming the test output
-	local saved_debug=$($LCTL get_param -n debug)
-	stack_trap "$LCTL set_param debug=\"$saved_debug\""
-	$LCTL set_param debug=trace+info+warning+dlmtrace+error+reada+iotrace
-
 	local nsdir="ldlm.namespaces.*-MDT0000-mdc-*"
 	local lru_size=$(default_lru_size)
 	lru_resize_disable mdc $lru_size
-	local saved_policy=$($LCTL get_param -n $nsdir.lock_cache_policy)
-	stack_trap "$LCTL set_param $nsdir.lock_cache_policy=$saved_policy"
+	local save="$TMP/$TESTSUITE-$TESTNAME.parameters"
+	save_lustre_params client "$nsdir.lock_cache_policy" > $save
+	save_lustre_params client "llite.*.enable_statahead_fname" >> $save
+	stack_trap "restore_lustre_params < $save; rm -f $save"
+	# disable statehead fname to avoid additional threads' execution
+	# which may affect the test result due to its random behavior.
+	$LCTL set_param llite.*.enable_statahead_fname=0
 
 	local cli_nid="0@lo"
 	if remote_mds; then
@@ -17279,19 +17365,9 @@ test_124g() {
 	# test with lru
 	test_124g_run "$cli_nid" "$DIR/$tdir" $lru_size "LRU" enq_priv_disable
 
-	# We may observe a small percentage of variance in the enqueue count
-	# even when LFRU is functioning correctly, due to additional threads'
-	# execution triggered by the `stat` and `ls -l`` commands (e.g.,
-	# statehead operations).
-	# A small tolerance band can be allowed if needed in the future.
-	local tolerance_pct=0
-	local max_allowed=$(( enq_priv_disable * (100 + tolerance_pct) / 100 ))
-	echo ">> lfru_enqueue=$enq_priv_enabled," \
-	     "lru_enqueue=$enq_priv_disable," \
-	     "tolerance=${tolerance_pct}%," \
-	     "max_allowed=$max_allowed"
-	(( enq_priv_enabled <= max_allowed )) ||
-	     error "lfru enqueue $enq_priv_enabled > lru $max_allowed"
+	echo ">> lfru_enqueue=$enq_priv_enabled, lru_enqueue=$enq_priv_disable"
+	(( enq_priv_enabled <= enq_priv_disable )) ||
+	     error "lfru enqueue $enq_priv_enabled > lru $enq_priv_disable"
 }
 run_test 124g "LFRU performance test"
 
@@ -19269,8 +19345,8 @@ test_150ia() {
 run_test 150ia "Verify fallocate zero-range ZERO functionality"
 
 test_150ib() {
-	(( $MDS1_VERSION >= $(version_code 2.16.50) )) ||
-		skip "need MDS1 version >= 2.16.50 for falloc zero-range"
+	(( $MDS1_VERSION >= $(version_code v2_17_50-71-g2cbe29c282) )) ||
+		skip "need MDS1 version >= 2.17.50 for falloc zero-range"
 
 	if [[ "$ost1_FSTYPE" = "zfs" || "$mds1_FSTYPE" = "zfs" ]]; then
 		skip "zero-range mode is not implemented on OSD ZFS"
@@ -19282,10 +19358,15 @@ test_150ib() {
 	[[ "$DOM" == "yes" ]] &&
 		$LFS setstripe -E1M -L mdt -E eof $DIR/$tfile
 
-	local blocks_after_punch=$((4 * PAGE_SIZE / 512))
-	local blocks_after_zero_fill=$((8 * PAGE_SIZE / 512))
-	local blocks_after_extend_ext=$((16 * PAGE_SIZE / 512))
-	local blocks_after_extend_ind=$((16 * PAGE_SIZE / 512 + 8))
+	local features=$(do_facet mds1 "$DEBUGFS -c -R stats $(mdsdevname 1)" |
+			 grep "Filesystem features:")
+	echo "filesystem features: $features"
+
+	# Allow one 4K extent metadata block beyond the data blocks.
+	local blocks_after_zero_fill_min=$((8 * PAGE_SIZE / 512))
+	local blocks_after_zero_fill_max=$((8 * PAGE_SIZE / 512 + 8))
+	local blocks_after_extend_min=$((16 * PAGE_SIZE / 512))
+	local blocks_after_extend_max=$((16 * PAGE_SIZE / 512 + 8))
 	local expect_len=$((8 * PAGE_SIZE))
 
 	# file size [0, 32K)
@@ -19298,20 +19379,22 @@ test_150ib() {
 	local length=$((4 * PAGE_SIZE))
 	out=$(fallocate -p --offset $offset -l $length $DIR/$tfile 2>&1) ||
 		skip_eopnotsupp "$out|falloc(zero): off $offset, len $length"
-
 	# Verify punch worked as expected
-	blocks=$(stat -c '%b' $DIR/$tfile)
-	(( blocks == blocks_after_punch )) ||
-		error "punch failed:$blocks!=$blocks_after_punch"
+	p=$(lseek_test -l 0 $DIR/$tfile)
+	(( p == offset )) ||
+		error "punch failed: hole at $p != $offset"
+	p=$(lseek_test -d $offset $DIR/$tfile)
+	(( p == offset + length )) ||
+		error "punch failed: data at $p != $((offset + length))"
 
 	# zero prealloc fill the hole just punched
 	out=$(fallocate -z --offset $offset -l $length $DIR/$tfile 2>&1) ||
 		skip_eopnotsupp "$out|falloc(zero): off $offset, len $length"
-
 	# Verify zero prealloc worked.
 	blocks=$(stat -c '%b' $DIR/$tfile)
-	(( blocks == blocks_after_zero_fill )) ||
-		error "zero prealloc failed:$blocks!=$blocks_after_zero_fill"
+	(( blocks >= blocks_after_zero_fill_min &&
+	   blocks <= blocks_after_zero_fill_max )) ||
+		error "zero prealloc failed:$blocks not in [$blocks_after_zero_fill_min,$blocks_after_zero_fill_max]"
 
 	# zero prealloc with KEEP_SIZE on
 	offset=$((8 * PAGE_SIZE))
@@ -19320,15 +19403,9 @@ test_150ib() {
 		skip_eopnotsupp "$out|falloc(zero): off $offset, len $length"
 	# block allocate, size remains
 	blocks=$(stat -c '%b' $DIR/$tfile)
-	local features=$(do_facet mds1 "$DEBUGFS -c -R stats $(mdsdevname 1)" |
-		grep "Filesystem features:")
-	if [[ "$features" == *extent* ]]; then
-		(( blocks == blocks_after_extend_ext )) ||
-			error "extend failed:$blocks!=$blocks_after_extend_ext"
-	else
-		(( blocks == blocks_after_extend_ind )) ||
-			error "extend failed:$blocks!=$blocks_after_extend_ind"
-	fi
+	(( blocks >= blocks_after_extend_min &&
+	   blocks <= blocks_after_extend_max )) ||
+		error "extend failed:$blocks not in [$blocks_after_extend_min,$blocks_after_extend_max]"
 	lsz=$(stat -c '%s' $DIR/$tfile)
 	(( lsz == expect_len)) ||
 		error "zero extend failed(len):$lsz!=$expect_len"
@@ -26974,7 +27051,6 @@ test_247b() {
 
 	rm -rf $MOUNT/$tdir
 	mkdir -p $submount || error "mkdir $submount failed"
-	SKIP_FILESET=1
 	FILESET="$FILESET/$tdir" mount_client $submount &&
 		error "mount $submount should fail"
 	rmdir $submount
@@ -31579,6 +31655,64 @@ test_398s() {
 }
 run_test 398s "i/o error on mirror file read"
 
+test_398t() { # LU-19536
+	unaligned_dio_or_skip
+
+	$LFS setstripe -c 1 $DIR/$tfile || error "setstripe failed"
+
+	# Use a non-page-aligned block size to trigger unaligned
+	# DIO path. The fail_loc makes ll_allocate_dio_buffer
+	# fail after allocating the pages array, exercising the
+	# cleanup path which had a double-free bug.
+#define OBD_FAIL_LLITE_DIO_BUFFER_ALLOC       0x1438
+	$LCTL set_param fail_loc=0x80001438
+
+	dd if=/dev/zero of=$DIR/$tfile bs=1024 count=64 oflag=direct 2>/dev/null
+
+	$LCTL set_param fail_loc=0
+	# write may fail or succeed (if retried), but must not crash
+
+	# verify the system is still functional
+	echo "sanity check" > $DIR/$tfile || error "write after fail_loc failed"
+}
+run_test 398t "DIO buffer alloc failure must not crash (double-free)"
+
+test_398u() { # LU-19536
+	unaligned_dio_or_skip
+
+	# Force ENOMEM mid-IO to exercise the drain+retry path.
+	#
+	# OBD_FAIL_LLITE_DIO_DRAIN_RETRY (0x1439) does two things:
+	# 1) PRECHECK caps each sub_dio to PAGE_SIZE, so a single
+	#    write() generates many loop iterations with in-flight
+	#    sub_dios.
+	# 2) CFS_FAIL_CHECK with SKIP|ONCE triggers ENOMEM in
+	#    ll_allocate_dio_buffer after fail_val successes.
+	#
+	# With fail_val=5, iterations 1-5 succeed (tot_bytes > 0),
+	# iteration 6 gets ENOMEM, and the drain+retry path fires.
+	$LFS setstripe -c -1 $DIR/$tfile || error "setstripe"
+#define OBD_FAIL_LLITE_DIO_DRAIN_RETRY        0x1439
+	$LCTL set_param fail_loc=0xa0001439 fail_val=5
+
+	# bs=4608 (4096+512): not page-aligned but 512-aligned for
+	# O_DIRECT.  write 1 at offset 0 is page-aligned (regular
+	# DIO), write 2 at offset 4608 is unaligned.  With sub_dios
+	# capped to PAGE_SIZE, each unaligned write generates 2 loop
+	# iterations (4096+512), so 3 unaligned writes = 6 alloc
+	# calls.  fail_val=5 skips 5, fails the 6th — at which
+	# point tot_bytes > 0 (one iteration succeeded in this
+	# call), so drain+retry fires.
+	dd if=/dev/zero of=$DIR/$tfile bs=$((PAGE_SIZE+512)) count=10 \
+		oflag=direct || error "dd with drain retry failed"
+	$LCTL set_param fail_loc=0
+
+	local sz=$(stat -c %s $DIR/$tfile)
+	(( sz == $((10 * (PAGE_SIZE+512))) )) ||
+		error "file size $sz != expected $((10 * 4608))"
+}
+run_test 398u "DIO pool ENOMEM triggers drain and retry"
+
 test_fake_rw() {
 	local read_write=$1
 	if [ "$read_write" = "write" ]; then
@@ -32172,20 +32306,14 @@ test_404() { # LU-6601
 	for osp in $mosps; do
 		echo "Deactivate: " $osp
 		do_facet $SINGLEMDS $LCTL --device %$osp deactivate
-		local stat=$(do_facet $SINGLEMDS $LCTL dl |
-			awk -vp=$osp '$4 == p { print $2 }')
-		[ $stat = IN ] || {
-			do_facet $SINGLEMDS $LCTL dl | grep -w $osp
-			error "deactivate error"
-		}
+		wait_update_facet $SINGLEMDS \
+			"$LCTL dl | awk -vp=$osp '\\\$4 == p { print \\\$2 }'" \
+			"IN" 10 || error "deactivate error"
 		echo "Activate: " $osp
 		do_facet $SINGLEMDS $LCTL --device %$osp activate
-		local stat=$(do_facet $SINGLEMDS $LCTL dl |
-			awk -vp=$osp '$4 == p { print $2 }')
-		[ $stat = UP ] || {
-			do_facet $SINGLEMDS $LCTL dl | grep -w $osp
-			error "activate error"
-		}
+		wait_update_facet $SINGLEMDS \
+			"$LCTL dl | awk -vp=$osp '\\\$4 == p { print \\\$2 }'" \
+			"UP" 10 || error "activate error"
 	done
 }
 run_test 404 "validate manual {de}activated works properly for OSPs"

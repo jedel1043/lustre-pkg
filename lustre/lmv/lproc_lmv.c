@@ -226,6 +226,7 @@ restart:
 	list_for_each_entry(pat, &lmv->lmv_qos_exclude_list, qep_list) {
 		if (is_prefix) {
 			size_t len = strnlen(pat->qep_name, NAME_MAX + 3);
+
 			if (len >= 2 && pat->qep_name[len - 2] == '.' &&
 			    pat->qep_name[len - 1] == '*')
 				continue;
@@ -407,17 +408,22 @@ static void *lmv_tgt_seq_start(struct seq_file *p, loff_t *pos)
 {
 	struct obd_device *obd = p->private;
 	struct lmv_obd *lmv = &obd->u.lmv;
-	struct lu_tgt_desc *tgt;
+	struct lu_tgt_descs *ltd = &lmv->lmv_mdt_descs;
+	struct lu_tgt_desc *tgt = NULL;
 
+	mutex_lock(&ltd->ltd_mutex);
+	if (ltd->ltd_lov_desc.ld_tgt_count == 0)
+		goto out;
 	while (*pos < lmv->lmv_mdt_descs.ltd_tgts_size) {
 		tgt = lmv_tgt(lmv, (__u32)*pos);
 		if (tgt)
-			return tgt;
-
+			goto out;
 		++*pos;
 	}
 
-	return NULL;
+out:
+	mutex_unlock(&ltd->ltd_mutex);
+	return tgt;
 }
 
 static void lmv_tgt_seq_stop(struct seq_file *p, void *v)
@@ -428,18 +434,21 @@ static void *lmv_tgt_seq_next(struct seq_file *p, void *v, loff_t *pos)
 {
 	struct obd_device *obd = p->private;
 	struct lmv_obd *lmv = &obd->u.lmv;
-	struct lu_tgt_desc *tgt;
+	struct lu_tgt_descs *ltd = &lmv->lmv_mdt_descs;
+	struct lu_tgt_desc *tgt = NULL;
 
+	mutex_lock(&ltd->ltd_mutex);
 	++*pos;
-	while (*pos < lmv->lmv_mdt_descs.ltd_tgts_size) {
+	while (*pos < ltd->ltd_tgts_size) {
 		tgt = lmv_tgt(lmv, (__u32)*pos);
 		if (tgt)
-			return tgt;
-
+			goto out;
 		++*pos;
 	}
 
-	return NULL;
+out:
+	mutex_unlock(&ltd->ltd_mutex);
+	return tgt;
 }
 
 static int lmv_tgt_seq_show(struct seq_file *p, void *v)

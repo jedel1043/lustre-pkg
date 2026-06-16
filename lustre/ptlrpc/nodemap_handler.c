@@ -691,7 +691,7 @@ EXPORT_SYMBOL(nodemap_parse_idmap);
 int nodemap_add_member(struct ptlrpc_svc_ctx *svc_ctx, struct lnet_nid *nid,
 		       struct obd_export *exp)
 {
-	struct lu_nodemap *nodemap;
+	struct lu_nodemap *nodemap = NULL;
 	bool banned = false;
 	char *name = NULL;
 	int rc;
@@ -714,10 +714,15 @@ int nodemap_add_member(struct ptlrpc_svc_ctx *svc_ctx, struct lnet_nid *nid,
 			GOTO(out, rc);
 		}
 		if (!nodemap->nmf_gss_identify) {
-			rc = -EPERM;
-			CWARN("%s: error adding to nodemap %s, gssonly_identification not set: rc = %d\n",
-			      exp->exp_obd->obd_name, name, rc);
-			GOTO(out_unlock, rc);
+			if (nid) {
+				nodemap_putref(nodemap);
+				GOTO(try_nid, rc = -EPERM);
+			} else {
+				rc = -EPERM;
+				CWARN("%s: error adding to nodemap %s, gssonly_identification not set: rc = %d\n",
+				      exp->exp_obd->obd_name, name, rc);
+				GOTO(out_unlock, rc);
+			}
 		}
 		down_read(&active_config->nmc_ban_range_tree_lock);
 		range = ban_range_search(active_config, nid);
@@ -725,6 +730,7 @@ int nodemap_add_member(struct ptlrpc_svc_ctx *svc_ctx, struct lnet_nid *nid,
 		if (range && range->rn_nodemap == nodemap)
 			banned = true;
 	} else if (nid) {
+try_nid:
 		down_read(&active_config->nmc_range_tree_lock);
 		down_read(&active_config->nmc_ban_range_tree_lock);
 		nodemap = nodemap_classify_nid(nid, &banned);
@@ -736,6 +742,13 @@ int nodemap_add_member(struct ptlrpc_svc_ctx *svc_ctx, struct lnet_nid *nid,
 			      exp->exp_obd->obd_name, rc);
 			mutex_unlock(&active_config_lock);
 			GOTO(out, rc);
+		}
+		if (name && strcmp(nodemap->nm_name, name) != 0) {
+			rc = -EPERM;
+			CWARN("%s: error adding to nodemap %s, inconsistent with nodemap %s used in authentication: rc = %d\n",
+			      exp->exp_obd->obd_name, nodemap->nm_name, name,
+			      rc);
+			GOTO(out_unlock, rc);
 		}
 	} else {
 		rc = -EINVAL;
@@ -803,6 +816,66 @@ out:
 	EXIT;
 }
 EXPORT_SYMBOL(nodemap_del_member);
+
+/**
+ * nodemap_member_switch() - move an export to a new nodemap
+ * @exp: obd_export structure for the connection that is being moved
+ * @new_nm_name: new nodemap to switch the export to
+ * @gssonly: true if we require the new nodemap to have gssonly_identification
+ *
+ * Move an export to a new nodemap.
+ * This will decrease the refcount on the old nodemap, and increase the refcount
+ * on the new nodemap.
+ *
+ * Return:
+ * * %-EINVAL		export is NULL, or new_nm_name is invalid
+ * * %-ENOENT		nodemap not found
+ * * %-EPERM		nodemap does not have gssonly_identification property
+ */
+int nodemap_member_switch(struct obd_export *exp, char *new_nm_name,
+			  bool gssonly)
+{
+	struct lu_nodemap *old_nodemap = NULL, *new_nodemap;
+	int rc = 0;
+
+	ENTRY;
+
+	if (!new_nm_name || !exp)
+		RETURN(-EINVAL);
+
+	/* Using ac lock to prevent nodemap reclassification while deleting. */
+	mutex_lock(&active_config_lock);
+
+	new_nodemap = nodemap_lookup(new_nm_name);
+	if (IS_ERR(new_nodemap)) {
+		rc = PTR_ERR(new_nodemap);
+		CDEBUG(D_SEC, "%s: nodemap '%s' does not exist: rc = %d\n",
+		       exp->exp_obd->obd_name, new_nm_name, rc);
+		GOTO(out, rc);
+	}
+
+	if (gssonly && !new_nodemap->nmf_gss_identify)
+		GOTO(out, rc = -EPERM);
+
+	/* do nothing if nodemap does not change */
+	old_nodemap = nodemap_get_from_exp(exp);
+	if (new_nodemap == old_nodemap) {
+		nodemap_putref(new_nodemap);
+		GOTO(out, rc = 0);
+	}
+
+	__nodemap_member_switch(exp, new_nodemap, false, false);
+
+out:
+	mutex_unlock(&active_config_lock);
+	/* in case of success, keep the new_nodemap ref from nodemap_lookup */
+	if (rc && !IS_ERR(new_nodemap))
+		nodemap_putref(new_nodemap);
+	if (!IS_ERR_OR_NULL(old_nodemap))
+		nodemap_putref(old_nodemap);
+	RETURN(rc);
+}
+EXPORT_SYMBOL(nodemap_member_switch);
 
 /**
  * nodemap_add_idmap_helper() - add an idmap to the proper nodemap trees
@@ -5039,6 +5112,31 @@ static bool nodemap_is_dynamic(const char *nodemap_name)
 }
 
 /**
+ * rbac_bit2str() - Convert RBAC bit position to role name string
+ * @bit: bit position (0-31) to convert
+ *
+ * This function is used by cfs_str2mask() to map bit positions to RBAC role
+ * names. It converts a bit position (e.g., 0, 1, 2) to the corresponding bit
+ * value (e.g., 0x01, 0x02, 0x04) and searches for the matching RBAC role name.
+ *
+ * Return:
+ * * %role name string (e.g., "file_perms", "dne_ops")
+ * * %NULL if bit position doesn't correspond to any RBAC role
+ */
+static const char *rbac_bit2str(int bit)
+{
+	__u32 bit_value = BIT(bit);
+	int i;
+
+	/* Search through the RBAC names array to find matching bit */
+	for (i = 0; i < ARRAY_SIZE(nodemap_rbac_names); i++) {
+		if (nodemap_rbac_names[i].nrn_mode == bit_value)
+			return nodemap_rbac_names[i].nrn_name;
+	}
+	return NULL;
+}
+
+/**
  * cfg_nodemap_fileset_cmd() - Fileset command handler and entry point for
  * all "lctl nodemap_fileset*" ops
  * @lcfg: lustre cfg for fileset operation
@@ -5313,39 +5411,27 @@ static int cfg_nodemap_cmd(enum lcfg_command_type cmd, const char *nodemap_name,
 	}
 	case LCFG_NODEMAP_RBAC:
 	{
-		enum nodemap_rbac_roles rbac;
-		char *p;
+		enum nodemap_rbac_roles rbac = NODEMAP_RBAC_NONE;
+		u64 rbac_mask = 0;
 
-		if (strcmp(param, "all") == 0) {
-			rbac = NODEMAP_RBAC_ALL;
-		} else if (strcmp(param, "none") == 0) {
-			rbac = NODEMAP_RBAC_NONE;
-		} else {
-			rbac = NODEMAP_RBAC_NONE;
-			while ((p = strsep(&param, ",")) != NULL) {
-				int i;
+		if (strchr(param, '+') != NULL || strchr(param, '-') != NULL) {
+			struct lu_nodemap *nodemap_tmp;
 
-				if (!*p)
-					break;
-
-				for (i = 0; i < ARRAY_SIZE(nodemap_rbac_names);
-				     i++) {
-					if (strcmp(p,
-						 nodemap_rbac_names[i].nrn_name)
-					    == 0) {
-						rbac |=
-						 nodemap_rbac_names[i].nrn_mode;
-						break;
-					}
-				}
-				if (i == ARRAY_SIZE(nodemap_rbac_names))
-					break;
-			}
-			if (p) {
-				rc = -EINVAL;
-				break;
+			nodemap_tmp = nodemap_lookup_unlocked(nodemap_name);
+			if (!IS_ERR(nodemap_tmp)) {
+				rbac_mask = (u64)nodemap_tmp->nmf_rbac;
+				nodemap_putref(nodemap_tmp);
 			}
 		}
+
+		rc = cfs_str2mask(param, rbac_bit2str, &rbac_mask, 0,
+				  NODEMAP_RBAC_ALL, NODEMAP_RBAC_ALL);
+		if (rc) {
+			CERROR("%s: Invalid RBAC value '%s': rc = %d\n",
+			       nodemap_name, param, rc);
+			break;
+		}
+		rbac = (enum nodemap_rbac_roles)rbac_mask;
 
 		rc = nodemap_set_rbac(nodemap_name, rbac);
 		break;

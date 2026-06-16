@@ -20,7 +20,7 @@
 #include <linux/crypto.h>
 #include <linux/key.h>
 
-#include <lnet/lnet_crypto.h>
+#include <linux/lnet/lnet_crypto.h>
 #include <obd.h>
 #include <obd_class.h>
 #include <obd_support.h>
@@ -833,7 +833,7 @@ out_sec_put:
 		/*
 		 * don't switch ctx if import was deactivated
 		 */
-		if (req->rq_import->imp_deactive) {
+		if (test_bit(IMPF_DEACTIVE, req->rq_import->imp_flags)) {
 			spin_lock(&req->rq_lock);
 			req->rq_err = 1;
 			spin_unlock(&req->rq_lock);
@@ -2133,7 +2133,8 @@ static int flavor_allowed(struct sptlrpc_flavor *exp,
 int sptlrpc_target_export_check(struct obd_export *exp,
 				struct ptlrpc_request *req)
 {
-	struct sptlrpc_flavor   flavor;
+	struct sptlrpc_flavor flavor;
+	int rc;
 
 	if (exp == NULL)
 		return 0;
@@ -2194,8 +2195,9 @@ int sptlrpc_target_export_check(struct obd_export *exp,
 		exp->exp_flvr_adapt = 0;
 		spin_unlock(&exp->exp_lock);
 
-		return sptlrpc_import_sec_adapt(exp->exp_imp_reverse,
-						req->rq_svc_ctx, &flavor);
+		rc = sptlrpc_import_sec_adapt(exp->exp_imp_reverse,
+					      req->rq_svc_ctx, &flavor);
+		GOTO(nm_switch, rc);
 	}
 
 	/*
@@ -2234,20 +2236,24 @@ int sptlrpc_target_export_check(struct obd_export *exp,
 			flavor = exp->exp_flvr;
 			spin_unlock(&exp->exp_lock);
 
-			return sptlrpc_import_sec_adapt(exp->exp_imp_reverse,
-							req->rq_svc_ctx,
-							&flavor);
+			rc = sptlrpc_import_sec_adapt(exp->exp_imp_reverse,
+						      req->rq_svc_ctx,
+						      &flavor);
+			if (rc)
+				GOTO(nm_switch, rc);
 		} else {
-			CDEBUG(D_SEC,
-			       "exp %p (%x|%x|%x): is current flavor, install rvs ctx\n",
-			       exp, exp->exp_flvr.sf_rpc,
-			       exp->exp_flvr_old[0].sf_rpc,
-			       exp->exp_flvr_old[1].sf_rpc);
 			spin_unlock(&exp->exp_lock);
-
-			return sptlrpc_svc_install_rvs_ctx(exp->exp_imp_reverse,
-							   req->rq_svc_ctx);
 		}
+
+		CDEBUG(D_SEC,
+		       "exp %p (%x|%x|%x): is current flavor, install rvs ctx\n",
+		       exp, exp->exp_flvr.sf_rpc,
+		       exp->exp_flvr_old[0].sf_rpc,
+		       exp->exp_flvr_old[1].sf_rpc);
+
+		rc = sptlrpc_svc_install_rvs_ctx(exp->exp_imp_reverse,
+						 req->rq_svc_ctx);
+		GOTO(nm_switch, rc);
 	}
 
 	if (exp->exp_flvr_expire[0]) {
@@ -2319,6 +2325,30 @@ int sptlrpc_target_export_check(struct obd_export *exp,
 	      exp->exp_flvr_expire[1] ?
 	      (s64)(exp->exp_flvr_expire[1] - ktime_get_real_seconds()) : 0);
 	return -EACCES;
+
+nm_switch:
+#ifdef HAVE_SERVER_SUPPORT
+	if (!rc && req->rq_svc_ctx && req->rq_svc_ctx->sc_nodemap) {
+		struct ptlrpc_sec *sec;
+
+		sec = sptlrpc_import_sec_ref(exp->exp_imp_reverse);
+		if (sec &&
+		    strcmp(sec->ps_nm_name, req->rq_svc_ctx->sc_nodemap) != 0)
+			strscpy(sec->ps_nm_name, req->rq_svc_ctx->sc_nodemap,
+				sizeof(sec->ps_nm_name));
+		sptlrpc_sec_put(sec);
+
+		rc = nodemap_member_switch(exp, req->rq_svc_ctx->sc_nodemap,
+					   false);
+		if (rc) {
+			/* do not fail on issue with nodemap switch */
+			CDEBUG(D_SEC, "%s: could not switch nodemap: rc = %d\n",
+			       exp->exp_obd->obd_name, rc);
+			rc = 0;
+		}
+	}
+#endif
+	return rc;
 }
 EXPORT_SYMBOL(sptlrpc_target_export_check);
 

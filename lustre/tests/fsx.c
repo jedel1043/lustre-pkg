@@ -585,7 +585,7 @@ get_fd(void)
 
 static const char *my_basename(const char *path)
 {
-	char *c = strrchr(path, '/');
+	const char *c = strrchr(path, '/');
 
 	return c ? c++ : path;
 }
@@ -1398,7 +1398,7 @@ do_mirror_ops(int op)
 
 	switch (op) {
 	case MIRROR_EXTEND:
-		if (mirror_count == LUSTRE_MIRROR_COUNT_MAX)
+		if (mirror_count == LUSTRE_MIRROR_COUNT_DEF)
 			return;
 		snprintf(cmd, sizeof(cmd), "lfs mirror extend -N -c-1 %s",
 			 tf->path);

@@ -853,11 +853,11 @@ lustre_os_release() {
 	local facet=$1
 	local facet_os=$(tr "[:lower:]" "[:upper:]" <<<$facet)_OS_
 	local facet_version=${facet_os}VERSION_
+	local os_release="/etc/os-release"
 	local line
 
-	echo "$facet: $(do_facet $facet "cat /etc/system-release")"
-	do_facet $facet "test -r /etc/os-release" || {
-		echo "$facet: has no /etc/os-release"
+	do_facet $facet "test -r $os_release" || {
+		echo "$facet: has no $os_release"
 		do_facet $facet "uname -a; ls -s /etc/*release"
 		return 0
 	}
@@ -868,12 +868,15 @@ lustre_os_release() {
 		case $line in
 		VERSION_ID=*|ID=*|ID_LIKE=*) eval export ${facet_os}$line ;;
 		esac
-	done < <(do_facet $facet "cat /etc/os-release")
+	done < <(do_facet $facet "cat $os_release")
 
 	eval export ${facet_version}CODE=\$\(version_code \$${facet_version}ID\)
 	# add in the "self" ID to ID_LIKE so only one needs to be checked
 	eval export ${facet_os}ID_LIKE+=\" \$${facet_os}ID\"
-	env | grep "${facet_os}"
+	env | grep "${facet_os}" || {
+		echo "no ID information in $os_release:"
+		cat $os_release
+	}
 }
 
 module_loaded () {
@@ -2979,15 +2982,12 @@ zconf_mount() {
 
 	echo "Starting client: $client: $flags $opts $device $mnt"
 	do_node $client mkdir -p $mnt
-	if [ -n "$FILESET" -a -z "$SKIP_FILESET" ];then
-		do_node $client $MOUNT_CMD $flags $opts $MGSNID:/$FSNAME \
-			$mnt || return $?
-		#disable FILESET if not supported
-		do_nodes $client lctl get_param -n \
-			mdc.$FSNAME-MDT0000*.import | grep -q subtree ||
+
+	# disable FILESET if not supported or skipped
+	if [[ -n $FILESET ]]; then
+		(( MDS1_VERSION >= $(version_code 2.9.0) )) &&
+			[[ -z $SKIP_FILESET ]] ||
 				device=$MGSNID:/$FSNAME
-		do_node $client "! grep -q $mnt' ' /proc/mounts ||
-			umount $mnt"
 	fi
 	if $GSS_SK && ($SK_UNIQUE_NM || $SK_S2S); then
 		# Mount using nodemap key
@@ -3118,6 +3118,7 @@ zconf_mount_clients() {
 	opts=${opts:+-o $opts}
 	local flags=${4:-$MOUNT_FLAGS}
 	local device=$MGSNID:/$FSNAME$FILESET
+	local i=0
 
 	if [ -z "$mnt" -o -z "$FSNAME" ]; then
 		echo "Bad conf mount command: opt=$flags $opts dev=$device mnt=$mnt"
@@ -3139,8 +3140,6 @@ zconf_mount_clients() {
 	fi
 
 	for nmclient in ${clients//,/ }; do
-		local i=0
-
 		if $GSS_SK && ($SK_UNIQUE_NM || $SK_S2S); then
 			# Load per-NM keys on servers
 			do_nodes $(comma_list $(all_server_nodes)) \
@@ -9570,6 +9569,7 @@ combination()
 }
 
 calc_connection_cnt() {
+	local clients=${CLIENTS:-$HOSTNAME}
 	local dir=$1
 
 	# MDT->MDT = 2 * C(M, 2)
@@ -9584,10 +9584,14 @@ calc_connection_cnt() {
 	local cnt_mdt2ost=$((MDSCOUNT * OSTCOUNT))
 	local cnt_cli2ost=$((num_clients * OSTCOUNT))
 	local cnt_cli2mdt=$((num_clients * MDSCOUNT))
-	if is_mounted $MOUNT2; then
-		cnt_cli2mdt=$((cnt_cli2mdt * 2))
-		cnt_cli2ost=$((cnt_cli2ost * 2))
-	fi
+	for c in ${clients//,/ }; do
+		do_node $c grep lustre /proc/mounts |
+			grep -qw $MOUNT2
+		if [[ $? -eq 0 ]]; then
+			((cnt_cli2mdt += MDSCOUNT))
+			((cnt_cli2ost += OSTCOUNT))
+		fi
+	done
 	if local_mode; then
 		cnt_mdt2mdt=0
 		cnt_mdt2ost=0
@@ -9959,17 +9963,13 @@ wait_flavor()
 	return 1
 }
 
-restore_to_default_flavor()
-{
+remove_flavor_all() {
 	local proc="mgs.MGS.live.$FSNAME"
-
-	echo "restoring to default flavor..."
-
 	local nrule=$(do_facet mgs lctl get_param -n $proc 2>/dev/null |
-		grep ".srpc.flavor" | wc -l)
+		      grep ".srpc.flavor" | wc -l)
 
 	# remove all existing rules if any
-	if [ $nrule -ne 0 ]; then
+	if (( nrule > 0 )); then
 		echo "$nrule existing rules"
 		for rule in $(do_facet mgs lctl get_param -n $proc 2>/dev/null |
 		    grep ".srpc.flavor."); do
@@ -9982,7 +9982,14 @@ restore_to_default_flavor()
 	# verify no rules left
 	nrule=$(do_facet mgs lctl get_param -n $proc 2>/dev/null |
 		grep ".srpc.flavor." | wc -l)
-	[ $nrule -ne 0 ] && error "still $nrule rules left"
+	(( nrule == 0 )) || error "still $nrule rules left"
+}
+
+restore_to_default_flavor()
+{
+	echo "restoring to default flavor..."
+
+	remove_flavor_all
 
 	# wait for default flavor to be applied
 	if $GSS_SK; then

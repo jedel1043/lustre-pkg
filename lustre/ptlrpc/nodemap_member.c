@@ -331,6 +331,63 @@ out_end:
 }
 
 /**
+ * __nodemap_member_switch() - move an export to a new nodemap
+ * @exp: obd_export structure for the connection that is being moved
+ * @new_nodemap: new nodemap to switch the export to
+ * @banned: true if export is in banlist of new_nodemap
+ * @newly_banned: true if export was not banned before change
+ *
+ * Move an export to a new nodemap.
+ * This has to be done 'by hand' because ted_nodemap should never be NULL on
+ * a live export, so nm_member_del() cannot be called.
+ * This needs to be called with the active_config_lock held.
+ *
+ */
+void __nodemap_member_switch(struct obd_export *exp,
+			     struct lu_nodemap *new_nodemap,
+			     bool banned, bool newly_banned)
+{
+	struct lu_nodemap *old_nodemap;
+	bool need_revoke = false;
+
+	/* could deadlock if new_nodemap also reclassifying,
+	 * active_config_lock serializes reclassifies
+	 */
+	mutex_lock(&new_nodemap->nm_member_list_lock);
+
+	list_del_init(&exp->exp_target_data.ted_nodemap_member);
+
+	spin_lock(&exp->exp_target_data.ted_nodemap_lock);
+	old_nodemap = exp->exp_target_data.ted_nodemap;
+	exp->exp_target_data.ted_nodemap = new_nodemap;
+	spin_unlock(&exp->exp_target_data.ted_nodemap_lock);
+	if (old_nodemap)
+		nodemap_putref(old_nodemap);
+
+	list_add(&exp->exp_target_data.ted_nodemap_member,
+		 &new_nodemap->nm_member_list);
+	mutex_unlock(&new_nodemap->nm_member_list_lock);
+
+	nm_register_obd_stats(new_nodemap, exp);
+
+	if (nodemap_active) {
+		if (!old_nodemap) {
+			need_revoke = true;
+		} else {
+			down_read(&old_nodemap->nm_idmap_lock);
+			if (newly_banned ||
+			    nodemap_change_need_update(old_nodemap,
+						       new_nodemap))
+				need_revoke = true;
+			up_read(&old_nodemap->nm_idmap_lock);
+		}
+	}
+
+	if (need_revoke)
+		nm_member_exp_revoke(exp, banned);
+}
+
+/**
  * nm_member_reclassify_nodemap() - Reclassify members of a nodemap
  * @nodemap: nodemap with members to reclassify
  *
@@ -345,9 +402,9 @@ out_end:
  */
 void nm_member_reclassify_nodemap(struct lu_nodemap *nodemap)
 {
+	struct lu_nodemap *new_nodemap, *gss_nodemap = NULL;
 	struct obd_export *exp;
 	struct obd_export *tmp;
-	struct lu_nodemap *new_nodemap;
 
 	ENTRY;
 
@@ -374,30 +431,36 @@ void nm_member_reclassify_nodemap(struct lu_nodemap *nodemap)
 		    !rhashtable_init(&nm_cmp_cache, &nm_cmp_cache_params))
 			use_nm_cmp_cache = true;
 
-		/* If gssonly_identification is enforced for this nodemap, we
-		 * need to stick with it, and do not rely on NID ranges, unless
-		 * it has lost its gss_id flag in the new nodemap config.
+		/* When available, fetch the nodemap name stored in the sec part
+		 * of the import associated with this export: this is the
+		 * nodemap for which the client was authenticated.
+		 * If gssid is set on this nodemap, use it as the new nodemap.
 		 */
-		if (nodemap->nmf_gss_identify) {
-			new_nodemap = nodemap_lookup(nodemap->nm_name);
-			if (!IS_ERR(new_nodemap)) {
-				struct lu_nid_range *range;
+		if (exp->exp_imp_reverse) {
+			struct lu_nid_range *range;
+			struct ptlrpc_sec *sec;
 
-				if (!new_nodemap->nmf_gss_identify) {
-					nodemap_putref(new_nodemap);
-					new_nodemap = NULL;
-					GOTO(classify, 0);
-				}
-				down_read(
-				       &active_config->nmc_ban_range_tree_lock);
-				range = ban_range_search(active_config,
-							 nid);
-				up_read(
-				       &active_config->nmc_ban_range_tree_lock);
-				if (range &&
-				    range->rn_nodemap == new_nodemap)
-					banned = true;
+			sec = sptlrpc_import_sec_ref(exp->exp_imp_reverse);
+			if (!sec || sec->ps_nm_name[0] == '\0') {
+				sptlrpc_sec_put(sec);
+				GOTO(classify, 0);
 			}
+
+			new_nodemap = nodemap_lookup(sec->ps_nm_name);
+			sptlrpc_sec_put(sec);
+			if (IS_ERR(new_nodemap))
+				GOTO(classify, 0);
+
+			if (!new_nodemap->nmf_gss_identify) {
+				gss_nodemap = new_nodemap;
+				new_nodemap = NULL;
+				GOTO(classify, 0);
+			}
+			down_read(&active_config->nmc_ban_range_tree_lock);
+			range = ban_range_search(active_config, nid);
+			up_read(&active_config->nmc_ban_range_tree_lock);
+			if (range && range->rn_nodemap == new_nodemap)
+				banned = true;
 		}
 
 		if (IS_ERR_OR_NULL(new_nodemap)) {
@@ -408,6 +471,18 @@ classify:
 			down_read(&active_config->nmc_ban_range_tree_lock);
 			new_nodemap = nodemap_classify_nid(nid, &banned);
 			up_read(&active_config->nmc_ban_range_tree_lock);
+			if (gss_nodemap) {
+				nodemap_putref(new_nodemap);
+				if (new_nodemap != gss_nodemap) {
+					CWARN("%s: not reclassifying %s to nodemap %s, inconsistent with nodemap %s used in authentication: rc = %d\n",
+					      exp->exp_obd->obd_name,
+					      libcfs_nidstr(nid),
+					      new_nodemap->nm_name,
+					      gss_nodemap->nm_name, -EPERM);
+					new_nodemap = gss_nodemap;
+				}
+				gss_nodemap = NULL;
+			}
 		}
 
 		if (IS_ERR(new_nodemap))
@@ -430,40 +505,11 @@ classify:
 			exp->exp_banned = 0;
 		}
 
-		if (new_nodemap != nodemap) {
-			/* could deadlock if new_nodemap also reclassifying,
-			 * active_config_lock serializes reclassifies
-			 */
-			mutex_lock(&new_nodemap->nm_member_list_lock);
-
-			/* don't use member_del because ted_nodemap
-			 * should never be NULL with a live export
-			 */
-			list_del_init(&exp->exp_target_data.ted_nodemap_member);
-
-			/* keep the new_nodemap ref from classify */
-			spin_lock(&exp->exp_target_data.ted_nodemap_lock);
-			exp->exp_target_data.ted_nodemap = new_nodemap;
-			spin_unlock(&exp->exp_target_data.ted_nodemap_lock);
-			nodemap_putref(nodemap);
-
-			list_add(&exp->exp_target_data.ted_nodemap_member,
-				 &new_nodemap->nm_member_list);
-			mutex_unlock(&new_nodemap->nm_member_list_lock);
-
-			nm_register_obd_stats(new_nodemap, exp);
-
-			if (nodemap_active) {
-				down_read(&nodemap->nm_idmap_lock);
-				if (newly_banned ||
-				    nodemap_change_need_update(nodemap,
-							       new_nodemap))
-					nm_member_exp_revoke(exp, banned);
-				up_read(&nodemap->nm_idmap_lock);
-			}
-		} else {
+		if (new_nodemap != nodemap)
+			__nodemap_member_switch(exp, new_nodemap,
+						banned, newly_banned);
+		else
 			nodemap_putref(new_nodemap);
-		}
 	}
 
 	if (use_nm_cmp_cache) {

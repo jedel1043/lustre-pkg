@@ -16,7 +16,7 @@
 #include <linux/sunrpc/addr.h>
 #include <linux/libcfs/libcfs.h>
 #include <uapi/linux/lnet/nidstr.h>
-#include <lnet/lib-types.h>
+#include <linux/lnet/lib-types.h>
 #include <linux/ctype.h>
 #include <linux/inet.h>
 #include <linux/inetdevice.h>
@@ -1417,7 +1417,9 @@ static struct netstrfns libcfs_netstrfns[] = {
 	  .nf_name		= "o2ib",
 	  .nf_modname		= "ko2iblnd",
 	  .nf_addr2str		= libcfs_ip_addr2str,
+	  .nf_addr2str_size	= libcfs_ip_addr2str_size,
 	  .nf_str2addr		= libcfs_ip_str2addr,
+	  .nf_str2addr_size	= libcfs_ip_str2addr_size,
 	  .nf_parse_addrlist	= cfs_ip_addr_parse,
 	  .nf_print_addrlist	= libcfs_ip_addr_range_print,
 	  .nf_match_addr	= cfs_ip_addr_match,

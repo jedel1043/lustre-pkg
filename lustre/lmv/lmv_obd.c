@@ -319,7 +319,7 @@ static int lmv_connect_mdc(struct obd_device *obd, struct lmv_tgt_desc *tgt)
 {
 	struct lmv_obd *lmv = &obd->u.lmv;
 	struct obd_device *mdc_obd;
-	struct obd_export *mdc_exp;
+	struct obd_export *mdc_exp = NULL;
 	struct lu_fld_target target;
 	int  rc;
 
@@ -341,40 +341,39 @@ static int lmv_connect_mdc(struct obd_device *obd, struct lmv_tgt_desc *tgt)
 		RETURN(-EINVAL);
 	}
 
-	rc = obd_connect(NULL, &mdc_exp, mdc_obd, &obd->obd_uuid,
-			 &lmv->conn_data, lmv->lmv_cache);
+	/* Propagate upcall to MDC so it can be triggered before connection */
+	mdc_obd->obd_upcall = obd->obd_upcall;
+	rc = obd_register_observer(mdc_obd, obd);
 	if (rc) {
-		CERROR("target %s connect error %d\n", tgt->ltd_uuid.uuid, rc);
+		CERROR("%s: target %s register_observer error: rc = %d\n",
+		       obd->obd_name, tgt->ltd_uuid.uuid, rc);
 		RETURN(rc);
 	}
+
+	rc = obd_connect(NULL, &mdc_exp, mdc_obd, &obd->obd_uuid,
+			 &lmv->conn_data, lmv->lmv_cache);
+	if (rc)
+		GOTO(out_observer, rc);
 
 	/* Init fid sequence client for this mdc and add new fld target.  */
 	rc = client_fid_init(mdc_obd, mdc_exp, LUSTRE_SEQ_METADATA);
 	if (rc)
-		RETURN(rc);
+		GOTO(out_disconnect, rc);
 
 	target.ft_srv = NULL;
 	target.ft_exp = mdc_exp;
 	target.ft_idx = tgt->ltd_index;
 
-	fld_client_add_target(&lmv->lmv_fld, &target);
-
-	rc = obd_register_observer(mdc_obd, obd);
-	if (rc) {
-		obd_disconnect(mdc_exp);
-		CERROR("target %s register_observer error %d\n",
-		       tgt->ltd_uuid.uuid, rc);
-		RETURN(rc);
-	}
+	rc = fld_client_add_target(&lmv->lmv_fld, &target);
+	if (rc)
+		GOTO(out_fid, rc);
 
 	if (obd->obd_observer) {
 		/* Tell the observer about the new target.  */
 		rc = obd_notify(obd->obd_observer, mdc_exp->exp_obd,
 				OBD_NOTIFY_ACTIVE);
-		if (rc) {
-			obd_disconnect(mdc_exp);
-			RETURN(rc);
-		}
+		if (rc)
+			GOTO(out_fld, rc);
 	}
 
 	tgt->ltd_active = 1;
@@ -384,10 +383,8 @@ static int lmv_connect_mdc(struct obd_device *obd, struct lmv_tgt_desc *tgt)
 	md_init_ea_size(tgt->ltd_exp, lmv->max_easize, lmv->max_def_easize);
 
 	rc = lu_qos_add_tgt(&lmv->lmv_qos, tgt);
-	if (rc) {
-		obd_disconnect(mdc_exp);
-		RETURN(rc);
-	}
+	if (rc)
+		GOTO(out_tgt, rc);
 
 	CDEBUG(D_CONFIG, "Connected to %s(%s) successfully (%d)\n",
 	       mdc_obd->obd_name, mdc_obd->obd_uuid.uuid,
@@ -395,12 +392,32 @@ static int lmv_connect_mdc(struct obd_device *obd, struct lmv_tgt_desc *tgt)
 
 	lmv_statfs_check_update(obd, tgt);
 
-	if (lmv->lmv_tgts_kobj)
+	if (lmv->lmv_tgts_kobj) {
 		/* Even if we failed to create the link, that's fine */
 		rc = sysfs_create_link(lmv->lmv_tgts_kobj,
 				       &mdc_obd->obd_kset.kobj,
 				       mdc_obd->obd_name);
+		if (rc)
+			CWARN("%s: create sysfs link failure: rc = %d\n",
+			      obd->obd_name, rc);
+	}
+
 	RETURN(0);
+
+out_tgt:
+	tgt->ltd_active = 0;
+	tgt->ltd_exp = NULL;
+	lmv->lmv_mdt_descs.ltd_lmv_desc.ld_active_tgt_count--;
+out_fld:
+	fld_client_del_target(&lmv->lmv_fld, tgt->ltd_index);
+out_fid:
+	client_fid_fini(mdc_obd);
+out_disconnect:
+	obd_disconnect(mdc_exp);
+out_observer:
+	obd_register_observer(mdc_obd, NULL);
+	mdc_obd->obd_upcall.onu_upcall = NULL;
+	return rc;
 }
 
 static void lmv_del_target(struct lmv_obd *lmv, struct lu_tgt_desc *tgt)
@@ -1325,6 +1342,9 @@ static struct lu_device *lmv_device_free(const struct lu_env *env,
 
 	ENTRY;
 
+	lprocfs_obd_cleanup(obd);
+	fld_client_debugfs_fini(&lmv->lmv_fld);
+
 	spin_lock(&lmv->lmv_lock);
 	list_for_each_entry_safe(pat, ptmp,
 		&lmv->lmv_qos_exclude_list, qep_list) {
@@ -1333,9 +1353,7 @@ static struct lu_device *lmv_device_free(const struct lu_env *env,
 	}
 	spin_unlock(&lmv->lmv_lock);
 	fld_client_fini(&lmv->lmv_fld);
-	fld_client_debugfs_fini(&lmv->lmv_fld);
 
-	lprocfs_obd_cleanup(obd);
 	lprocfs_free_md_stats(obd);
 
 	lmv_foreach_tgt_safe(lmv, tgt, tmp)
@@ -3040,7 +3058,7 @@ static int lmv_fsync(struct obd_export *exp, const struct lu_fid *fid,
 }
 
 struct stripe_dirent {
-	struct page		*sd_page;
+	struct folio		*sd_folio;
 	struct lu_dirpage	*sd_dp;
 	struct lu_dirent	*sd_ent;
 	bool			 sd_eof;
@@ -3057,13 +3075,13 @@ struct lmv_dir_ctxt {
 
 static inline void stripe_dirent_unload(struct stripe_dirent *stripe)
 {
-	if (stripe->sd_page) {
+	if (stripe->sd_folio) {
 		if (stripe->sd_dp) {
-			kunmap(kmap_to_page(stripe->sd_dp));
+			ll_kunmap_local(stripe->sd_dp);
 			stripe->sd_dp = NULL;
 		}
-		put_page(stripe->sd_page);
-		stripe->sd_page = NULL;
+		folio_put(stripe->sd_folio);
+		stripe->sd_folio = NULL;
 		stripe->sd_ent = NULL;
 	}
 }
@@ -3120,7 +3138,7 @@ static struct lu_dirent *stripe_dirent_load(struct lmv_dir_ctxt *ctxt,
 	LASSERT(!ent);
 
 	do {
-		if (stripe->sd_page && stripe->sd_dp) {
+		if (stripe->sd_folio && stripe->sd_dp) {
 			__u64 end = le64_to_cpu(stripe->sd_dp->ldp_hash_end);
 
 			/* @hash should be the last dirent hash */
@@ -3156,7 +3174,7 @@ static struct lu_dirent *stripe_dirent_load(struct lmv_dir_ctxt *ctxt,
 
 		stripe->sd_dp = NULL;
 		rc = md_read_page(tgt->ltd_exp, op_data, ctxt->ldc_mrinfo, hash,
-				  &stripe->sd_page);
+				  &stripe->sd_folio);
 
 		op_data->op_fid1 = fid;
 		op_data->op_fid2 = fid;
@@ -3165,7 +3183,7 @@ static struct lu_dirent *stripe_dirent_load(struct lmv_dir_ctxt *ctxt,
 		if (rc)
 			break;
 
-		stripe->sd_dp = kmap(stripe->sd_page);
+		stripe->sd_dp = ll_kmap_local_folio(stripe->sd_folio, 0);
 		ent = stripe_dirent_get(ctxt, lu_dirent_start(stripe->sd_dp),
 					stripe_index);
 		/* in case a page filled with ., .. and dummy, read next */
@@ -3288,9 +3306,9 @@ static struct lu_dirent *lmv_dirent_next(struct lmv_dir_ctxt *ctxt)
 static int lmv_striped_read_page(struct obd_export *exp,
 				 struct md_op_data *op_data,
 				 struct md_readdir_info *mrinfo, __u64 offset,
-				 struct page **ppage)
+				 struct folio **pfolio)
 {
-	struct page *page = NULL;
+	struct folio *folio = NULL;
 	struct lu_dirpage *dp;
 	void *start;
 	struct lu_dirent *ent;
@@ -3307,12 +3325,12 @@ static int lmv_striped_read_page(struct obd_export *exp,
 	/* Allocate a page and read entries from all of stripes and fill
 	 * the page by hash order
 	 */
-	page = alloc_page(GFP_KERNEL);
-	if (!page)
+	folio = folio_alloc(GFP_KERNEL, 0);
+	if (IS_ERR_OR_NULL(folio))
 		RETURN(-ENOMEM);
 
 	/* Initialize the entry page */
-	dp = kmap(page);
+	dp = ll_kmap_local_folio(folio, 0);
 	memset(dp, 0, sizeof(*dp));
 	dp->ldp_hash_start = cpu_to_le64(offset);
 
@@ -3388,24 +3406,24 @@ static int lmv_striped_read_page(struct obd_export *exp,
 	dp->ldp_flags = cpu_to_le32(dp->ldp_flags);
 	dp->ldp_hash_end = cpu_to_le64(ctxt->ldc_hash);
 
-	kunmap(kmap_to_page(dp));
+	ll_kunmap_local(dp);
 	put_lmv_dir_ctxt(ctxt);
 	OBD_FREE(ctxt, offsetof(typeof(*ctxt), ldc_stripes[stripe_count]));
 
-	*ppage = page;
+	*pfolio = folio;
 
 	RETURN(0);
 
 free_page:
-	kunmap(kmap_to_page(dp));
-	__free_page(page);
+	ll_kunmap_local(dp);
+	folio_put(folio);
 
 	return rc;
 }
 
 static int lmv_read_page(struct obd_export *exp, struct md_op_data *op_data,
 			 struct md_readdir_info *mrinfo, __u64 offset,
-			 struct page **ppage)
+			 struct folio **pfolio)
 {
 	struct obd_device *obd = exp->exp_obd;
 	struct lmv_obd *lmv = &obd->u.lmv;
@@ -3418,7 +3436,8 @@ static int lmv_read_page(struct obd_export *exp, struct md_op_data *op_data,
 		RETURN(-ENODATA);
 
 	if (unlikely(lmv_dir_striped(op_data->op_lso1))) {
-		rc = lmv_striped_read_page(exp, op_data, mrinfo, offset, ppage);
+		rc = lmv_striped_read_page(exp, op_data, mrinfo, offset,
+					   pfolio);
 		RETURN(rc);
 	}
 
@@ -3426,7 +3445,7 @@ static int lmv_read_page(struct obd_export *exp, struct md_op_data *op_data,
 	if (IS_ERR(tgt))
 		RETURN(PTR_ERR(tgt));
 
-	rc = md_read_page(tgt->ltd_exp, op_data, mrinfo, offset, ppage);
+	rc = md_read_page(tgt->ltd_exp, op_data, mrinfo, offset, pfolio);
 
 	RETURN(rc);
 }
@@ -4612,7 +4631,7 @@ static int lmv_batch_add(struct obd_export *exp, struct lu_batch *bh,
 
 static int lmv_dirpage_add(struct obd_export *exp,
 			   struct inode *inode,
-			   struct page **pool,
+			   struct folio **pool,
 			   unsigned int cfs_pgs,
 			   unsigned int lu_pgs, int is_hash64)
 {
