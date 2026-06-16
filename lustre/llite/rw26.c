@@ -335,18 +335,13 @@ out:
 	RETURN(rc);
 }
 
-#ifdef KMALLOC_MAX_SIZE
-#define MAX_MALLOC KMALLOC_MAX_SIZE
-#else
-#define MAX_MALLOC (128 * 1024)
-#endif
-
 /* This is the maximum size of a single O_DIRECT request, based on the
  * kmalloc limit.  We need to fit all of the brw_page structs, each one
  * representing PAGE_SIZE worth of user data, into a single buffer, and
  * then truncate this to be a full-sized RPC.  For 4kB PAGE_SIZE this is
- * up to 22MB for 128kB kmalloc and up to 682MB for 4MB kmalloc. */
-#define MAX_DIO_SIZE ((MAX_MALLOC / sizeof(struct brw_page) * PAGE_SIZE) & \
+ * up to 22MB for 128kB kmalloc and up to 682MB for 4MB kmalloc.
+ */
+#define MAX_DIO_SIZE ((KMALLOC_MAX_SIZE / sizeof(struct brw_page) * PAGE_SIZE) & \
 		      ~((size_t)DT_MAX_BRW_SIZE - 1))
 
 static ssize_t ll_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
@@ -360,6 +355,7 @@ static ssize_t ll_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 	struct cl_sub_dio *sdio;
 	size_t bytes = iov_iter_count(iter);
 	ssize_t tot_bytes = 0, result = 0;
+	ssize_t bytes_at_drain = 0;
 	loff_t file_offset = iocb->ki_pos;
 	int rw = iov_iter_rw(iter);
 	bool sync_submit = false;
@@ -458,6 +454,9 @@ static ssize_t ll_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 		struct cl_dio_pages *cdp;
 
 		bytes = min_t(size_t, iov_iter_count(iter), MAX_DIO_SIZE);
+		/* Cap sub_dio size for drain+retry testing */
+		if (CFS_FAIL_PRECHECK(OBD_FAIL_LLITE_DIO_DRAIN_RETRY))
+			bytes = min_t(size_t, bytes, PAGE_SIZE);
 		if (rw == READ) {
 			if (file_offset >= i_size_read(inode))
 				break;
@@ -481,10 +480,40 @@ static ssize_t ll_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 					   iter, rw, bytes, file_offset,
 					   unaligned);
 		if (unlikely(result <= 0)) {
-			cl_sync_io_note(env, &sdio->csd_sync, result);
+			bool retry = (result == -ENOMEM && unaligned
+				      && tot_bytes > bytes_at_drain);
+
+			/* Note the failed sub_dio.  When retrying,
+			 * pass rc=0 so the alloc ENOMEM doesn't
+			 * poison the parent anchor's sync_rc.
+			 */
+			cl_sync_io_note(env, &sdio->csd_sync,
+					retry ? 0 : result);
 			if (sync_submit) {
 				LASSERT(sdio->csd_creator_free);
 				cl_sub_dio_free(sdio);
+			}
+			if (retry) {
+				/* ENOMEM but we have in-flight sub_dios
+				 * holding pages.  Drain them to reclaim
+				 * pages, then retry.
+				 *
+				 * By calling cl_sync_io_wait_recycle,
+				 * cl_dio_aio_end runs — but unaligned
+				 * DIO is never AIO, so it won't
+				 * prematurely complete to userspace.
+				 */
+				LASSERT(!ll_dio_aio->cda_is_aio);
+				rc2 = cl_sync_io_wait_recycle(env,
+					&ll_dio_aio->cda_sync, 0, 0);
+				if (rc2 < 0)
+					GOTO(out, result = rc2);
+				bytes_at_drain = tot_bytes;
+				result = 0;
+				CDEBUG(D_VFSTRACE,
+				       "DIO pool ENOMEM, drained at %zd bytes, retrying\n",
+				       tot_bytes);
+				continue;
 			}
 			GOTO(out, result);
 		}
@@ -657,9 +686,8 @@ static int ll_write_begin(
 	unsigned from = pos & (PAGE_SIZE - 1);
 	unsigned to = from + len;
 	int result = 0;
-	int iocb_flags;
-	ENTRY;
 
+	ENTRY;
 	CDEBUG(D_VFSTRACE, "Writing %lu of %d to %d bytes\n", index, from, len);
 
 	lcc = ll_cl_find(inode);
@@ -674,8 +702,7 @@ static int ll_write_begin(
 	io  = lcc->lcc_io;
 	vio = vvp_env_io(env);
 
-	iocb_flags = iocb_ki_flags_get(file, vio->vui_iocb);
-	if (iocb_ki_flags_check(iocb_flags, DIRECT)) {
+	if (iocb_ki_flags_check(vio->vui_iocb, IOCB_DIRECT)) {
 		/* direct IO failed because it couldn't clean up cached pages,
 		 * this causes a problem for mirror write because the cached
 		 * page may belong to another mirror, which will result in

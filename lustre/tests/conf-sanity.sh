@@ -418,19 +418,25 @@ test_10a() {
 run_test 10a "find lctl param broken symlinks"
 
 test_11() {
-	# set $version variable with tool build version
+	# set $version variable with local tool build version
 	local version=$($LCTL --version | awk '{ print $2 }')
+	local facet=mgs
 
 	[[ -n "$version" ]] || error "'$LCTL --version' did not print version"
 
-	for cmd in $LFS $LNETCTL $LST $MKFS $MOUNT_LUSTRE $TUNEFS; do
-		local tool_ver0=$(do_facet mgs $cmd --version 2>&1)
-		local tool_ver1=$(do_facet mgs $cmd --version some_args 2>&1)
+	local version_cmds="$LFS $LNETCTL $LST $MOUNT_LUSTRE "
+	# interop tests run on client, do not check server-only commands
+	(( $MGS_VERSION == $CLIENT_VERSION )) && version_cmds+="$MKFS $TUNEFS"||
+		facet=client
+
+	for cmd in $version_cmds; do
+		local tool_ver0=$(do_facet $facet $cmd --version 2>&1)
+		local tool_ver1=$(do_facet $facet $cmd --version some_args 2>&1)
 
 		[[ "$tool_ver0" =~ $version ]] ||
-			error "'$cmd --version' has ' $tool_ver0', not '$version'"
+			error "'$cmd --version' '$tool_ver0' != '$version'"
 		[[ "$tool_ver1" =~ $version ]] ||
-			error "'$cmd --version some_args ' has '$tool_ver1', not '$version'"
+			error "'$cmd --version some_args' '$tool_ver1' != '$version'"
 	done
 }
 run_test 11 "Verify tool --version option works properly"
@@ -938,14 +944,17 @@ test_28A() { # was test_28
 	local orig=$($LCTL get_param -n $TEST)
 	local max=$($LCTL get_param -n \
 			llite.$FSNAME-*.max_read_ahead_per_file_mb)
+	local new=$orig
 
 	orig=${orig%%.[0-9]*}
 	max=${max%%.[0-9]*}
 	echo "ORIG:$orig MAX:$max"
-	[[ $max -le $orig ]] && orig=$((max - 3))
-	echo "ORIG:$orig MAX:$max"
+	(( $max > $orig )) || new=$((max - 3))
+	echo "NEW:$new MAX:$max"
+	stack_trap "cleanup"
+	stack_trap "set_persistent_param_and_check client $TEST $PARAM $orig"
 
-	local final=$((orig + 1))
+	local final=$((new + 1))
 
 	set_persistent_param_and_check client "$TEST" "$PARAM" $final
 	final=$((final + 1))
@@ -960,8 +969,6 @@ test_28A() { # was test_28
 	else
 		echo "New config success: got $result"
 	fi
-	set_persistent_param_and_check client "$TEST" "$PARAM" $orig
-	cleanup || error "cleanup failed with rc $?"
 }
 run_test 28A "permanent parameter setting"
 
@@ -7327,9 +7334,7 @@ restore_ostindex() {
 }
 
 max_lov_stripe_index() {
-	locale facet=$1
-
-	if [[ $(lustre_version_code $facet) -lt $(version_code 2.15.64) ]]; then
+	if (( $OST1_VERSION < $(version_code v2_15_63-53-g1a6ef725c2) )); then
 		echo "65532"
 	else
 		echo "65503"
@@ -7340,8 +7345,8 @@ max_lov_stripe_index() {
 # expected. This test uses OST_INDEX_LIST to format OSTs with a randomly
 # assigned index and ensures we can mount such a formatted file system
 test_81() { # LU-4665
-	(( MDS1_VERSION >= $(version_code 2.6.54) )) ||
-		skip "Need MDS version at least 2.6.54"
+	(( MDS1_VERSION >= $(version_code v2_6_54_0-55-g979203503a) )) ||
+		skip "Need MDS >= 2.6.54.55 for sparse OST index"
 	(( OSTCOUNT >= 3 )) || skip_env "needs >= 3 OSTs"
 
 	stopall
@@ -7350,7 +7355,7 @@ test_81() { # LU-4665
 	# is generated.
 	local i
 	local saved_ostindex1=$OSTINDEX1
-	local LOV_V1_INSANE_STRIPE_INDEX=$(max_lov_stripe_index ost1)
+	local LOV_V1_INSANE_STRIPE_INDEX=$(max_lov_stripe_index)
 	local invalid_index=$((LOV_V1_INSANE_STRIPE_INDEX+4))
 
 	for i in $((LOV_V1_INSANE_STRIPE_INDEX + 3)) $((RANDOM + invalid_index)); do
@@ -7368,9 +7373,9 @@ test_81() { # LU-4665
 	stack_trap restore_ostindex
 
 	# Format OSTs with random sparse indices.
-	LOV_V1_INSANE_STRIPE_INDEX=$(max_lov_stripe_index ost2)
+	LOV_V1_INSANE_STRIPE_INDEX=$(max_lov_stripe_index)
 	local rand_ost=$((RANDOM * 2 % (LOV_V1_INSANE_STRIPE_INDEX - 1) + 1))
-	LOV_V1_INSANE_STRIPE_INDEX=$(max_lov_stripe_index ost3)
+	LOV_V1_INSANE_STRIPE_INDEX=$(max_lov_stripe_index)
 	echo  "Format $OSTCOUNT OSTs with OST_INDEX_LIST=[0,$rand_ost,$LOV_V1_INSANE_STRIPE_INDEX]"
 	OST_INDEX_LIST=[0,$rand_ost,$LOV_V1_INSANE_STRIPE_INDEX] formatall ||
 		error "formatall failed with $?"
@@ -11314,9 +11319,9 @@ test_130()
 run_test 130 "re-register an MDT after writeconf"
 
 test_131() {
-	[ "$mds1_FSTYPE" == "ldiskfs" ] || skip "ldiskfs only test"
-	(( $MDS1_VERSION >= $(version_code 2.14.56.35) )) ||
-		skip "Need MDS version at least 2.14.56.35"
+	[[ "$mds1_FSTYPE" == "ldiskfs" ]] || skip "ldiskfs only test"
+	(( $MDS1_VERSION >= $(version_code v2_14_56-35-g665383d3a1) )) ||
+		skip "Need MDS >= 2.14.56.35 for trusted.projid"
 	do_facet mds1 $DEBUGFS -R features $(mdsdevname 1) |
 		grep -q project || skip "skip project quota not supported"
 
@@ -11340,7 +11345,7 @@ test_131() {
 
 	stopall
 
-	for i in $(seq $MDSCOUNT); do
+	for ((i = 1; i <= $MDSCOUNT; i++)); do
 		mds_backup_restore mds$i ||
 			error "Backup/restore on mds$i failed"
 	done
@@ -11348,19 +11353,27 @@ test_131() {
 	setupall
 
 	projid=($($LFS project -d $DIR/$tdir))
-	[ ${projid[0]} == "1000" ] ||
+	(( ${projid[0]} == "1000" )) ||
 		error "projid expected 1000 not ${projid[0]}"
 	for ((i = 0; i < 512; ++i)); do
 		projid=($($LFS project $DIR/$tdir/f${i}))
-		[ ${projid[0]} == "$i" ] ||
+		(( ${projid[0]} == "$i" )) ||
 			error "projid expected $i not ${projid[0]}"
 	done
 
 	(( $($LFS project $DIR/$tdir.inherit/f* |
 		awk '$1 == 1001 { print }' | wc -l) == 128 )) ||
 			error "restore did not copy projid 1001"
+
+	(( $MDS1_VERSION >= $(version_code 2.17.53) )) ||
+		skip "need MDS > 2.17.53 for projid inherit restore"
+
+	createmany -o $DIR/$tdir.inherit/file 2
+	(( $($LFS project $DIR/$tdir.inherit/file* |
+	     awk '$1 == 1001 { print }' | wc -l) == 2 )) ||
+		error "files did not inherit projid 1001 after restore"
 }
-run_test 131 "MDT backup restore with project ID"
+run_test 131 "MDT backup restore with project ID and inheritance flag"
 
 test_132() {
 	local err_cnt
@@ -12239,8 +12252,8 @@ test_154() {
 run_test 154 "expand .. on rename after MDT backup restore"
 
 test_155() {
-	(( OST1_VERSION >= $(version_code 2.16.50.134) )) ||
-		skip "Need OST version at least 2.16.50.134"
+	(( OST1_VERSION >= $(version_code v2_16_50-174-g66e51e654a) )) ||
+		skip "Need OST >= 2.16.50.174 to avoid gap in OST OIDs"
 
 	reformat_and_config
 	setupall
@@ -12276,8 +12289,8 @@ test_156() {
 	local root_fid_export
 	local root_fid_client
 
-	(( MDS1_VERSION >= $(version_code 2.16.57) )) ||
-		skip "Need MDS version at least 2.16.57"
+	(( MDS1_VERSION >= $(version_code v2_16_57-151-g328f6c48da) )) ||
+		skip "Need MDS >= 2.16.57.151 for root FID in exports"
 
 	reformat
 	setupall
@@ -12334,11 +12347,11 @@ cleanup_157a() {
 }
 
 test_157a() {
+	(( $MGS_VERSION >= $(version_code v2_17_52-30-gf96f38c9e1) )) ||
+		skip "need MGS >= 2.17.52.30 for 'allow_register' tunable"
+
 	stopall
 	setup
-
-	do_facet mgs $LCTL get_param -n allow_register ||
-        	skip "MGS does not have the allow_register tunable"
 
 	# Verify interface works
 	do_facet mgs "$LCTL set_param allow_register=1" ||
@@ -12444,10 +12457,10 @@ cleanup_157b() {
 }
 
 test_157b() {
-	setup
+	(( $MGS_VERSION >= $(version_code v2_17_52-30-gf96f38c9e1) )) ||
+		skip "need MGS >= 2.17.52.30 for 'allow_register' tunable"
 
-	do_facet mgs $LCTL get_param -n allow_register ||
-		skip "MGS does not have the allow_register tunable"
+	setup
 
 	# existing targets can re-register, new targets blocked
 
@@ -12562,7 +12575,11 @@ test_160() {
 run_test 160 "MGC updates failnodes from all participants"
 
 test_161() {
+	(( $MGS_VERSION >= $(version_code v2_16_58-27-gb850dbb71d) )) ||
+		skip "need MGS >= 2.16.58.27 for 'mgsname' option"
+
 	setup
+	stack_trap "cleanup"
 
 	local custom_mgsname="test-mgs-custom"
 
@@ -12593,22 +12610,35 @@ test_161() {
 	# automatically generate mgsname and show "test-mgs@tcp:/lustre" in
 	# mount, df, and /proc/mounts output
 
-	# Extract IP and network type from MGSNID
-	local mgs_ip=$(echo $MGSNID | cut -d'@' -f1)
-	local mgs_nettype=$(echo $MGSNID | cut -d'@' -f2 | cut -d',' -f1)
-	local test_hostname="test-mgs-auto"
+	# Extract IP from MGSNID and ensure NETTYPE is set
+	local mgs_ip=${MGSNID%%@*}
+	local mgs_nettype=${NETTYPE:-tcp}
+	local test_hostname=""
 
-	# Check if hostname is already resolvable before adding to /etc/hosts
-	if getent hosts $test_hostname >/dev/null 2>&1 ||
-		ping -c1 -W1 $test_hostname >/dev/null 2>&1; then
-		echo "Hostname $test_hostname is already resolvable"
-	else
+	# Check if MGS hostname already resolvable before adding to /etc/hosts
+	if getent hosts $mgs_ip; then
+		local mgs_host=$(getent hosts $mgs_ip | awk '{ print $2 }')
+
+		ping -c1 -W1 $mgs_host >/dev/null 2>&1 &&
+			echo "Hostname $mgs_host is already resolvable" &&
+			test_hostname=$mgs_host
+	fi
+	if [[ -z "$test_hostname" ]]; then
+		[[ -w /etc/hosts ]] || skip_env "/etc/hosts is not writeable"
+
 		echo "Add temp hostname to /etc/hosts: $mgs_ip $test_hostname"
 		local tmphosts=$(mktemp)
-		cp -a /etc/hosts $tmphosts
-		echo "$mgs_ip $test_hostname" >> /etc/hosts
+
+		cp -av /etc/hosts $tmphosts ||
+			skip_env "cannot backup /etc/hosts to $tmphosts"
+
+		test_hostname="test-mgs-auto"
+		echo "$mgs_ip $test_hostname" >> /etc/hosts ||
+			skip_env "unable to add '$test_hostname' to /etc/hosts"
 		# Ensure temp hostname is removed even if test fails
-		stack_trap "cat $tmphosts >/etc/hosts; rm -f $tmphosts" EXIT
+		stack_trap "cat $tmphosts >/etc/hosts; rm -f $tmphosts"
+		ping -c1 -W1 $mgs_host >/dev/null 2>&1 ||
+			skip_env "temp hostname $mgs_host cannot be resolved"
 	fi
 
 	# Mount using the hostname to trigger automatic mgsname generation
@@ -12631,13 +12661,12 @@ test_161() {
 	# Verify hostname also appears in mount output
 	mount | grep "$test_hostname@$mgs_nettype:/$FSNAME.*$MOUNT" ||
 		error "hostname not found in mount output"
-	cleanup
 }
 run_test 161 "test '-o mgsname' option"
 
 test_162() {
-	(( MGS_VERSION >= $(version_code 2.17.50) )) ||
-		skip "Need MGS version at least 2.17.50"
+	(( $MGS_VERSION >= $(version_code v2_17_50-68-g666ead3301) )) ||
+		skip "Need MGS >= 2.17.50.68 for 'noclient' option"
 	local_mode && skip_env "skip in local mode"
 	local mhost
 
@@ -12717,8 +12746,8 @@ cleanup_164() {
 }
 
 test_164() {
-	(( $MDS1_VERSION >= $(version_code 2.17.50) )) ||
-		skip "Need MDS version >= 2.17.50"
+	(( $MDS1_VERSION >= $(version_code v2_17_50-225-g671e757102) )) ||
+		skip "Need MDS >= 2.17.50.225 for expected_clients"
 
 	formatall
 	setup

@@ -1257,8 +1257,7 @@ int llapi_get_poollist(const char *name, char **poollist, int list_size,
 		poollist[i] = NULL;
 
 	/* is name a pathname ? */
-	ptr = strchr(name, '/');
-	if (ptr != NULL) {
+	if (strchr(name, '/') != NULL) {
 		char fsname_buf[MAXNAMLEN];
 
 		/* We will need fsname for printing later */
@@ -2506,8 +2505,8 @@ static void lov_dump_comp_v1_entry(struct find_param *param,
 				 * with parallel find.
 				 */
 				if (localtime_r(&stamp, &tm_buf)) {
-					strftime(date_str, sizeof(date_str), "%c",
-						 &tm_buf);
+					strftime(date_str, sizeof(date_str),
+						 "%FT%T%z", &tm_buf);
 					llapi_printf(LLAPI_MSG_NORMAL, "'%s'",
 						     date_str);
 				}

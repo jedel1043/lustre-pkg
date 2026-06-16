@@ -398,8 +398,10 @@ static void ll_lock_cancel_bits(struct ldlm_lock *lock,
 	    inode->i_sb->s_root && !is_root_inode(inode))
 		ll_prune_aliases(inode);
 
-	if (bits & (MDS_INODELOCK_LOOKUP | MDS_INODELOCK_PERM))
+	if (bits & (MDS_INODELOCK_LOOKUP | MDS_INODELOCK_PERM)) {
 		forget_all_cached_acls(inode);
+		clear_bit(LLIF_ACL_VALID, &lli->lli_flags);
+	}
 
 	iput(inode);
 	RETURN_EXIT;
@@ -1841,9 +1843,8 @@ static int ll_new_node_prepare(struct inode *dir, struct dentry *dchild,
 				GOTO(err_exit, err = -EINVAL);
 			fakeinode->i_sb = dchild->d_sb;
 			fakeinode->i_mode |= S_IFLNK;
-#ifdef IOP_XATTR
 			fakeinode->i_opflags |= IOP_XATTR;
-#endif
+
 			ll_lli_init(ll_i2info(fakeinode));
 			err = ll_set_encflags(fakeinode,
 					      op_data->op_file_encctx,
