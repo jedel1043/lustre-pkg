@@ -198,36 +198,6 @@ void lmv_stripe_object_put(struct lmv_stripe_object **lsm_obj);
 struct lmv_stripe_object *
 	lmv_stripe_object_get(struct lmv_stripe_object *lsm_obj);
 
-static inline void lmv1_le_to_cpu(struct lmv_mds_md_v1 *lmv_dst,
-				  const struct lmv_mds_md_v1 *lmv_src)
-{
-	__u32 i;
-
-	lmv_dst->lmv_magic = le32_to_cpu(lmv_src->lmv_magic);
-	lmv_dst->lmv_stripe_count = le32_to_cpu(lmv_src->lmv_stripe_count);
-	lmv_dst->lmv_master_mdt_index =
-				le32_to_cpu(lmv_src->lmv_master_mdt_index);
-	lmv_dst->lmv_hash_type = le32_to_cpu(lmv_src->lmv_hash_type);
-	lmv_dst->lmv_layout_version = le32_to_cpu(lmv_src->lmv_layout_version);
-	if (lmv_src->lmv_stripe_count > LMV_MAX_STRIPE_COUNT)
-		return;
-	for (i = 0; i < lmv_src->lmv_stripe_count; i++)
-		fid_le_to_cpu(&lmv_dst->lmv_stripe_fids[i],
-			      &lmv_src->lmv_stripe_fids[i]);
-}
-
-static inline void lmv_le_to_cpu(union lmv_mds_md *lmv_dst,
-				 const union lmv_mds_md *lmv_src)
-{
-	switch (le32_to_cpu(lmv_src->lmv_magic)) {
-	case LMV_MAGIC_V1:
-		lmv1_le_to_cpu(&lmv_dst->lmv_md_v1, &lmv_src->lmv_md_v1);
-		break;
-	default:
-		break;
-	}
-}
-
 /* This hash is only for testing purpose */
 static inline unsigned int
 lmv_hash_all_chars(unsigned int count, const char *name, int namelen)
@@ -480,16 +450,21 @@ static inline bool lmv_user_magic_supported(__u32 lum_magic)
 		"invalid", (lmv)->lmv_migrate_hash,			      \
 	       LOV_MAXPOOLNAME, lmv->lmv_pool_name)
 
-/* master LMV is sane */
-static inline bool lmv_is_sane(const struct lmv_mds_md_v1 *lmv)
+/* LMV can be either master or stripe LMV */
+static inline bool lmv_is_sane2(const struct lmv_mds_md_v1 *lmv)
 {
+	s32 stripe_count;
+
 	if (!lmv)
 		return false;
 
-	if (le32_to_cpu(lmv->lmv_magic) != LMV_MAGIC_V1)
+	if (le32_to_cpu(lmv->lmv_magic) != LMV_MAGIC_V1 &&
+	    le32_to_cpu(lmv->lmv_magic) != LMV_MAGIC_STRIPE)
 		goto insane;
 
-	if (le32_to_cpu(lmv->lmv_stripe_count) == 0)
+	stripe_count = le32_to_cpu(lmv->lmv_stripe_count);
+	if (stripe_count == 0 || stripe_count > LMV_MAX_STRIPE_COUNT ||
+	    stripe_count < LMV_OVERSTRIPE_COUNT_MAX)
 		goto insane;
 
 	if (!lmv_is_sane_hash_type(le32_to_cpu(lmv->lmv_hash_type)))
@@ -501,26 +476,18 @@ insane:
 	return false;
 }
 
-/* LMV can be either master or stripe LMV */
-static inline bool lmv_is_sane2(const struct lmv_mds_md_v1 *lmv)
+/* master LMV is sane */
+static inline bool lmv_is_sane(const struct lmv_mds_md_v1 *lmv)
 {
-	if (!lmv)
+	if (!lmv_is_sane2(lmv))
 		return false;
 
-	if (le32_to_cpu(lmv->lmv_magic) != LMV_MAGIC_V1 &&
-	    le32_to_cpu(lmv->lmv_magic) != LMV_MAGIC_STRIPE)
-		goto insane;
-
-	if (le32_to_cpu(lmv->lmv_stripe_count) == 0)
-		goto insane;
-
-	if (!lmv_is_sane_hash_type(le32_to_cpu(lmv->lmv_hash_type)))
-		goto insane;
+	if (le32_to_cpu(lmv->lmv_magic) != LMV_MAGIC_V1) {
+		LMV_DEBUG(D_ERROR, lmv, "unknown layout");
+		return false;
+	}
 
 	return true;
-insane:
-	LMV_DEBUG(D_ERROR, lmv, "unknown layout");
-	return false;
 }
 
 static inline bool lmv_is_splitting(const struct lmv_mds_md_v1 *lmv)

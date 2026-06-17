@@ -2593,6 +2593,11 @@ int llapi_layout_comp_add_ec(struct llapi_layout *layout, uint32_t mirror_id,
 		return -1;
 	}
 
+	if (dstripe_count + cstripe_count > LOV_EC_MAX_TOTAL_STRIPES) {
+		errno = EINVAL;
+		return -1;
+	}
+
 	/* Sync mirror count and IDs so that the data component can be found */
 	rc = llapi_layout_mirror_count_sync(layout);
 	if (rc)
@@ -4861,7 +4866,7 @@ int llapi_get_lum_file(const char *path, __u64 *valid, lstatx_t *statx,
 {
 	char parent[PATH_MAX];
 	const char *fname;
-	char *tmp;
+	const char *tmp;
 	int offset;
 	int dir_fd;
 	int rc;

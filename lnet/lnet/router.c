@@ -11,7 +11,7 @@
 
 #include <linux/random.h>
 #include <linux/libcfs/libcfs.h>
-#include <lnet/lib-lnet.h>
+#include <linux/lnet/lib-lnet.h>
 
 #define LNET_NRB_TINY_MIN	512	/* min value for each CPT */
 #define LNET_NRB_TINY		(LNET_NRB_TINY_MIN * 4)
@@ -1180,8 +1180,12 @@ rescan:
 		/* If we're currently discovering the peer then don't
 		 * issue another discovery
 		 */
-		if (rtr->lp_state & LNET_PEER_RTR_DISCOVERY)
+		spin_lock(&rtr->lp_lock);
+		if (rtr->lp_state & LNET_PEER_RTR_DISCOVERY) {
+			spin_unlock(&rtr->lp_lock);
 			continue;
+		}
+		spin_unlock(&rtr->lp_lock);
 
 		now = ktime_get_real_seconds();
 

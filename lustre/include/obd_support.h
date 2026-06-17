@@ -23,7 +23,7 @@
 #include <linux/libcfs/libcfs_debug.h>
 #include <linux/libcfs/libcfs_private.h>
 
-#include <lnet/lib-cpt.h>
+#include <linux/lnet/lib-cpt.h>
 #include <lprocfs_status.h>
 #include <lustre_handles.h>
 #include <uapi/linux/lustre/lustre_idl.h>
@@ -643,13 +643,16 @@ extern bool obd_enable_fname_encoding;
 #define OBD_FAIL_LLITE_STAT_RACE1		    0x1434
 #define OBD_FAIL_LLITE_STAT_RACE2		    0x1435
 #define OBD_FAIL_LLITE_TRUNC_PAUSE		    0x1436
+#define OBD_FAIL_LLITE_DIO_COPY_ERR		    0x1437
+#define OBD_FAIL_LLITE_DIO_BUFFER_ALLOC		    0x1438
+#define OBD_FAIL_LLITE_DIO_DRAIN_RETRY		    0x1439
 
-#define OBD_FAIL_FID_INDIR	0x1501
-#define OBD_FAIL_FID_INLMA	0x1502
-#define OBD_FAIL_FID_IGIF	0x1504
-#define OBD_FAIL_FID_LOOKUP	0x1505
-#define OBD_FAIL_FID_NOLMA	0x1506
-#define OBD_FAIL_FID_MULTI	0x1507
+#define OBD_FAIL_FID_INDIR			0x1501
+#define OBD_FAIL_FID_INLMA			0x1502
+#define OBD_FAIL_FID_IGIF			0x1504
+#define OBD_FAIL_FID_LOOKUP			0x1505
+#define OBD_FAIL_FID_NOLMA			0x1506
+#define OBD_FAIL_FID_MULTI			0x1507
 
 /* LFSCK */
 #define OBD_FAIL_LFSCK_DELAY1		0x1600
@@ -666,7 +669,7 @@ extern bool obd_enable_fname_encoding;
 #define OBD_FAIL_LFSCK_SKIP_LASTID	0x160d
 #define OBD_FAIL_LFSCK_DELAY4		0x160e
 #define OBD_FAIL_LFSCK_BAD_LMMOI	0x160f
-#define OBD_FAIL_LFSCK_DANGLING 	0x1610
+#define OBD_FAIL_LFSCK_DANGLING		0x1610
 #define OBD_FAIL_LFSCK_UNMATCHED_PAIR1	0x1611
 #define OBD_FAIL_LFSCK_UNMATCHED_PAIR2	0x1612
 #define OBD_FAIL_LFSCK_BAD_OWNER	0x1613

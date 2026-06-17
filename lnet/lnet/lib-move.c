@@ -19,8 +19,8 @@
 
 #include <linux/libcfs/libcfs.h>
 #include <linux/libcfs/libcfs_fail.h>
-#include <lnet/lib-lnet.h>
-#include <lnet/lnet_rdma.h>
+#include <linux/lnet/lib-lnet.h>
+#include <linux/lnet/lnet_rdma.h>
 #include <net/net_namespace.h>
 
 static int local_nid_dist_zero = 1;
@@ -2248,13 +2248,17 @@ lnet_find_best_ni_on_local_net(struct lnet_peer *peer, int md_cpt,
 	 * discovery message and we need to select an NI on the peer net
 	 * specified by lp_disc_net_id
 	 */
+	spin_lock(&peer->lp_lock);
 	if (peer->lp_disc_net_id &&
 	    (peer->lp_state & LNET_PEER_RTR_DISCOVERY) &&
 	    lnet_msg_is_ping(msg)) {
 		best_lpn = lnet_peer_get_net_locked(peer, peer->lp_disc_net_id);
-		if (best_lpn && lnet_get_net_locked(best_lpn->lpn_net_id))
+		if (best_lpn && lnet_get_net_locked(best_lpn->lpn_net_id)) {
+			spin_unlock(&peer->lp_lock);
 			goto select_best_ni;
+		}
 	}
+	spin_unlock(&peer->lp_lock);
 
 	/*
 	 * The peer can have multiple interfaces, some of them can be on
