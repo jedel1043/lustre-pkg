@@ -1,4 +1,4 @@
-sbin/*
+sbin/* usr/sbin
 usr/sbin/*
 usr/bin/*
 usr/lib/*/*.so.*

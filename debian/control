@@ -1,6 +1,5 @@
 Source: lustre
 Section: admin
-Priority: optional
 Maintainer: José Julián Espina <julian.espina@canonical.com>
 Original-Maintainer: Lustre Developers <lustre-devel@lists.lustre.org>
 Build-Depends: debhelper-compat (= 13),
@@ -18,7 +17,7 @@ Build-Depends: debhelper-compat (= 13),
                zlib1g-dev,
                pkgconf,
                libzfslinux-dev,
-Standards-Version: 4.6.2
+Standards-Version: 4.7.3
 Homepage: https://www.lustre.org/
 Vcs-Git: https://github.com/lustre/lustre-release.git
 Vcs-Browser: https://github.com/lustre/lustre-release
