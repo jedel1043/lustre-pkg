@@ -40,7 +40,7 @@
 #include "llite_internal.h"
 
 /**
- * ll_get_dir_page() - Get directory page for a given directory inode
+ * ll_get_dir_folio() - Get directory page for a given directory inode
  * @dir: pointer to the directory(inode) for which page is being fetched
  * @op_data: pointer to the md operation structure
  * @offset: Offset within page
@@ -130,52 +130,53 @@
  * * %Success - pointer to the page structure
  * * %Failure - Error pointer (pointed by rc)
  */
-struct page *ll_get_dir_page(struct inode *dir, struct md_op_data *op_data,
-			     __u64 offset, bool hash64, int *partial_readdir_rc)
+struct folio *ll_get_dir_folio(struct inode *dir, struct md_op_data *op_data,
+			       __u64 offset, bool hash64,
+			       int *partial_readdir_rc)
 {
 	struct md_readdir_info mrinfo = {
 					.mr_blocking_ast = ll_md_blocking_ast };
-	struct page *page;
+	struct folio *folio;
 	unsigned long idx = hash_x_index(offset, hash64);
 	int rc;
 
 	/* check page first */
-	page = find_get_page(dir->i_mapping, idx);
-	if (page) {
-		wait_on_page_locked(page);
-		if (PageUptodate(page))
-			RETURN(page);
-		put_page(page);
+	folio = get_folio_read(dir->i_mapping, idx, 0, 0);
+	if (!IS_ERR_OR_NULL(folio)) {
+		folio_wait_locked(folio);
+		if (folio_test_uptodate(folio))
+			RETURN(folio);
+		folio_put(folio);
 	}
 
-	rc = md_read_page(ll_i2mdexp(dir), op_data, &mrinfo, offset, &page);
+	rc = md_read_page(ll_i2mdexp(dir), op_data, &mrinfo, offset, &folio);
 	if (rc != 0)
 		return ERR_PTR(rc);
 
 	if (partial_readdir_rc && mrinfo.mr_partial_readdir_rc)
 		*partial_readdir_rc = mrinfo.mr_partial_readdir_rc;
 
-	return page;
+	return folio;
 }
 
-void ll_release_page(struct inode *inode, struct page *page,
-		     bool remove)
+void ll_release_dir_folio(struct inode *inode, struct folio *folio,
+			  bool remove)
 {
 	/* Always remove the page for striped dir, because the page is
 	 * built from temporarily in LMV layer
 	 */
 	if (inode && ll_dir_striped(inode)) {
-		__free_page(page);
+		folio_put(folio);
 		return;
 	}
 
 	if (remove) {
-		lock_page(page);
-		if (likely(page->mapping != NULL))
-			cfs_delete_from_page_cache(page);
-		unlock_page(page);
+		folio_lock(folio);
+		if (likely(folio->mapping != NULL))
+			cfs_folio_delete_from_cache(folio);
+		folio_unlock(folio);
 	}
-	put_page(page);
+	folio_put(folio);
 }
 
 int ll_dir_read(struct inode *inode, __u64 *ppos, struct md_op_data *op_data,
@@ -185,7 +186,7 @@ int ll_dir_read(struct inode *inode, __u64 *ppos, struct md_op_data *op_data,
 	__u64 pos = *ppos;
 	bool is_api32 = ll_need_32bit_api(sbi);
 	bool is_hash64 = test_bit(LL_SBI_64BIT_HASH, sbi->ll_flags);
-	struct page *page;
+	struct folio *folio;
 	bool done = false;
 	struct llcrypt_str lltr = LLTR_INIT(NULL, 0);
 	int rc = 0;
@@ -198,8 +199,8 @@ int ll_dir_read(struct inode *inode, __u64 *ppos, struct md_op_data *op_data,
 			RETURN(rc);
 	}
 
-	page = ll_get_dir_page(inode, op_data, pos, is_hash64,
-				partial_readdir_rc);
+	folio = ll_get_dir_folio(inode, op_data, pos, is_hash64,
+				 partial_readdir_rc);
 
 	while (rc == 0 && !done) {
 		void *kaddr = NULL;
@@ -208,13 +209,13 @@ int ll_dir_read(struct inode *inode, __u64 *ppos, struct md_op_data *op_data,
 		__u64 hash;
 		__u64 next;
 
-		if (IS_ERR(page)) {
-			rc = PTR_ERR(page);
+		if (IS_ERR(folio)) {
+			rc = PTR_ERR(folio);
 			break;
 		}
 
 		hash = MDS_DIR_END_OFF;
-		kaddr = kmap(page);
+		kaddr = kmap(fpgptr(folio));
 		dp = kaddr;
 		for (ent = lu_dirent_start(dp); ent != NULL && !done;
 		     ent = lu_dirent_next(ent)) {
@@ -272,7 +273,7 @@ int ll_dir_read(struct inode *inode, __u64 *ppos, struct md_op_data *op_data,
 				kunmap(kmap_to_page(kaddr));
 				kaddr = NULL;
 			}
-			ll_release_page(inode, page, false);
+			ll_release_dir_folio(inode, folio, false);
 			break;
 		}
 
@@ -285,7 +286,7 @@ int ll_dir_read(struct inode *inode, __u64 *ppos, struct md_op_data *op_data,
 				kunmap(kmap_to_page(kaddr));
 				kaddr = NULL;
 			}
-			ll_release_page(inode, page, false);
+			ll_release_dir_folio(inode, folio, false);
 		} else {
 			u32 flags = le32_to_cpu(dp->ldp_flags);
 
@@ -294,10 +295,10 @@ int ll_dir_read(struct inode *inode, __u64 *ppos, struct md_op_data *op_data,
 				kunmap(kmap_to_page(kaddr));
 				kaddr = NULL;
 			}
-			ll_release_page(inode, page, flags & LDF_COLLIDE);
+			ll_release_dir_folio(inode, folio, flags & LDF_COLLIDE);
 			next = pos;
-			page = ll_get_dir_page(inode, op_data, pos,
-					       is_hash64, partial_readdir_rc);
+			folio = ll_get_dir_folio(inode, op_data, pos,
+						 is_hash64, partial_readdir_rc);
 		}
 	}
 	ctx->pos = pos;
@@ -460,7 +461,11 @@ static int ll_dir_setdirstripe(struct dentry *dparent, struct lmv_user_md *lump,
 
 	if (lump->lum_stripe_count > 1 &&
 	    !(exp_connect_flags(sbi->ll_md_exp) & OBD_CONNECT_DIR_STRIPE))
-		RETURN(-EINVAL);
+		RETURN(-EOPNOTSUPP);
+
+	if (lump->lum_stripe_count > LMV_MAX_STRIPE_COUNT ||
+	    lump->lum_stripe_count < LMV_OVERSTRIPE_COUNT_MAX)
+		RETURN(-EOVERFLOW);
 
 	if (IS_DEADDIR(parent) &&
 	    !CFS_FAIL_CHECK(OBD_FAIL_LLITE_NO_CHECK_DEAD))
@@ -2008,13 +2013,19 @@ static long ll_dir_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		char *filename;
 
 		rc = obd_ioctl_getdata(&data, &len, uarg);
-		if (rc != 0)
+		if (rc)
 			RETURN(rc);
+		if (!data->ioc_inlbuf1 || data->ioc_inllen1 < 1)
+			GOTO(out_free, rc = -EINVAL);
+		/* NAME_MAX is the *actual* usable name length, +1 for NUL */
+		if (data->ioc_inllen1 > NAME_MAX + 1)
+			GOTO(out_free, rc = -ENAMETOOLONG);
 
 		filename = data->ioc_inlbuf1;
-		namelen = strlen(filename);
-		if (namelen < 1) {
-			CDEBUG(D_INFO, "IOC_MDC_LOOKUP missing filename\n");
+		namelen = strnlen(filename, data->ioc_inllen1);
+		if (namelen != data->ioc_inllen1 - 1) {
+			CDEBUG(D_INFO, "IOC_MDC_LOOKUP bad namelen %u != %u\n",
+			       namelen, data->ioc_inllen1 - 1);
 			GOTO(out_free, rc = -EINVAL);
 		}
 
@@ -2042,16 +2053,21 @@ out_free:
 		rc = obd_ioctl_getdata(&data, &len, uarg);
 		if (rc)
 			RETURN(rc);
-
-		if (data->ioc_inlbuf1 == NULL || data->ioc_inlbuf2 == NULL ||
-		    data->ioc_inllen1 == 0 || data->ioc_inllen2 == 0)
+		if (!data->ioc_inlbuf1 || !data->ioc_inlbuf2 ||
+		    data->ioc_inllen1 < 1 || data->ioc_inllen2 == 0)
 			GOTO(lmv_out_free, rc = -EINVAL);
+		/* NAME_MAX is the *actual* usable name length, +1 for NUL */
+		if (data->ioc_inllen1 > NAME_MAX + 1)
+			GOTO(lmv_out_free, rc = -ENAMETOOLONG);
+		if (data->ioc_inllen2 > XATTR_SIZE_MAX)
+			GOTO(lmv_out_free, rc = -EOVERFLOW);
 
 		filename = data->ioc_inlbuf1;
-		namelen = data->ioc_inllen1;
-
-		if (namelen < 1) {
-			CDEBUG(D_INFO, "IOC_MDC_LOOKUP missing filename\n");
+		namelen = strnlen(filename, data->ioc_inllen1) + 1;
+		if (namelen != data->ioc_inllen1) {
+			CDEBUG(D_INFO,
+			       "LL_IOC_MDC_SETSTRIPE bad namelen %u != %u\n",
+			       namelen, data->ioc_inllen1);
 			GOTO(lmv_out_free, rc = -EINVAL);
 		}
 		lum = (struct lmv_user_md *)data->ioc_inlbuf2;
@@ -2285,7 +2301,7 @@ finish_req:
 	}
 	case LL_IOC_REMOVE_ENTRY: {
 		char *filename = NULL;
-		int namelen = 0;
+		int namelen;
 		int rc;
 
 		/* Here is a little hack to avoid sending REINT_RMENTRY to
@@ -2591,22 +2607,15 @@ out_quotactl:
 		RETURN(index);
 	}
 	case LL_IOC_HSM_REQUEST: {
-		struct hsm_user_request *hur;
+		struct hsm_user_request hdr, *hur;
 		ssize_t totalsize;
 
-		OBD_ALLOC_PTR(hur);
-		if (hur == NULL)
-			RETURN(-ENOMEM);
-
 		/* We don't know the true size yet; copy the fixed-size part */
-		if (copy_from_user(hur, uarg, sizeof(*hur))) {
-			OBD_FREE_PTR(hur);
+		if (copy_from_user(&hdr, uarg, sizeof(hdr)))
 			RETURN(-EFAULT);
-		}
 
 		/* Compute the whole struct size */
-		totalsize = hur_len(hur);
-		OBD_FREE_PTR(hur);
+		totalsize = hur_len(&hdr);
 		if (totalsize < 0)
 			RETURN(-E2BIG);
 
@@ -2615,12 +2624,15 @@ out_quotactl:
 			RETURN(-E2BIG);
 
 		OBD_ALLOC_LARGE(hur, totalsize);
-		if (hur == NULL)
+		if (!hur)
 			RETURN(-ENOMEM);
 
-		/* Copy the whole struct */
-		if (copy_from_user(hur, uarg, totalsize))
+		/* Copy the rest of the struct if needed */
+		if (totalsize > sizeof(*hur) &&
+		    copy_from_user(hur->hur_user_item, uarg + sizeof(*hur),
+				   totalsize - sizeof(*hur)))
 			GOTO(out_hur, rc = -EFAULT);
+		memcpy(hur, &hdr, sizeof(*hur));
 
 		if (hur->hur_request.hr_action == HUA_RELEASE) {
 			const struct lu_fid *fid;
@@ -2719,24 +2731,29 @@ out_hur:
 		struct lmv_user_md *lum;
 		int len;
 		char *filename;
-		int namelen = 0;
+		int namelen;
 		__u32 flags;
 		int rc;
 
 		rc = obd_ioctl_getdata(&data, &len, uarg);
 		if (rc)
 			RETURN(rc);
-
 		if (data->ioc_inlbuf1 == NULL || data->ioc_inlbuf2 == NULL ||
-		    data->ioc_inllen1 == 0 || data->ioc_inllen2 == 0)
+		    data->ioc_inllen1 < 1 || data->ioc_inllen2 < sizeof(*lum))
 			GOTO(migrate_free, rc = -EINVAL);
+		/* NAME_MAX is the *actual* usable name length, +1 for NUL */
+		if (data->ioc_inllen1 > NAME_MAX + 1)
+			GOTO(migrate_free, rc = -ENAMETOOLONG);
+		if (data->ioc_inllen2 > XATTR_SIZE_MAX)
+			GOTO(migrate_free, rc = -EOVERFLOW);
 
 		filename = data->ioc_inlbuf1;
-		namelen = data->ioc_inllen1;
+		namelen = strnlen(filename, data->ioc_inllen1) + 1;
 		flags = data->ioc_type;
-
-		if (namelen < 1 || namelen != strlen(filename) + 1) {
-			CDEBUG(D_INFO, "IOC_MDC_LOOKUP missing filename\n");
+		if (namelen != data->ioc_inllen1) {
+			CDEBUG(D_INFO,
+			       "IOC_MDC_MIGRATE bad filename len %u != %u\n",
+			       namelen, data->ioc_inllen1);
 			GOTO(migrate_free, rc = -EINVAL);
 		}
 

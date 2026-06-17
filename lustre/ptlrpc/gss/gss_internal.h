@@ -13,8 +13,11 @@
 #ifndef __PTLRPC_GSS_GSS_INTERNAL_H_
 #define __PTLRPC_GSS_GSS_INTERNAL_H_
 
+#include <linux/key.h>
+#include <keys/user-type.h>
+#include <linux/keyctl.h>
 #include <crypto/hash.h>
-#include <lnet/lnet_crypto.h>
+#include <linux/lnet/lnet_crypto.h>
 #include <lustre_sec.h>
 #include <upcall_cache.h>
 

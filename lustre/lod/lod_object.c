@@ -4827,7 +4827,7 @@ static int lod_layout_repeat_comp(const struct lu_env *env,
 		OBD_ALLOC(op_array, new_comp->llc_ostlist.op_size);
 		if (!op_array)
 			GOTO(out, rc = -ENOMEM);
-		memcpy(op_array, &new_comp->llc_ostlist.op_array,
+		memcpy(op_array, new_comp->llc_ostlist.op_array,
 		       new_comp->llc_ostlist.op_size);
 		new_comp->llc_ostlist.op_array = op_array;
 	}
@@ -5904,12 +5904,10 @@ static void lod_ah_init(const struct lu_env *env,
 		 * max_stripes_per_mdt;
 		 */
 		max_stripe_count = mdt_count;
-		if ((__s16)lc->ldo_dir_stripe_count >=
-				LMV_OVERSTRIPE_COUNT_MAX &&
-		    (__s16)lc->ldo_dir_stripe_count <=
-				LMV_OVERSTRIPE_COUNT_MIN) {
-			lc->ldo_dir_stripe_count = mdt_count *
-				-(__s16)lc->ldo_dir_stripe_count;
+		if (lc->ldo_dir_stripe_count >= LMV_OVERSTRIPE_COUNT_MAX &&
+		    lc->ldo_dir_stripe_count <= LMV_OVERSTRIPE_COUNT_MIN) {
+			lc->ldo_dir_stripe_count =
+				mdt_count * -lc->ldo_dir_stripe_count;
 			max_stripe_count = d->lod_max_mdt_stripecount ?:
 				mdt_count * d->lod_max_stripes_per_mdt;
 		} else if (lc->ldo_dir_hash_type & LMV_HASH_FLAG_OVERSTRIPED) {

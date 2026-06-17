@@ -1,0 +1,12 @@
+#!/usr/bin/bash
+# SPDX-License-Identifier: NOASSERTION
+
+#
+# This file is part of Lustre, http://www.lustre.org/
+#
+# debian/postinst
+#
+# Script run before Lustre module/utils are installed
+#
+
+depmod -a

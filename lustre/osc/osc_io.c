@@ -24,17 +24,9 @@
 #include <linux/falloc.h>
 
 #include "osc_internal.h"
-#include <lnet/lnet_rdma.h>
+#include <linux/lnet/lnet_rdma.h>
 
-/** \addtogroup osc
- *  @{
- */
-
-/*****************************************************************************
- *
- * io operations.
- *
- */
+/* IO operations */
 
 static void osc_io_fini(const struct lu_env *env, const struct cl_io_slice *io)
 {
@@ -43,10 +35,8 @@ static void osc_io_fini(const struct lu_env *env, const struct cl_io_slice *io)
 void osc_read_ahead_release(const struct lu_env *env, struct cl_read_ahead *ra)
 {
 	struct ldlm_lock *dlmlock = ra->cra_dlmlock;
-	struct osc_io *oio = ra->cra_oio;
 	struct lustre_handle lockh;
 
-	oio->oi_is_readahead = 0;
 	ldlm_lock2handle(dlmlock, &lockh);
 	ldlm_lock_decref(&lockh, LCK_PR);
 	ldlm_lock_put(dlmlock);
@@ -86,7 +76,6 @@ static int osc_io_read_ahead_prep(const struct lu_env *env,
 					(oinfo->loi_kms - 1) >> PAGE_SHIFT);
 		ra->cra_release = osc_read_ahead_release;
 		ra->cra_dlmlock = dlmlock;
-		ra->cra_oio = oio;
 		result = 0;
 	}
 
@@ -94,26 +83,37 @@ static int osc_io_read_ahead_prep(const struct lu_env *env,
 }
 
 /**
+ * osc_io_submit() - Iterates over pages and prepares each page for IO
+ * @env: lustre execution environment
+ * @io: client I/O
+ * @ios: OSC specific I/O data
+ * @crt: Request type (Read/Write)
+ * @queue: Queue holding processed and already processed pages
+ *
  * An implementation of cl_io_operations::cio_io_submit() method for osc
  * layer. Iterates over pages in the in-queue, prepares each for io by calling
  * cl_page_prep() and then either submits them through osc_io_submit_page()
  * or, if page is already submitted, changes osc flags through
  * osc_set_async_flags().
+ *
+ * Return:
+ * * %0 on success
+ * * %negative on failure
  */
 int osc_io_submit(const struct lu_env *env, struct cl_io *io,
 		  const struct cl_io_slice *ios, enum cl_req_type crt,
 		  struct cl_2queue *queue)
 {
-	struct cl_page	  *page;
-	struct cl_page	  *tmp;
-	struct cl_io	  *top_io = cl_io_top(io);
-	struct client_obd *cli  = NULL;
-	struct osc_object *osc  = NULL;	/* to keep gcc happy */
-	struct osc_page	  *opg;
+	struct cl_io *top_io = cl_io_top(io);
+	struct client_obd *cli = NULL;
+	struct osc_object *osc = NULL; /* to keep gcc happy */
+	struct cl_page *page;
+	struct osc_page *opg;
+	struct cl_page *tmp;
 	LIST_HEAD(list);
 
-	struct cl_page_list *qin      = &queue->c2_qin;
-	struct cl_page_list *qout     = &queue->c2_qout;
+	struct cl_page_list *qin = &queue->c2_qin;
+	struct cl_page_list *qout = &queue->c2_qout;
 	unsigned int queued = 0;
 	int result = 0;
 	int brw_flags;
@@ -147,12 +147,12 @@ int osc_io_submit(const struct lu_env *env, struct cl_io *io,
 	if (lnet_is_rdma_only_page(page->cp_vmpage))
 		brw_flags |= OBD_BRW_RDMA_ONLY;
 
-        /*
-         * NOTE: here @page is a top-level page. This is done to avoid
-         *       creation of sub-page-list.
-         */
-        cl_page_list_for_each_safe(page, tmp, qin) {
-                struct osc_async_page *oap;
+	/*
+	 * NOTE: here @page is a top-level page. This is done to avoid
+	 *       creation of sub-page-list.
+	 */
+	cl_page_list_for_each_safe(page, tmp, qin) {
+		struct osc_async_page *oap;
 
 		LASSERT(top_io != NULL);
 
@@ -163,9 +163,9 @@ int osc_io_submit(const struct lu_env *env, struct cl_io *io,
 		    !list_empty(&oap->oap_rpc_item)) {
 			CDEBUG(D_CACHE, "Busy oap %p page %p for submit.\n",
 			       oap, opg);
-                        result = -EBUSY;
-                        break;
-                }
+			result = -EBUSY;
+			break;
+		}
 
 		if (!dio) {
 			result = cl_page_prep(env, top_io, page, crt);
@@ -184,7 +184,8 @@ int osc_io_submit(const struct lu_env *env, struct cl_io *io,
 		}
 
 		if (!dio)
-			oap->oap_async_flags = ASYNC_URGENT|ASYNC_READY|ASYNC_COUNT_STABLE;
+			oap->oap_async_flags = ASYNC_URGENT|ASYNC_READY|
+						ASYNC_COUNT_STABLE;
 
 		osc_page_submit(env, opg, crt, brw_flags);
 		list_add_tail(&oap->oap_pending_item, &list);
@@ -351,6 +352,12 @@ int osc_dio_submit(const struct lu_env *env, struct cl_io *io,
 EXPORT_SYMBOL(osc_dio_submit);
 
 /**
+ * osc_page_touch_at() - Update attributes when modifying specific page,
+ * @env: lustre execution environment
+ * @obj: Pointer to cl_object
+ * @idx: start offset
+ * @to: size of @idx
+ *
  * This is called to update the attributes when modifying a specific page,
  * both when making new pages and when doing updates to existing cached pages.
  *
@@ -496,7 +503,8 @@ EXPORT_SYMBOL(osc_io_extent_release);
 
 static bool osc_import_not_healthy(struct obd_import *imp)
 {
-	return imp->imp_invalid || imp->imp_deactive ||
+	return test_bit(IMPF_INVALID, imp->imp_flags) ||
+	       test_bit(IMPF_DEACTIVE, imp->imp_flags) ||
 	       !(imp->imp_state == LUSTRE_IMP_FULL ||
 		 imp->imp_state == LUSTRE_IMP_IDLE);
 }
@@ -518,7 +526,7 @@ int osc_io_iter_init(const struct lu_env *env, const struct cl_io_slice *ios)
 	if (ios->cis_io->ci_type == CIT_READ && ios->cis_io->ci_ndelay &&
 	    !ios->cis_io->ci_tried_all_mirrors && osc_import_not_healthy(imp)) {
 		rc = -EAGAIN;
-	} else if (likely(!imp->imp_invalid)) {
+	} else if (likely(!test_bit(IMPF_INVALID, imp->imp_flags))) {
 		atomic_inc(&osc->oo_nr_ios);
 		oio->oi_is_active = 1;
 		rc = 0;
@@ -598,7 +606,15 @@ static int osc_async_upcall(void *a, int rc)
 }
 
 /**
- * Checks that there are no pages being written in the extent being truncated.
+ * trunc_check_cb() - Checks that there are no pages being written in the
+ *                    extent being truncated.
+ * @env: lustre execution environment
+ * @io: Pointer to the cl_io struct.
+ * @pvec: Array of osc_page struct to check.
+ * @count: number of osc_page struct in pvec.
+ * @cbdata: This isstart of the truncated extent.
+ *
+ * Returns Always returns %true
  */
 static bool trunc_check_cb(const struct lu_env *env, struct cl_io *io,
 			   void **pvec, int count, void *cbdata)
@@ -635,19 +651,25 @@ static void osc_trunc_check(const struct lu_env *env, struct cl_io *io,
 	start = size >> PAGE_SHIFT;
 	partial = (start << PAGE_SHIFT) < size;
 
-        /*
-         * Complain if there are pages in the truncated region.
-         */
+	/* Complain if there are pages in the truncated region. */
 	osc_page_gang_lookup(env, io, cl2osc(clob),
 				start + partial, CL_PAGE_EOF,
 				trunc_check_cb, (void *)&size);
 }
 
 /**
- * Flush affected pages prior punch.
+ * osc_punch_start() - Flush affected pages prior punch.
+ * @env: lustre execution environment
+ * @io: Pointer to the client I/O struct
+ * @obj: Pointer to the cl_object (this is the respective file)
+ *
  * We shouldn't discard them locally first because that could be data loss
  * if server doesn't support fallocate punch, we also need these data to be
  * flushed first to prevent re-ordering with the punch
+ *
+ * * Return:
+ * * %0 on success.
+ * * %negative on error
  */
 int osc_punch_start(const struct lu_env *env, struct cl_io *io,
 		    struct cl_object *obj)
@@ -723,7 +745,7 @@ static int osc_io_setattr_start(const struct lu_env *env,
 				attr->cat_atime = lvb->lvb_atime;
 				cl_valid |= CAT_ATIME;
 			}
-			if (ia_xvalid & OP_XVALID_CTIME_SET) {
+			if (ia_avalid & ATTR_CTIME_SET) {
 				attr->cat_ctime = lvb->lvb_ctime;
 				cl_valid |= CAT_CTIME;
 			}
@@ -1455,11 +1477,7 @@ static const struct cl_io_operations osc_io_ops = {
 	.cio_extent_release	= osc_io_extent_release
 };
 
-/*****************************************************************************
- *
- * Transfer operations.
- *
- */
+/* Transfer operations. */
 
 int osc_io_init(const struct lu_env *env,
                 struct cl_object *obj, struct cl_io *io)
@@ -1476,5 +1494,3 @@ int osc_io_init(const struct lu_env *env,
 
 	return 0;
 }
-
-/** @} osc */

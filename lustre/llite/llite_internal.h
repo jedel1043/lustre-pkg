@@ -13,6 +13,7 @@
 
 #ifndef LLITE_INTERNAL_H
 #define LLITE_INTERNAL_H
+
 #include <obd.h>
 #include <lustre_disk.h>  /* for s2sbi */
 #include <lustre_linkea.h>
@@ -34,10 +35,6 @@
 #include "pcc.h"
 #include "foreign_symlink.h"
 
-#ifndef FMODE_EXEC
-#define FMODE_EXEC 0
-#endif
-
 /** Only used on client-side for indicating the tail of dir hash/offset. */
 #define LL_DIR_END_OFF          0x7fffffffffffffffULL
 #define LL_DIR_END_OFF_32BIT    0x7fffffffUL
@@ -47,7 +44,8 @@
 
 #define LL_IT2STR(it) ((it) ? ldlm_it2str((it)->it_op) : "0")
 
-#define TIMES_SET_FLAGS (ATTR_MTIME_SET | ATTR_ATIME_SET | ATTR_TIMES_SET)
+#define TIMES_SET_FLAGS (ATTR_MTIME_SET | ATTR_ATIME_SET | ATTR_CTIME_SET | \
+			 ATTR_TIMES_SET)
 
 struct ll_dentry_data {
 	unsigned int			lld_sa_generation;
@@ -351,13 +349,12 @@ static inline void lli_jobinfo_cpy(const struct ll_inode_info *lli,
 #define ll_getattr(ns, path, stat, mask, fl)	ll_getattr(path, stat, mask, fl)
 #endif
 
-#ifdef IOCB_APPEND
-#define iocb_ki_flags_check(flag, name) (!!((flag) & IOCB_ ## name))
-#define ki_flag(name) IOCB_ ## name
-#else
-#define iocb_ki_flags_check(flag, name) (!!((flag) & O_ ## name))
-#define ki_flag(name) O_ ## name
-#endif
+/* This function checks if any flag is set, not all the flags are set */
+static inline bool iocb_ki_flags_check(const struct kiocb *iocb,
+				       unsigned int flags)
+{
+	return iocb ? iocb->ki_flags & flags : 0;
+}
 
 static inline void ll_trunc_sem_init(struct ll_trunc_sem *sem)
 {
@@ -442,39 +439,6 @@ static inline void trunc_sem_up_write(struct ll_trunc_sem *sem)
 	wake_up_var(&sem->ll_trunc_readers);
 }
 
-#ifdef CONFIG_LUSTRE_FS_POSIX_ACL
-static inline void lli_clear_acl(struct ll_inode_info *lli)
-{
-	if (lli->lli_posix_acl) {
-		posix_acl_release(lli->lli_posix_acl);
-		lli->lli_posix_acl = NULL;
-	}
-}
-
-static inline void lli_replace_acl(struct ll_inode_info *lli,
-				   struct posix_acl *acl)
-{
-	write_lock(&lli->lli_lock);
-	if (lli->lli_posix_acl)
-		posix_acl_release(lli->lli_posix_acl);
-	lli->lli_posix_acl = acl;
-	if (!acl) {
-		forget_cached_acl(&lli->lli_vfs_inode, ACL_TYPE_ACCESS);
-		forget_cached_acl(&lli->lli_vfs_inode, ACL_TYPE_DEFAULT);
-	}
-	write_unlock(&lli->lli_lock);
-}
-#else
-static inline void lli_clear_acl(struct ll_inode_info *lli)
-{
-}
-
-static inline void lli_replace_acl(struct ll_inode_info *lli,
-				   struct posix_acl *acl)
-{
-}
-#endif
-
 static inline __u32 ll_layout_version_get(struct ll_inode_info *lli)
 {
 	__u32 gen;
@@ -506,13 +470,63 @@ enum ll_file_internal_flags {
 	LLIF_UPDATE_ATIME	= 4,
 	/* foreign file/dir can be unlinked unconditionnaly */
 	LLIF_FOREIGN_REMOVABLE	= 5,
-	/* 6 is not used for now */
+	/* lli_posix_acl reflects the authoritative state (LU-17238) */
+	LLIF_ACL_VALID		= 6,
 	/* Xattr cache is filled */
 	LLIF_XATTR_CACHE_FILLED	= 7,
 	/* New flags added to this enum potentially need to be handled in
 	 * ll_inode2ext_flags/ll_set_inode_flags
 	 */
 };
+
+#ifdef CONFIG_LUSTRE_FS_POSIX_ACL
+static inline void lli_clear_acl(struct ll_inode_info *lli)
+{
+	if (lli->lli_posix_acl) {
+		posix_acl_release(lli->lli_posix_acl);
+		lli->lli_posix_acl = NULL;
+	}
+	clear_bit(LLIF_ACL_VALID, &lli->lli_flags);
+}
+
+/* Install @acl into lli_posix_acl (transfers ownership; @acl may be NULL)
+ * and mark the cached state authoritative. Caller handles inode->i_acl.
+ */
+static inline void lli_install_acl(struct ll_inode_info *lli,
+				   struct posix_acl *acl)
+{
+	write_lock(&lli->lli_lock);
+	if (lli->lli_posix_acl)
+		posix_acl_release(lli->lli_posix_acl);
+	lli->lli_posix_acl = acl;
+	set_bit(LLIF_ACL_VALID, &lli->lli_flags);
+	write_unlock(&lli->lli_lock);
+}
+
+static inline void lli_replace_acl(struct ll_inode_info *lli,
+				   struct posix_acl *acl)
+{
+	lli_install_acl(lli, acl);
+	if (!acl) {
+		forget_cached_acl(&lli->lli_vfs_inode, ACL_TYPE_ACCESS);
+		forget_cached_acl(&lli->lli_vfs_inode, ACL_TYPE_DEFAULT);
+	}
+}
+#else
+static inline void lli_clear_acl(struct ll_inode_info *lli)
+{
+}
+
+static inline void lli_install_acl(struct ll_inode_info *lli,
+				   struct posix_acl *acl)
+{
+}
+
+static inline void lli_replace_acl(struct ll_inode_info *lli,
+				   struct posix_acl *acl)
+{
+}
+#endif
 
 int ll_xattr_cache_destroy(struct inode *inode);
 int ll_xattr_cache_empty(struct inode *inode);
@@ -993,6 +1007,8 @@ struct ll_sb_info {
 	struct list_head	 ll_all_quota_list;
 
 	struct rhashtable	 ll_proj_sfs_htable;
+	/* SSK key id */
+	int			 ll_skid;
 };
 
 #define SBI_DEFAULT_HEAT_DECAY_WEIGHT	((80 * 256 + 50) / 100)
@@ -1289,10 +1305,11 @@ int ll_dir_read(struct inode *inode, __u64 *pos, struct md_op_data *op_data,
 		struct dir_context *ctx, int *partial_readdir_rc);
 int ll_get_mdt_idx(struct inode *inode);
 int ll_get_mdt_idx_by_fid(struct ll_sb_info *sbi, const struct lu_fid *fid);
-struct page *ll_get_dir_page(struct inode *dir, struct md_op_data *op_data,
-			      __u64 offset, bool is64bit,
-			      int *partial_readdir_rc);
-void ll_release_page(struct inode *inode, struct page *page, bool remove);
+struct folio *ll_get_dir_folio(struct inode *dir, struct md_op_data *op_data,
+			       __u64 offset, bool is64bit,
+			       int *partial_readdir_rc);
+void ll_release_dir_folio(struct inode *inode, struct folio *folio,
+			  bool remove);
 int quotactl_ioctl(struct super_block *sb, struct if_quotactl *qctl);
 void ll_quota_iter_check_and_cleanup(struct ll_sb_info *sbi, bool check);
 
@@ -1466,6 +1483,7 @@ int ll_revalidate_it_finish(struct ptlrpc_request *request,
 			    struct lookup_intent *it, struct dentry *de);
 
 /* llite/llite_lib.c */
+
 extern const struct super_operations lustre_super_operations;
 
 void ll_lli_init(struct ll_inode_info *lli);
@@ -1530,6 +1548,8 @@ void ll_dir_finish_open(struct inode *inode, struct ptlrpc_request *req);
 /* Compute expected user md size when passing in a md from user space */
 static inline ssize_t ll_lov_user_md_size(const struct lov_user_md *lum)
 {
+	ssize_t lumlen;
+
 	switch (lum->lmm_magic) {
 	case LOV_USER_MAGIC_V1:
 		return sizeof(struct lov_user_md_v1);
@@ -1542,9 +1562,19 @@ static inline ssize_t ll_lov_user_md_size(const struct lov_user_md *lum)
 		return lov_user_md_size(lum->lmm_stripe_count,
 					LOV_USER_MAGIC_SPECIFIC);
 	case LOV_USER_MAGIC_COMP_V1:
-		return ((struct lov_comp_md_v1 *)lum)->lcm_size;
+		lumlen = ((struct lov_comp_md_v1 *)lum)->lcm_size;
+		if (unlikely(lumlen <= 0))
+			return -EINVAL;
+		if (unlikely(lumlen > XATTR_SIZE_MAX))
+			return -EOVERFLOW;
+		return lumlen;
 	case LOV_USER_MAGIC_FOREIGN:
-		return lov_foreign_size(lum);
+		lumlen = lov_foreign_size(lum);
+		if (unlikely(lumlen <= 0))
+			return -EINVAL;
+		if (unlikely(lumlen > XATTR_SIZE_MAX))
+			return -EOVERFLOW;
+		return lumlen;
 	}
 
 	return -EINVAL;
@@ -1572,22 +1602,6 @@ struct vvp_io_args {
 	/* did we switch this IO from BIO to DIO using hybrid IO? */
 	unsigned int	via_hybrid_switched:1;
 };
-
-static inline unsigned int iocb_ki_flags_get(const struct file *file,
-					     const struct kiocb *iocb)
-{
-#ifdef IOCB_APPEND
-	return iocb ? iocb->ki_flags : 0;
-#else
-	return file->f_flags;
-#endif
-}
-
-static inline unsigned int vvp_io_args_flags(const struct file *file,
-					     const struct vvp_io_args *args)
-{
-	return iocb_ki_flags_get(file, args ? args->u.normal.via_iocb : NULL);
-}
 
 enum lcc_type {
 	LCC_RW = 1,

@@ -46,6 +46,7 @@ static void usage(FILE *fp, char *program)
 		"session keyring\n");
 	fprintf(fp, "-m|--modify     <keyfile>	Modify keyfile's attributes\n");
 	fprintf(fp, "-r|--read       <keyfile>	Show keyfile's attributes\n");
+	fprintf(fp, "-R|--remove     <keyfile>	Remove key from user's session keyring\n");
 	fprintf(fp, "-w|--write      <keyfile>	Generate keyfile\n\n");
 	fprintf(fp, "Modify/Write Options:\n");
 	fprintf(fp, "-a|--ascii      <keyfile>	Output key in ASCII-encoded format\n");
@@ -78,7 +79,10 @@ static void usage(FILE *fp, char *program)
 	fprintf(fp, "                        Not a seed value. "
 		"This is the actual key value.\n\n");
 	fprintf(fp, "Other Options:\n");
+	fprintf(fp, "-s|--suffix	   When loading a server key, do not replace the key and instead add a timestamp-suffix to the key description. This option can only be used with the '-l' argument.\n");
+	fprintf(fp, "-u|--update     <dir>	Only when loading a key, mount path to update the key for\n");
 	fprintf(fp, "-v|--verbose           Increase verbosity for errors\n");
+	fprintf(fp, "-x|--timeout    <num>  When loading a server key, set a timeout of num seconds on former keys with same descriptor. This option can only be used with the '-s' argument; 2 days by default.\n");
 	exit(EXIT_FAILURE);
 }
 
@@ -258,13 +262,15 @@ int main(int argc, char **argv)
 {
 	struct sk_keyfile_config *config;
 	char *datafile = NULL;
+	char *fsname = NULL;
 	char *input = NULL;
 	char *load = NULL;
 	char *modify = NULL;
-	char *output = NULL;
 	char *mgsnids = NULL;
 	char *nodemap = NULL;
-	char *fsname = NULL;
+	char *output = NULL;
+	char *remove = NULL;
+	char *update_path = NULL;
 	char *tmp;
 	char *tmp2;
 	int crypt = SK_CRYPT_EMPTY;
@@ -274,6 +280,8 @@ int main(int argc, char **argv)
 	int prime_bits = -1;
 	int verbose = 0;
 	bool ascii = false;
+	bool suffix = false;
+	int timeout = -1;
 	int i;
 	int opt;
 	enum sk_key_type type = SK_TYPE_INVALID;
@@ -296,13 +304,17 @@ int main(int argc, char **argv)
 	{ .name = "nodemap",	.has_arg = required_argument, .val = 'n'},
 	{ .name = "prime-bits",	.has_arg = required_argument, .val = 'p'},
 	{ .name = "read",	.has_arg = required_argument, .val = 'r'},
+	{ .name = "remove",	.has_arg = required_argument, .val = 'R'},
+	{ .name = "suffix",	.has_arg = no_argument,	      .val = 's'},
 	{ .name = "type",	.has_arg = required_argument, .val = 't'},
+	{ .name = "update",	.has_arg = required_argument, .val = 'u'},
 	{ .name = "verbose",	.has_arg = no_argument,	      .val = 'v'},
 	{ .name = "write",	.has_arg = required_argument, .val = 'w'},
+	{ .name = "timeout",	.has_arg = required_argument, .val = 'x'},
 	{ .name = NULL, } };
 
 	while ((opt = getopt_long(argc, argv,
-				  "ac:d:e:f:g:hi:l:m:n:p:r:s:k:t:w:v",
+				  "ac:d:e:f:g:hi:k:l:m:n:p:r:R:st:u:vw:x:",
 				  long_opts, NULL)) != EOF) {
 		switch (opt) {
 		case 'a':
@@ -370,6 +382,12 @@ int main(int argc, char **argv)
 		case 'r':
 			input = optarg;
 			break;
+		case 'R':
+			remove = optarg;
+			break;
+		case 's':
+			suffix = true;
+			break;
 		case 't':
 			tmp2 = strdup(optarg);
 			if (!tmp2) {
@@ -396,11 +414,17 @@ int main(int argc, char **argv)
 			}
 			free(tmp2);
 			break;
+		case 'u':
+			update_path = optarg;
+			break;
 		case 'v':
 			verbose++;
 			break;
 		case 'w':
 			output = optarg;
+			break;
+		case 'x':
+			timeout = atoi(optarg);
 			break;
 		default:
 			fprintf(stderr, "error: unknown option: '%c'\n", opt);
@@ -415,7 +439,25 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
-	if (!input && !output && !load && !modify) {
+	if (!input && !output && !load && !modify && !remove) {
+		usage(stderr, argv[0]);
+		return EXIT_FAILURE;
+	}
+	if (remove && (load || modify || input || output)) {
+		fprintf(stderr,
+			"error: remove option cannot be combined with other operations\n");
+		usage(stderr, argv[0]);
+		return EXIT_FAILURE;
+	}
+	if (update_path && !load) {
+		usage(stderr, argv[0]);
+		return EXIT_FAILURE;
+	}
+	if (suffix && !load) {
+		usage(stderr, argv[0]);
+		return EXIT_FAILURE;
+	}
+	if (timeout != -1 && !suffix) {
 		usage(stderr, argv[0]);
 		return EXIT_FAILURE;
 	}
@@ -429,11 +471,23 @@ int main(int argc, char **argv)
 		return print_config(input);
 
 	if (load) {
-		int rc = sk_load_keyfile(load, type & SK_TYPE_CLIENT);
+		int rc = sk_load_keyfile(load, type & SK_TYPE_CLIENT, false,
+					 update_path, suffix, timeout);
 
 		if (rc < 0) {
 			fprintf(stderr,
 				"error: loading keyfile failed: rc=%d\n", rc);
+			return EXIT_FAILURE;
+		}
+		return EXIT_SUCCESS;
+	}
+
+	if (remove) {
+		int rc = sk_remove_keyfile(remove);
+
+		if (rc < 0) {
+			fprintf(stderr, "error: removing key failed: rc=%d\n",
+				rc);
 			return EXIT_FAILURE;
 		}
 		return EXIT_SUCCESS;

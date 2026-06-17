@@ -1,0 +1,6 @@
+debian/tmp/lib/modules/_KVERS_/updates/kernel/fs/*_test.ko	usr/lib/modules/_KVERS_/updates/kernel/fs/lustre/
+debian/tmp/lib/modules/_KVERS_/updates/kernel/fs/kinode.ko	usr/lib/modules/_KVERS_/updates/kernel/fs/lustre/
+debian/tmp/usr/lib/lustre/tests/*	usr/lib/lustre/tests
+debian/tmp/usr/bin/mcreate		usr/bin
+debian/tmp/usr/bin/statx		usr/bin
+debian/tmp/usr/sbin/wire*		usr/sbin

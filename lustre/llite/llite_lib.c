@@ -433,14 +433,7 @@ static int client_common_fill_super(struct super_block *sb, char *md, char *dt)
 	if (test_bit(LL_SBI_USER_XATTR, sbi->ll_flags))
 		data->ocd_connect_flags |= OBD_CONNECT_XATTR;
 
-	sb->s_flags |= SB_I_VERSION;
-#ifdef SB_NOSEC
-	/* Setting this indicates we correctly support S_NOSEC (See kernel
-	 * commit 9e1f1de02c2275d7172e18dc4e7c2065777611bf)
-	 */
-	sb->s_flags |= SB_NOSEC;
-#endif
-
+	sb->s_flags |= SB_I_VERSION | SB_NOSEC;
 	sbi->ll_fop = ll_select_file_operations(sbi, true);
 
 	/* always ping even if server suppress_pings */
@@ -566,15 +559,11 @@ retry_connect:
 	}
 
 	if (data->ocd_connect_flags & OBD_CONNECT_ACL) {
-#ifdef SB_POSIXACL
 		sb->s_flags |= SB_POSIXACL;
-#endif
 		set_bit(LL_SBI_ACL, sbi->ll_flags);
 	} else {
 		LCONSOLE_INFO("client wants to enable acl, but mdt not!\n");
-#ifdef SB_POSIXACL
 		sb->s_flags &= ~SB_POSIXACL;
-#endif
 		clear_bit(LL_SBI_ACL, sbi->ll_flags);
 	}
 
@@ -732,7 +721,6 @@ retry_connect:
 #ifdef HAVE_LUSTRE_CRYPTO
 	llcrypt_set_ops(sb, &lustre_cryptops);
 #endif
-
 	/* make root inode (XXX: move this to after cbd setup?) */
 	valid = OBD_MD_FLGETATTR | OBD_MD_FLBLOCKS | OBD_MD_FLMODEASIZE |
 		OBD_MD_ENCCTX;
@@ -1147,6 +1135,10 @@ static int ll_options(char *options, struct super_block *sb)
 			    match_wildcard("defcontext", s1) ||
 			    match_wildcard("rootcontext", s1))
 				continue;
+			if (match_wildcard("skid=*", s1)) {
+				sbi->ll_skid = simple_strtoul(s1 + 5, NULL, 10);
+				continue;
+			}
 
 			LCONSOLE_ERROR("Unknown option '%s', won't mount.\n",
 				       s1);
@@ -1443,6 +1435,14 @@ int ll_fill_super(struct super_block *sb)
 	strncpy(sbi->ll_fsname, profilenm, len);
 	sbi->ll_fsname[len] = '\0';
 
+	err = gss_rename_sk_key(sbi->ll_skid, sbi->ll_fsname,
+				sbi->ll_sb_uuid.uuid);
+	if (err) {
+		CDEBUG(D_SEC, "Renaming SSK key %d failed: rc = %d\n",
+		       sbi->ll_skid, err);
+		GOTO(out_free_cfg, err);
+	}
+
 	/* Mount info */
 	snprintf(name, sizeof(name), "%.*s-%016lx", len,
 		 profilenm, cfg_instance);
@@ -1455,9 +1455,7 @@ int ll_fill_super(struct super_block *sb)
 	sb->s_bdi->ra_pages = 0;
 	sb->s_bdi->io_pages = 0;
 	sb->s_bdi->capabilities |= LL_BDI_CAP_FLAGS;
-#ifdef SB_I_CGROUPWB
 	sb->s_iflags |= SB_I_CGROUPWB;
-#endif
 
 	/* Call ll_debugfs_register_super() before lustre_process_log()
 	 * so that "llite.*.*" params can be processed correctly.
@@ -1597,6 +1595,8 @@ void ll_put_super(struct super_block *sb)
 		/* Only if client_common_fill_super succeeded */
 		client_common_put_super(sb);
 	}
+	gss_cleanup_sk_key(sbi->ll_skid, sbi->ll_fsname,
+			   sbi->ll_sb_uuid.uuid);
 
 	/* imitate failed cleanup */
 	if (CFS_FAIL_CHECK(OBD_FAIL_OBD_CLEANUP))
@@ -2271,7 +2271,7 @@ int volatile_ref_file(const char *volatile_name, int volatile_len,
  * object(s) determine the file size and mtime.  Otherwise, the MDS will
  * keep these values until such a time that objects are allocated for it.
  * We do the MDS operations first, as it is checking permissions for us.
- * We don't to the MDS RPC if there is nothing that we want to store there,
+ * We don't do the MDS RPC if there is nothing that we want to store there,
  * otherwise there is no harm in updating mtime/atime on the MDS if we are
  * going to do an RPC anyways.
  *
@@ -2330,10 +2330,10 @@ int ll_setattr_raw(struct dentry *dentry, struct iattr *attr,
 	}
 
 	/* We mark all of the fields "set" so MDS/OST does not re-set them */
-	if (!(xvalid & OP_XVALID_CTIME_SET) &&
-	     (attr->ia_valid & ATTR_CTIME)) {
+	if (!(attr->ia_valid & ATTR_CTIME_SET) &&
+	    (attr->ia_valid & ATTR_CTIME)) {
 		attr->ia_ctime = current_time(inode);
-		xvalid |= OP_XVALID_CTIME_SET;
+		attr->ia_valid |= ATTR_CTIME_SET;
 	}
 	if (!(attr->ia_valid & ATTR_ATIME_SET) &&
 	    (attr->ia_valid & ATTR_ATIME)) {
@@ -2388,8 +2388,8 @@ int ll_setattr_raw(struct dentry *dentry, struct iattr *attr,
 		GOTO(out, rc = 0);
 
 	if (attr->ia_valid & (ATTR_SIZE | ATTR_ATIME | ATTR_ATIME_SET |
-			      ATTR_MTIME | ATTR_MTIME_SET | ATTR_CTIME) ||
-	    xvalid & OP_XVALID_CTIME_SET) {
+			      ATTR_MTIME | ATTR_MTIME_SET |
+			      ATTR_CTIME | ATTR_CTIME_SET)) {
 		bool cached = false;
 
 		rc = pcc_inode_setattr(inode, attr, &cached);
@@ -2713,6 +2713,17 @@ static int ll_statfs_project(struct inode *inode, struct kstatfs *sfs)
 		if (ret == -ESRCH || ret == -EOPNOTSUPP)
 			ret = 0;
 		GOTO(out, ret);
+	}
+
+	/*
+	 * f_bsize=0: server lod_foreach_mdt passed uninitialized
+	 * sub-MDT opd_statfs (os_bsize=0) into lod_statfs_sum(),
+	 * corrupting os_bsize. Fall back to 4096.
+	 */
+	if (unlikely(sfs->f_bsize == 0)) {
+		sfs->f_bsize = 4096;
+		CDEBUG(D_SUPER, "%s: f_bsize=0 sub-MDT opd_statfs uninitialized, corrected to %lu\n",
+			ll_i2sbi(inode)->ll_fsname, sfs->f_bsize);
 	}
 
 	limit = ((qctl.qc_dqblk.dqb_bsoftlimit ?
@@ -3410,7 +3421,7 @@ int ll_iocontrol(struct inode *inode, struct file *file,
 		u32 xflags = 0, projid = 0;
 		int flags = 0;
 
-		if (!ll_access_ok(uarg, sizeof(int)))
+		if (!access_ok(uarg, sizeof(int)))
 			RETURN(-EFAULT);
 		rc = fileattr_get(file->f_inode, &flags, &xflags, &projid);
 		if (rc)
@@ -3436,7 +3447,7 @@ int ll_iocontrol(struct inode *inode, struct file *file,
 	case IOC_OBD_STATFS:
 		RETURN(ll_obd_statfs(inode, uarg));
 	case LL_IOC_GET_MDTIDX: {
-		if (!ll_access_ok(uarg, sizeof(rc)))
+		if (!access_ok(uarg, sizeof(rc)))
 			RETURN(-EFAULT);
 
 		rc = ll_get_mdt_idx(inode);
