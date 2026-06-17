@@ -3,3 +3,4 @@
 0003-Switch-to-StandardOutput-journal-for-lsvcgss-service.patch
 0004-Fix-execute-permissions-on-lsvcgss-service.patch
 0005-Explicitly-link-against-libyaml-on-liblustreapi.patch
+0006-Check-if-zfs-nvlist-are-const-on-userland-builds.patch

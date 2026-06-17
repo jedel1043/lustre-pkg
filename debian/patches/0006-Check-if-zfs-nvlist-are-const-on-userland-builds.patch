@@ -1,0 +1,41 @@
+From: =?utf-8?q?Jos=C3=A9_Juli=C3=A1n_Espina?= <julian.espina@canonical.com>
+Date: Tue, 16 Jun 2026 20:21:23 -0600
+Subject: Check if zfs nvlist are const on userland builds
+
+---
+ config/lustre-build-zfs.m4 | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/config/lustre-build-zfs.m4 b/config/lustre-build-zfs.m4
+index 24f0690..3d3890d 100644
+--- a/config/lustre-build-zfs.m4
++++ b/config/lustre-build-zfs.m4
+@@ -366,6 +366,28 @@ AC_DEFUN([LB_ZFS_USER], [
+ 	])
+ 	AC_MSG_RESULT([$zfsinc])
+ 
++	saved_flags="$CFLAGS"
++	CFLAGS="-Werror $zfsinc"
++	AC_MSG_CHECKING([if ZFS nvlist interfaces require const])
++	AC_COMPILE_IFELSE([AC_LANG_SOURCE([
++		#include <sys/nvpair.h>
++
++		int main(void) {
++			nvpair_t *nvp = NULL;
++			nvlist_t *nvl = NULL;
++			const char *name = nvpair_name(nvp);
++			nvlist_lookup_string(nvl, name, &name);
++			nvlist_lookup_nvlist(nvl, name, &nvl);
++			return 0;
++		}
++	])],[
++		AC_DEFINE(HAVE_ZFS_NVLIST_CONST_INTERFACES, 1, [nvlist requires const])
++		AC_MSG_RESULT([yes])
++	],[
++		AC_MSG_RESULT([no])
++	])
++	CFLAGS="$saved_flags"
++
+ 	ZFS_LIBZFS_INCLUDE=${zfsinc}
+ 	ZFS_LIBZFS_LDFLAGS=${zfslib}
+ 	ZFS_LIBZFS_LIBS="-lzfs -lnvpair -lzpool"
