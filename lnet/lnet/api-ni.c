@@ -18,9 +18,9 @@
 #include <linux/sched/signal.h>
 
 #include <linux/libcfs/libcfs.h>
-#include <lnet/udsp.h>
-#include <lnet/lib-lnet.h>
+#include <linux/lnet/lib-lnet.h>
 #include <uapi/linux/lustre/lustre_ver.h>
+#include "udsp.h"
 
 #define D_LNI D_CONSOLE
 
@@ -533,8 +533,8 @@ intf_max_set(const char *val, const struct kernel_param *kp)
 static int
 response_tracking_set(const char *val, const struct kernel_param *kp)
 {
-	int rc;
 	unsigned long new_value;
+	int rc;
 
 	rc = kstrtoul(val, 0, &new_value);
 	if (rc) {
@@ -542,7 +542,7 @@ response_tracking_set(const char *val, const struct kernel_param *kp)
 		return -EINVAL;
 	}
 
-	if (new_value < 0 || new_value > 3) {
+	if (new_value > 3) {
 		CWARN("Invalid value (%lu) for 'lnet_response_tracking'\n",
 		      new_value);
 		return -EINVAL;
@@ -6936,7 +6936,9 @@ static int lnet_peer_ni_cmd(struct sk_buff *skb, struct genl_info *info)
 				}
 				lnet_peer_ni_decref_locked(lpni);
 				lp = lpni->lpni_peer_net->lpn_peer;
+				spin_lock(&lp->lp_lock);
 				lp->lp_state = nla_get_s64(pnid_prop);
+				spin_unlock(&lp->lp_lock);
 			} else if (nla_strcmp(pnid_prop, "peer ni") == 0) {
 				struct nlattr *rlist;
 				int rem3;

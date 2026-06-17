@@ -138,7 +138,7 @@ static int lov_connect_osc(struct obd_device *obd, u32 index, int activate,
 		RETURN(rc);
 	}
 
-	if (imp->imp_invalid) {
+	if (test_bit(IMPF_INVALID, imp->imp_flags)) {
 		CDEBUG(D_CONFIG, "%s: not connecting - administratively disabled\n",
 		       obd_uuid2str(tgt_uuid));
 		RETURN(0);
@@ -919,10 +919,17 @@ out_rqset:
 
 /**
  * lov_fid2path() - retrieve corresponding MDT FID from given OST FID
+ * @lov: Pointer to struct lov_obd
+ * @len: length of @karg
  * @karg: pointer to struct getinfo_fid2path{}, carrying the OST FID
  *        as the input, and the MDT FID as the output
+ * @uarg: User space pointer [out]
  *
  * Note: the OST index is retrieved from upper layer's u.gf_root_fid
+ *
+ * Return:
+ * * %0 on success
+ * * %negative on failure
  */
 static int lov_fid2path(struct lov_obd *lov, int len, void *karg,
 			void __user *uarg)

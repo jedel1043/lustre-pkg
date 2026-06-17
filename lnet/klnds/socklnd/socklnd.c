@@ -1342,7 +1342,8 @@ ksocknal_close_conn_locked(struct ksock_conn *conn, int error)
 		if (!list_empty(&peer_ni->ksnp_tx_queue)) {
 			struct ksock_tx *tx;
 
-			LASSERT(conn->ksnc_proto == &ksocknal_protocol_v3x);
+			LASSERT(conn->ksnc_proto == &ksocknal_protocol_v3x ||
+				conn->ksnc_proto == &ksocknal_protocol_v4x);
 
 			/* throw them to the last connection...,
 			 * these TXs will be send to /dev/null by scheduler
@@ -2763,7 +2764,7 @@ static int __init ksocklnd_init(void)
 
 MODULE_AUTHOR("OpenSFS, Inc. <http://www.lustre.org/>");
 MODULE_DESCRIPTION("TCP Socket LNet Network Driver");
-MODULE_VERSION("2.8.0");
+MODULE_VERSION(LNET_VERSION);
 MODULE_LICENSE("GPL");
 
 late_initcall_sync(ksocklnd_init);

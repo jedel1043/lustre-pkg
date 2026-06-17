@@ -102,6 +102,7 @@ AS_IF([test x$RHEL_KERNEL = xyes], [
 	    ])
 ], [test x$UBUNTU_KERNEL = xyes], [
         BASEVER=$(echo $LINUXRELEASE | cut -d'-' -f1)
+	AS_VERSION_COMPARE([$BASEVER],[7.0.0],[
 	AS_VERSION_COMPARE([$BASEVER],[6.15.0],[
 	AS_VERSION_COMPARE([$BASEVER],[6.11.0],[
 	AS_VERSION_COMPARE([$BASEVER],[6.10.0],[
@@ -189,8 +190,20 @@ AS_IF([test x$RHEL_KERNEL = xyes], [
 	[LDISKFS_SERIES="6.10-ml.series"])],
 	[LDISKFS_SERIES="6.11-ml.series"],
 	[LDISKFS_SERIES="6.11-ml.series"])],
-	[LDISKFS_SERIES="6.15-ml.series"],
-	[LDISKFS_SERIES="6.15-ml.series"])
+	[LDISKFS_SERIES="7.0.0-14-ubuntu26.series"],
+	[LDISKFS_SERIES="7.0.0-14-ubuntu26.series"])],
+	[
+		KPLEV=$(echo $LINUXRELEASE | cut -d'-' -f2)
+		AS_IF(
+			[test -z "$KPLEV"], [
+				AC_MSG_WARN([Failed to determine Kernel patch level. Assume latest.])
+				LDISKFS_SERIES="7.0.0-14-ubuntu26.series"
+			],
+			[test $KPLEV -ge 14], [LDISKFS_SERIES="7.0.0-14-ubuntu26.series"],
+			[LDISKFS_SERIES="7.0-ml.series"]
+		)
+	],
+	[LDISKFS_SERIES="7.0-ml.series"])
 ], [test x$OPENEULER_KERNEL = xyes], [
 	case $OPENEULER_VERSION_NO in
 	2203.0) LDISKFS_SERIES="5.10.0-oe2203.series" ;;
@@ -216,31 +229,23 @@ AS_IF([test -z "$LDISKFS_SERIES"],
 	AS_VERSION_COMPARE([$LINUXRELEASE],[6.6.0], [
 		LDISKFS_SERIES="6.1.38-ml.series"], [
 		LDISKFS_SERIES="6.6-ml.series"], [
-	AS_VERSION_COMPARE([$LINUXRELEASE],[6.7.0], [
-		LDISKFS_SERIES="6.6-ml.series"], [
-		LDISKFS_SERIES="6.7-ml.series"], [
-	AS_VERSION_COMPARE([$LINUXRELEASE],[6.10.0], [
-		LDISKFS_SERIES="6.7-ml.series"], [
-		LDISKFS_SERIES="6.10-ml.series"], [
-	AS_VERSION_COMPARE([$LINUXRELEASE],[6.10.5], [
-		LDISKFS_SERIES="6.10-ml.series"], [
-		LDISKFS_SERIES="6.11-ml.series"], [
 	AS_VERSION_COMPARE([$LINUXRELEASE],[6.12.0], [
-		LDISKFS_SERIES="6.11-ml.series"], [
+		LDISKFS_SERIES="6.6-ml.series"], [
 		LDISKFS_SERIES="6.12-ml.series"], [
-	AS_VERSION_COMPARE([$LINUXRELEASE],[6.15.0], [
+	AS_VERSION_COMPARE([$LINUXRELEASE],[6.18.0], [
 		LDISKFS_SERIES="6.12-ml.series"], [
-		LDISKFS_SERIES="6.15-ml.series"], [
-		LDISKFS_SERIES="6.15-ml.series"]
-	)] # 6.15
-	)] # 6.12
-	)] # 6.11
-	)] # 6.10
-	)] # 6.7
-	)] # 6.6
-	)] # 6.1
-	)] # 5.10
-	)] # 5.4 LTS
+		LDISKFS_SERIES="6.18-ml.series"], [
+	AS_VERSION_COMPARE([$LINUXRELEASE],[6.19.0], [
+		LDISKFS_SERIES="6.18-ml.series"], [
+		LDISKFS_SERIES="7.0-ml.series"], [
+		LDISKFS_SERIES="7.0-ml.series"]
+	)] # 7.0 - stable
+	)] # 6.18 - LTS (6.18)
+	)] # 6.12 - LTS
+	)] # 6.6  - LTS
+	)] # 6.1  - LTS
+	)] # 5.10 - LTS
+	)] # 5.4  - LTS
 	)],
 [])
 AS_IF([test -z "$LDISKFS_SERIES"],
@@ -783,10 +788,10 @@ AC_DEFUN([LB_KABI_LDISKFS], [AS_IF([test x$enable_ldiskfs != xno],[
 		LB_JBD2_JOURNAL_GET_MAX_TXN_BUFS
 		LB2_TEST_CHECK_CONFIG_IM([FS_ENCRYPTION], [
 			EXT4_CRYPTO=],[
-			EXT4_CRYPTO='%/crypto.c'])
+			EXT4_CRYPTO='crypto.c'])
 		LB2_TEST_CHECK_CONFIG_IM([FS_VERITY], [
 			EXT4_VERITY=],[
-			EXT4_VERITY='%/verity.c'])
+			EXT4_VERITY='verity.c'])
 	])
 	AC_SUBST(EXT4_CRYPTO)
 	AC_SUBST(EXT4_VERITY)
