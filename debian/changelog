@@ -1,3 +1,17 @@
+lustre (2.17.54-0ubuntu1~ppa1~resolute1) resolute; urgency=medium
+
+  [ José Julián Espina ]
+  * New upstream release
+  * Migrate package to resolute
+  * Rediff patches
+  * Check if zfs nvlist are const on userland builds
+  * Fix new lintian errors
+  * Properly import ptlrpc_gss module on the DKMS script
+  * Backports:
+    * LU-20162 lprocfs: revert "LU-20162 obdclass: pin debugfs entries"
+
+ -- José Julián Espina Del Ángel <julian.espina@canonical.com>  Wed, 17 Jun 2026 18:29:47 -0600
+
 lustre (2.17.53-0ubuntu1~ppa3) noble; urgency=medium
 
   [ José Julián Espina ]
