@@ -1,0 +1,89 @@
+From: Timothy Day <timday@thelustrecollective.com>
+Date: Tue, 9 Jun 2026 11:04:04 -0400
+Subject: LU-20162 lprocfs: revert "LU-20162 obdclass: pin debugfs entries"
+
+This reverts commit 095fa11ec026bc781f053af96026dfb53e2c5d0a.
+
+This commit caused osd-zfs to fail to load:
+
+osd_zfs: module uses symbols dsl_prop_register from proprietary module zfs, inheriting taint.
+osd_zfs: Unknown symbol debugfs_file_get (err -2)
+osd_zfs: Unknown symbol debugfs_file_put (err -2)
+LustreError: Can't load module 'osd-zfs'
+
+Signed-off-by: Timothy Day <timday@thelustrecollective.com>
+Change-Id: I8c1c00a620194d60a7860eda4d8eb93dbe3c19bd
+Reviewed-on: https://review.whamcloud.com/c/fs/lustre-release/+/66554
+Tested-by: jenkins <devops@whamcloud.com>
+Reviewed-by: Yonatan Nachum <ynachum@amazon.com>
+Reviewed-by: Andreas Dilger <adilger@thelustrecollective.com>
+Reviewed-by: Oleg Drokin <green@whamcloud.com>
+
+Forwarded: not-needed
+---
+ lustre/include/lprocfs_status.h | 34 ++++------------------------------
+ 1 file changed, 4 insertions(+), 30 deletions(-)
+
+diff --git a/lustre/include/lprocfs_status.h b/lustre/include/lprocfs_status.h
+index 02d67c1..72eb564 100644
+--- a/lustre/include/lprocfs_status.h
++++ b/lustre/include/lprocfs_status.h
+@@ -777,20 +777,7 @@ ssize_t ir_factor_store(struct kobject *kobj, struct attribute *attr,
+ #define __LDEBUGFS_SEQ_FOPS(name, custom_seq_write)			\
+ static int name##_single_open(struct inode *inode, struct file *file)	\
+ {									\
+-	int rc;								\
+-	/* pin this entry till close to prevent races with umount */	\
+-	rc = debugfs_file_get(file->f_path.dentry);			\
+-	if (rc)								\
+-		return rc;						\
+-	rc = single_open(file, name##_seq_show, inode->i_private);	\
+-	if (rc)								\
+-		debugfs_file_put(file->f_path.dentry);			\
+-	return rc;							\
+-}									\
+-static int name##_single_release(struct inode *inode, struct file *file)\
+-{									\
+-	debugfs_file_put(file->f_path.dentry);				\
+-	return single_release(inode, file);				\
++	return single_open(file, name##_seq_show, inode->i_private);	\
+ }									\
+ static const struct file_operations name##_fops = {			\
+ 	.owner	 = THIS_MODULE,						\
+@@ -798,7 +785,7 @@ static const struct file_operations name##_fops = {			\
+ 	.read	 = seq_read,						\
+ 	.write	 = custom_seq_write,					\
+ 	.llseek	 = seq_lseek,						\
+-	.release = name##_single_release,				\
++	.release = single_release,					\
+ }
+ 
+ #define LDEBUGFS_SEQ_FOPS_RO(name)	__LDEBUGFS_SEQ_FOPS(name, NULL)
+@@ -845,25 +832,12 @@ static const struct file_operations name##_fops = {			\
+ 	static int name##_##type##_open(struct inode *inode,		\
+ 					struct file *file)		\
+ 	{								\
+-		int rc;							\
+-		rc = debugfs_file_get(file->f_path.dentry);		\
+-		if (rc)							\
+-			return rc;					\
+-		rc = single_open(file, NULL, inode->i_private);		\
+-		if (rc)							\
+-			debugfs_file_put(file->f_path.dentry);		\
+-		return rc;						\
+-	}								\
+-	static int name##_##type##_release(struct inode *inode,		\
+-					struct file *file)		\
+-	{								\
+-		debugfs_file_put(file->f_path.dentry);			\
+-  		return single_release(inode, file);		\
++		return single_open(file, NULL, inode->i_private);	\
+ 	}								\
+ 	static const struct file_operations name##_##type##_fops = {	\
+ 		.open	 = name##_##type##_open,			\
+ 		.write	 = name##_##type##_write,			\
+-		.release = name##_##type##_release,			\
++		.release = single_release,				\
+ 	};
+ 
+ /* write the name##_seq_show function, call LPROC_SEQ_FOPS_RO for read-only
