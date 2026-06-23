@@ -4,26 +4,1122 @@ Upstream-Contact: Lustre Developers <lustre-devel@lists.lustre.org>
 Source: https://github.com/lustre/lustre-release
 
 Files: *
-Copyright: 2002-2026 Sun Microsystems, Inc.
-           2009-2026 Whamcloud, Inc.
+Copyright: 2002-2026, Sun Microsystems, Inc.
+           2009-2026, Whamcloud, Inc.
 License: GPL-2
+
+Files: LICENSES/*
+Copyright: 1991, 1999, Free Software Foundation, Inc.
+License: LGPL-2.1
 
 Files: debian/*
 Copyright: 2026 Canonical Ltd.
 License: GPL-2
 
+Files: include/*
+       lib/*
+       libcfs/*
+       lnet/*
+       lustre/*
+Copyright: 2010-2017, Intel Corporation.
+           1999, 2001-2010, Oracle and/or its affiliates.
 License: GPL-2
- This package is free software; you can redistribute it and/or modify
- it under the terms of the GNU General Public License as published by
- the Free Software Foundation; version 2 of the License.
- .
- This package is distributed in the hope that it will be useful,
- but WITHOUT ANY WARRANTY; without even the implied warranty of
- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- GNU General Public License for more details.
- .
- You should have received a copy of the GNU General Public License
- along with this program. If not, see <https://www.gnu.org/licenses/>.
- .
- On Debian systems, the complete text of the GNU General Public
- License version 2 can be found in "/usr/share/common-licenses/GPL-2".
+
+Files: rustreapi/*
+Copyright: 2024-2025, DDN
+License: Expat
+
+Files: Documentation/osd-api.txt
+Copyright: 2011-2018, 2020, Intel Corporation.
+License: GPL-2
+
+Files: config/ac_pkg_swig.m4
+Copyright: 2011, Murray Cumming <murrayc@openismus.com>
+           2008, Sebastian Huber <sebastian-huber@web.de>
+           2008, Rafael Laboissiere <rafael@laboissiere.net>
+           2008, Andrew Collier
+           2008, Alan W. Irwin
+License: GPL-2+
+
+Files: config/ac_python_devel.m4
+Copyright: 2013, Daniel Mullner <muellner@math.stanford.edu>
+           2009, Sebastian Huber <sebastian-huber@web.de>
+           2009, Rafael Laboissiere <rafael@laboissiere.net>
+           2009, Matteo Settenvini <matteo@member.fsf.org>
+           2009, Horst Knorr <hk_classes@knoda.org>
+           2009, Andrew Collier
+           2009, Alan W. Irwin
+License: GPL-3+
+
+Files: contrib/yaml-event-dump.c
+Copyright: 2023, James Simmons <jsimmons@infradead.org>
+License: GPL-2
+
+Files: debian/dkms.conf.in
+Copyright: 2012, Genome Research Ltd.
+           2017-2018, Universität Hamburg
+License: NOASSERTION
+
+Files: lustre/.gitignore
+       lustre/ChangeLog
+       lustre/Makefile
+Copyright: 2002-2026, Sun Microsystems, Inc.
+           2009-2026, Whamcloud, Inc.
+License: GPL-2
+
+Files: lustre_compat/misc.c
+       lustre_compat/module.c
+Copyright: 2010-2017, Intel Corporation.
+           1999, 2001-2010, Oracle and/or its affiliates.
+License: GPL-2
+
+Files: lustre_compat/symbols.c
+Copyright: 2022-2026, Amazon and/or its affiliates.
+License: GPL-2
+
+Files: LICENSES/dual/*
+Copyright: none
+License: Apache-2.0
+
+Files: contrib/cocci/*
+Copyright: 2022-2026, Amazon and/or its affiliates.
+License: GPL-2
+
+Files: contrib/scripts/*
+Copyright: 2023-2025, Amazon and/or its affiliates.
+           2001, 2010, Oracle and/or its affiliates.
+License: GPL-2
+
+Files: lnet/klnds/*
+Copyright: 2022, Hewlett Packard Enterprise Development LP
+License: GPL-2
+
+Files: lnet/utils/*
+Copyright: 2014, 2016-2018, Intel Corporation.
+License: LGPL-2.1
+
+Files: lustre/conf/*
+       lustre/kernel_patches/*
+       lustre/kunit/*
+       lustre/scripts/*
+       lustre/tests/*
+Copyright: 2002-2026, Sun Microsystems, Inc.
+           2009-2026, Whamcloud, Inc.
+License: GPL-2
+
+Files: lustre/ec/*
+Copyright: 2011-2017, Intel Corporation
+License: BSD-3-clause
+
+Files: lustre/lfsck/*
+       lustre/quota/*
+       lustre/target/*
+Copyright: 2011-2018, 2020, Intel Corporation.
+License: GPL-2
+
+Files: lustre/lod/*
+Copyright: 2012-2014, 2017, Intel Corporation.
+           2008, 2009, Sun Microsystems, Inc.
+License: GPL-2
+
+Files: lustre/osd-wbcfs/*
+Copyright: 2025, 2026, DDN/Whamcloud, Inc.
+License: GPL-2
+
+Files: lustre_compat/fs/*
+Copyright: 2015, 2019, Google LLC
+License: GPL-2
+
+Files: Documentation/man7/lustre.7
+Copyright: 2007, 2010, Oracle and/or its affiliates.
+           2015, 2016, Intel Corporation.
+License: GPL-2
+
+Files: Documentation/man8/llverdev.8
+Copyright: 2008, 2010, Oracle and/or its affiliates.
+License: GPL-2
+
+Files: Documentation/man8/mkfs.lustre.8
+       Documentation/man8/mount.lustre.8
+       Documentation/man8/tunefs.lustre.8
+Copyright: 2007, 2010, Oracle and/or its affiliates.
+           2011, 2012, 2017, Intel Corporation.
+License: GPL-2
+
+Files: LICENSES/preferred/BSD-2-Clause
+Copyright: none
+License: BSD-2-clause
+
+Files: LICENSES/preferred/BSD-3-Clause
+Copyright: none
+License: BSD-3-clause
+
+Files: LICENSES/preferred/GPL-2.0
+Copyright: 1989, 1991, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: LICENSES/preferred/MIT
+Copyright: none
+License: Expat
+
+Files: contrib/scripts/checkpatch-man.pl
+Copyright: 2024, DataDirect Networks, Inc.
+           2010-2018, Joe Perches <joe@perches.com>
+           2008-2010, Andy Whitcroft <apw@canonical.com>
+           2007, 2008, Andy Whitcroft <apw@uk.ibm.com> (new conditions, test suite)
+           2005, Joel Schopp <jschopp@austin.ibm.com> (the ugly bit)
+           2001, Dave Jones. (the file handling bit)
+License: GPL-2
+
+Files: contrib/scripts/checkpatch.pl
+Copyright: 2010-2018, Joe Perches <joe@perches.com>
+           2008-2010, Andy Whitcroft <apw@canonical.com>
+           2007, 2008, Andy Whitcroft <apw@uk.ibm.com> (new conditions, test suite)
+           2005, Joel Schopp <jschopp@austin.ibm.com> (the ugly bit)
+           2001, Dave Jones. (the file handling bit)
+License: GPL-2
+
+Files: contrib/scripts/checkstack.pl
+Copyright: Joern Engel <joern@lazybastard.org>
+License: GPL-2
+
+Files: contrib/scripts/gerrit_checkpatch.py
+       include/lustre/lustre_barrier_user.h
+       include/lustre/lustre_lfsck_user.h
+       lnet/lnet/lib-ptl.c
+       lnet/lnet/net_fault.c
+       lustre/include/lustre_barrier.h
+       lustre/include/lustre_lfsck.h
+       lustre/include/lustre_linkea.h
+       lustre/include/lustre_lmv.h
+       lustre/include/lustre_quota.h
+       lustre/include/lustre_scrub.h
+       lustre/include/lustre_update.h
+       lustre/ldlm/ldlm_reclaim.c
+       lustre/llite/llite_foreign.c
+       lustre/llite/llite_foreign_symlink.c
+       lustre/lod/lod_sub_object.c
+       lustre/mdc/mdc_dev.c
+       lustre/mdt/mdt_io.c
+       lustre/mdt/mdt_lvb.c
+       lustre/mdt/mdt_som.c
+       lustre/mgs/mgs_barrier.c
+       lustre/obdclass/linkea.c
+       lustre/obdclass/local_storage.c
+       lustre/obdclass/local_storage.h
+       lustre/obdclass/lprocfs_jobstats.c
+       lustre/obdclass/md_attrs.c
+       lustre/obdclass/scrub.c
+       lustre/osd-ldiskfs/osd_quota.c
+       lustre/osd-ldiskfs/osd_quota_fmt.c
+       lustre/osd-ldiskfs/osd_quota_fmt.h
+       lustre/osd-ldiskfs/osd_scrub.c
+       lustre/osd-ldiskfs/osd_scrub.h
+       lustre/osd-zfs/osd_quota.c
+       lustre/osd-zfs/osd_scrub.c
+       lustre/osp/lwp_dev.c
+       lustre/osp/osp_md_object.c
+       lustre/osp/osp_trans.c
+       lustre/ptlrpc/pack_server.c
+       lustre/ptlrpc/sec_ctx.c
+       lustre/tests/badarea_io.c
+       lustre/tests/listxattr_size_check.c
+       lustre/tests/mirror_io.c
+       lustre/tests/orphan_linkea_check.c
+       lustre/utils/l_foreign_symlink.c
+       lustre/utils/l_tunedisk.c
+       lustre/utils/libmount_utils_zfs.c
+       lustre/utils/lsnapshot.c
+       lustre/utils/lustre_lfsck.c
+Copyright: 2011-2018, 2020, Intel Corporation.
+License: GPL-2
+
+Files: contrib/scripts/get_maintainer.pl
+Copyright: 2007, Joe Perches <joe@perches.com>
+License: GPL-2
+
+Files: contrib/scripts/kernel-doc
+Copyright: 2022, Tomasz Warniełło (POD)
+           2012, Dan Luedtke
+           2005-2012, Randy Dunlap
+           2001, Simon Huggins
+           2000, MontaVista Software, Inc.
+           1998, Michael Zucchi
+           2000, Tim Waugh <twaugh@redhat.com>
+License: GPL-2
+
+Files: contrib/scripts/updatecw.sh
+Copyright: 2010, Oracle and/or its affiliates.
+           2012, 2014, Intel Corporation.
+License: GPL-2
+
+Files: include/lustre/lustreapi.h
+       lustre/utils/liblustreapi.c
+       lustre/utils/liblustreapi_kernelconn.c
+Copyright: 2011-2013, 2017, Intel Corporation.
+           2003, 2004, 2009, 2010, Oracle and/or its affiliates.
+License: LGPL-2.1
+
+Files: lib/libcfs/l_ioctl.c
+       lib/libcfs/parser.c
+Copyright: 2014, 2017, Intel Corporation.
+           2001, 2002, Cluster File Systems, Inc.
+License: GPL-2
+
+Files: lib/libcfs/param.c
+       lustre/utils/liblustreapi_pool.c
+Copyright: none
+License: LGPL-2.1
+
+Files: lnet/include/udsp.h
+       lnet/lnet/udsp.c
+Copyright: 2018-2020, Data Direct Networks.
+           2011, 2017, Intel Corporation.
+           2007, 2010, Oracle and/or its affiliates.
+License: GPL-2
+
+Files: lnet/lnet/adler.c
+       lnet/lnet/adler.h
+       lustre/tests/checkfiemap.c
+       lustre/tests/flock_deadlock.c
+Copyright: 2012, 2013, Xyratex Technology Limited
+License: GPL-2
+
+Files: lnet/lnet/lnet-crypto.c
+       lustre/include/lustre_nrs.h
+       lustre/include/lustre_nrs_crr.h
+       lustre/include/lustre_nrs_fifo.h
+       lustre/include/lustre_nrs_orr.h
+       lustre/llite/xattr_cache.c
+       lustre/ptlrpc/nrs.c
+       lustre/ptlrpc/nrs_crr.c
+       lustre/ptlrpc/nrs_fifo.c
+       lustre/ptlrpc/nrs_orr.c
+Copyright: 2012, Xyratex Technology Limited
+           2011-2014, 2016, 2017, Intel Corporation.
+License: GPL-2
+
+Files: lnet/utils/Makefile.am
+       lnet/utils/lst.c
+       lnet/utils/routerstat.c
+       lnet/utils/wirecheck.c
+Copyright: 2010-2017, Intel Corporation.
+           1999, 2001-2010, Oracle and/or its affiliates.
+License: GPL-2
+
+Files: lustre-iokit/obdfilter-survey/iokit-libecho
+       lustre-iokit/obdfilter-survey/iokit-plot-obdfilter
+       lustre-iokit/stats-collect/iokit-gather-stats
+       lustre/obdclass/lu_tgt_pool.c
+Copyright: 2012-2014, 2017, Intel Corporation.
+           2008, 2009, Sun Microsystems, Inc.
+License: GPL-2
+
+Files: lustre/conf/Makefile.am
+       lustre/kunit/llog_test.c
+       lustre/scripts/Makefile.am
+       lustre/target/tgt_grant.c
+       lustre/target/tgt_lastrcvd.c
+       lustre/target/tgt_mount.c
+       lustre/tests/checkstat.c
+       lustre/tests/createmany.c
+       lustre/tests/flocks_test.c
+       lustre/tests/ll_dirstripe_verify.c
+       lustre/tests/mmap_cat.c
+       lustre/tests/mmap_sanity.c
+       lustre/tests/multiop.c
+       lustre/tests/rwv.c
+       lustre/tests/smalliomany.c
+       lustre/tests/statmany.c
+       lustre/tests/statone.c
+       lustre/tests/test_brw.c
+       lustre/tests/truncate.c
+       lustre/tests/writeme.c
+Copyright: 2010-2017, Intel Corporation.
+           1999, 2001-2010, Oracle and/or its affiliates.
+License: GPL-2
+
+Files: lustre/ec/Makefile
+Copyright: none
+License: GPL-2
+
+Files: lustre/ec/ec_kmod.c
+Copyright: 2011-2015, Intel Corporation
+License: BSD-2-clause or BSD-3-clause
+
+Files: lustre/include/llog_swab.h
+       lustre/include/lustre_obdo.h
+       lustre/include/lustre_swab.h
+       lustre/include/seq_range.h
+       lustre/obdclass/jobid.c
+Copyright: 2015-2017, Cray Inc
+           2011, 2014, 2017, Intel Corporation.
+           2007, 2010, Oracle and/or its affiliates.
+License: GPL-2
+
+Files: lustre/include/lustre_crypto.h
+       lustre/kunit/ec_test.c
+       lustre/llite/crypto.c
+       lustre/obdclass/upcall_cache_internal.c
+       lustre/obdclass/upcall_cache_internal.h
+       lustre/tests/euid_access.c
+       lustre/tests/lseek_test.c
+Copyright: 2019, 2020, 2022, 2023, 2025, Whamcloud.
+License: GPL-2
+
+Files: lustre/include/lustre_errno.h
+       lustre/ptlrpc/errno.c
+Copyright: 2013, Intel Corporation.
+           2011, FUJITSU LIMITED.
+License: GPL-2
+
+Files: lustre/include/lustre_ioctl_old.h
+Copyright: 2023, DataDirect Networks Storage
+License: GPL-2
+
+Files: lustre/include/lustre_nodemap.h
+       lustre/ptlrpc/nodemap_handler.c
+       lustre/ptlrpc/nodemap_idmap.c
+       lustre/ptlrpc/nodemap_internal.h
+       lustre/ptlrpc/nodemap_lproc.c
+       lustre/ptlrpc/nodemap_storage.c
+Copyright: 2013, 2015, Trustees of Indiana University
+           2013, 2014, 2016, 2017, Intel Corporation.
+License: GPL-2
+
+Files: lustre/include/lustre_nrs_delay.h
+       lustre/ptlrpc/nrs_delay.c
+Copyright: 2015, 2017, Intel Corporation.
+           2015, 2017, Cray Inc.
+License: GPL-2
+
+Files: lustre/include/lustre_nrs_tbf.h
+       lustre/ptlrpc/nrs_tbf.c
+       lustre/tests/check_fhandle_syscalls.c
+       lustre/tests/llapi_layout_test.c
+Copyright: 2014, 2016, 2017, Intel Corporation.
+           2013, 2025, DataDirect Networks, Inc.
+License: GPL-2
+
+Files: lustre/kunit/kinode.c
+       lustre/tests/lockahead_test.c
+Copyright: 2007, 2014-2019, Cray Inc.
+License: GPL-2
+
+Files: lustre/kunit/obd_mod_rpcs_test.c
+       lustre/kunit/obd_test.c
+       lustre/osd-wbcfs/osd_lproc.c
+       lustre/utils/libmount_utils_wbcfs.c
+Copyright: 2022-2026, Amazon and/or its affiliates.
+License: GPL-2
+
+Files: lustre/ldlm/ldlm_flock.c
+Copyright: 2010, 2017, Intel Corporation.
+           2003, Hewlett-Packard Development Company LP.
+           2003, 2010, Oracle and/or its affiliates.
+License: GPL-2
+
+Files: lustre/llite/pcc.c
+       lustre/llite/pcc.h
+       lustre/mdc/mdc_batch.c
+       lustre/mdt/mdt_batch.c
+       lustre/tests/lov_getstripe_old.c
+       lustre/utils/libhsm_scanner.c
+       lustre/utils/libhsm_scanner.h
+       lustre/utils/ll_decode_linkea.c
+       lustre/utils/llsom_sync.c
+Copyright: 2016, 2017, 2019-2022, DDN Storage Corporation.
+License: GPL-2
+
+Files: lustre/llite/xattr_security.c
+Copyright: 2015, 2016, Intel Corporation.
+           2014, Bull SAS
+License: GPL-2
+
+Files: lustre/mdc/mdc_changelog.c
+Copyright: 2017, Intel Corporation.
+           2017, Commissariat a l'Energie Atomique et aux Energies
+License: GPL-2
+
+Files: lustre/mdt/mdt_coordinator.c
+       lustre/mdt/mdt_hsm.c
+       lustre/mdt/mdt_hsm_cdt_actions.c
+       lustre/mdt/mdt_hsm_cdt_agent.c
+       lustre/mdt/mdt_hsm_cdt_client.c
+       lustre/mdt/mdt_hsm_cdt_requests.c
+       lustre/utils/lhsmtool_posix.c
+Copyright: 2012-2017, Intel Corporation.
+           2011, 2012, Commissariat a l'energie atomique et aux energies
+License: GPL-2
+
+Files: lustre/obdclass/integrity.c
+       lustre/obdclass/obd_cksum.c
+       lustre/osd-ldiskfs/osd_integrity.c
+       lustre/utils/ofd_access_batch.c
+       lustre/utils/ofd_access_log_reader.c
+Copyright: 2018, 2020, DataDirect Networks Storage.
+License: GPL-2
+
+Files: lustre/osd-wbcfs/osd_hash.c
+       lustre/osd-wbcfs/osd_index_hash.c
+Copyright: 2025, 2026, DDN/Whamcloud, Inc.
+           2024, 2025, Amazon and/or its affiliates.
+License: GPL-2
+
+Files: lustre/ptlrpc/batch.c
+Copyright: 2020, 2022, DDN/Whamcloud Storage Corporation.
+License: GPL-2
+
+Files: lustre/ptlrpc/heap.c
+       lustre/ptlrpc/heap.h
+Copyright: 2011, 2017, Intel Corporation
+License: GPL-2
+
+Files: lustre/ptlrpc/nodemap_member.c
+       lustre/ptlrpc/nodemap_range.c
+Copyright: 2013, 2015, Trustees of Indiana University
+License: GPL-2
+
+Files: lustre/quota/qmt_lqa.c
+Copyright: 2025, DataDirect Networks Inc
+License: GPL-2
+
+Files: lustre/scripts/lustre_req_history
+       lustre/tests/chownmany.c
+       lustre/tests/createtest.c
+       lustre/tests/directio.c
+       lustre/tests/ll_sparseness_verify.c
+       lustre/tests/ll_sparseness_write.c
+       lustre/tests/mcreate.c
+       lustre/tests/memhog.c
+       lustre/tests/mrename.c
+       lustre/tests/multifstat.c
+       lustre/tests/opendevunlink.c
+       lustre/tests/opendirunlink.c
+       lustre/tests/openfile.c
+       lustre/tests/openfilleddirunlink.c
+       lustre/tests/openunlink.c
+       lustre/tests/reads.c
+       lustre/tests/rename_many.c
+       lustre/tests/runas.c
+       lustre/tests/sendfile.c
+       lustre/tests/small_write.c
+       lustre/tests/tchmod.c
+       lustre/tests/unlinkmany.c
+       lustre/tests/utime.c
+       lustre/tests/write_time_limit.c
+       lustre/tests/writemany.c
+Copyright: 2002-2004, 2007-2010, Oracle and/or its affiliates.
+License: GPL-2
+
+Files: lustre/scripts/statechange-lustre.sh
+Copyright: 2018, Intel Corporation.
+License: CDDL-1.0
+
+Files: lustre/scripts/zfsobj2fid
+Copyright: 2014, Lawrence Livermore National Security, LLC.
+License: GPL-2
+
+Files: lustre/target/tgt_fmd.c
+Copyright: 2019, DDN Storage Corporation.
+           2012, 2014, Intel Corporation.
+           2008, Sun Microsystems, Inc.
+License: GPL-2
+
+Files: lustre/tests/aheadmany.c
+Copyright: 2023, Whamcloud DDN Storage Corporation.
+License: GPL-2
+
+Files: lustre/tests/aiocp.c
+Copyright: 2004, Daniel McNeil <daniel@osdl.org>
+License: GPL-2
+
+Files: lustre/tests/check_fallocate.c
+Copyright: 2014, DataDirect Networks, Inc.
+License: GPL-2
+
+Files: lustre/tests/fsx.c
+Copyright: 2012, Intel Corporation.
+           1998-2001, Apple Computer, Inc.
+           1991, NeXT Computer, Inc. All Rights Reserverd.
+License: APSL-1.1
+
+Files: lustre/tests/group_lock_test.c
+       lustre/tests/swap_lock_test.c
+Copyright: 2014, 2015, Cray Inc
+License: GPL-2
+
+Files: lustre/tests/io_uring_probe.c
+Copyright: 2022, DDN/Whamcloud Storage Corporation.
+License: LGPL-2.1
+
+Files: lustre/tests/kbuild
+Copyright: 2005, Cluster File Systems, Inc.
+License: GPL-2
+
+Files: lustre/tests/llapi_fid_test.c
+       lustre/tests/sendfile_grouplock.c
+Copyright: 2016, 2017, Intel Corporation.
+           2014, 2015, Cray Inc
+License: GPL-2
+
+Files: lustre/tests/llapi_hsm_test.c
+       lustre/tests/llapi_test_utils.c
+Copyright: 2025, DataDirect Networks, Inc.
+           2015, Intel Corporation.
+           2014, 2015, Cray Inc
+License: GPL-2
+
+Files: lustre/tests/mmap_mknod_test.c
+Copyright: 2019, Whamcloud.
+           2015, Intel Corporation.
+           2009, 2010, Oracle and/or its affiliates.
+License: GPL-2
+
+Files: lustre/tests/splice-test.c
+Copyright: 2019, RedHat Inc.
+License: GPL-2
+
+Files: lustre/tests/statx.c
+       lustre/utils/liblustreapi_pcc.c
+Copyright: 2017, 2019, DDN Storage Corporation.
+License: LGPL-2.1
+
+Files: lustre/utils/LCOPYING
+Copyright: 1991, 1999, Free Software Foundation, Inc.
+License: LGPL-2.1
+
+Files: lustre/utils/callvpe.c
+       lustre/utils/callvpe.h
+       lustre/utils/liblustreapi_json.c
+       lustre/utils/liblustreapi_layout.c
+       lustre/utils/liblustreapi_mirror.c
+       lustre/utils/liblustreapi_param.c
+Copyright: 2014, 2016-2018, Intel Corporation.
+License: LGPL-2.1
+
+Files: lustre/utils/l_getsepol.c
+Copyright: 2016, DDN Storage
+License: GPL-2
+
+Files: lustre/utils/lctl_thread.h
+       lustre/utils/liblustreapi_hsm.c
+       lustre/utils/liblustreapi_lease.c
+       lustre/utils/lustreapi_internal.h
+Copyright: 2013, 2016, 2017, Intel Corporation.
+           2012, 2014, Commissariat a l'energie atomique et aux energies
+License: LGPL-2.1
+
+Files: lustre/utils/lfs_project.c
+       lustre/utils/lfs_project.h
+Copyright: 2017, Intel Corporation.
+           2017, DataDirect Networks Storage.
+License: GPL-2
+
+Files: lustre/utils/liblustreapi_chlg.c
+Copyright: 2017, Commissariat a l'energie atomique et aux energies
+License: LGPL-2.1
+
+Files: lustre/utils/liblustreapi_fid.c
+       lustre/utils/liblustreapi_root.c
+Copyright: 2018, 2019, 2022, Data Direct Networks
+           2011, 2017, Intel Corporation.
+           2003, 2010, Oracle and/or its affiliates.
+License: LGPL-2.1
+
+Files: lustre/utils/liblustreapi_heat.c
+       lustre/utils/liblustreapi_lseek.c
+       lustre/utils/liblustreapi_project.c
+Copyright: 2018, 2020, 2025, DataDirect Networks Inc
+License: LGPL-2.1
+
+Files: lustre/utils/liblustreapi_ioctl.c
+Copyright: 2023, DataDirect Networks Storage.
+           2011, 2017, Intel Corporation.
+           2003, 2010, Oracle and/or its affiliates.
+License: LGPL-2.1
+
+Files: lustre/utils/liblustreapi_ladvise.c
+Copyright: 2015, DataDirect Networks, Inc
+License: LGPL-2.1
+
+Files: lustre/utils/liblustreapi_nodemap.c
+Copyright: 2014, Intel Corporation.
+           2013, Trustees of Indiana University
+License: LGPL-2.1
+
+Files: lustre/utils/liblustreapi_pfind.c
+Copyright: 2024, DataDirect Networks Storage, Inc.
+License: LGPL-2.1
+
+Files: lustre/utils/liblustreapi_swap.c
+Copyright: 2017, 2021, DDN Storage Corporation.
+           2012, Commissariat a l'energie atomique et aux energies
+License: LGPL-2.1
+
+Files: lustre/utils/liblustreapi_util.c
+Copyright: 2016, 2017, Intel Corporation.
+           2015, Cray Inc
+License: LGPL-2.1
+
+Files: lustre/utils/pid_file.c
+       lustre/utils/pid_file.h
+Copyright: 2020, DataDirect Networks Storage.
+License: LGPL-2.1
+
+Files: contrib/debug_tools/epython_scripts/*
+Copyright: 2007, 2014-2019, Cray Inc.
+License: GPL-2
+
+Files: contrib/scripts/lioprof/*
+Copyright: 2016, Intel Corporation.
+License: BSD-3-clause or GPL-2
+
+Files: ldiskfs/kernel_patches/patches/*
+Copyright: 2018, 2022, 2025, Whamcloud
+License: GPL-2
+
+Files: lnet/klnds/efalnd/*
+Copyright: 2022-2026, Amazon and/or its affiliates.
+License: GPL-2
+
+Files: lnet/klnds/gnilnd/*
+Copyright: 2013-2015, 2017, Intel Corporation.
+            2009-2012, 2016, Cray, Inc.
+License: GPL-2
+
+Files: lustre/conf/resource/*
+Copyright: 2016, Intel Corporation
+           2009, Andrew Beekhof
+License: GPL-2
+
+Files: lustre/tests/clientapi/*
+Copyright: 2011-2018, 2020, Intel Corporation.
+License: GPL-2
+
+Files: lustre/tests/mpi/*
+Copyright: 2002-2004, 2007-2010, Oracle and/or its affiliates.
+License: GPL-2
+
+Files: lustre/utils/gss/*
+Copyright: 2004-2006, The Regents of the University of Michigan.
+License: BSD-3-clause
+
+Files: contrib/debug_tools/crash-mod/lustre-ext.c
+Copyright: 2017-2023, Cray Inc.
+           2007, Lawrence Livermore National Labs
+License: GPL-2+
+
+Files: include/libcfs/util/hash.h
+Copyright: 2002, Nadia Yvette Chambers, IBM
+License: GPL-2
+
+Files: include/libcfs/util/param.h
+Copyright: 2015, James Simmons <jsimmons@infradead.org>
+License: LGPL-2.1
+
+Files: include/linux/libcfs/libcfs_caps.h
+       lustre/conf/resource/Makefile.am
+Copyright: 2018, 2022, 2025, Whamcloud
+License: GPL-2
+
+Files: include/linux/lnet/lnet_crypto.h
+Copyright: 2012, Xyratex Technology Limited
+           2011-2014, 2016, 2017, Intel Corporation.
+License: GPL-2
+
+Files: include/lustre_compat/linux/folio.h
+Copyright: 2025, Hewlett Packard Enterprise Development LP.
+License: GPL-2
+
+Files: include/lustre_compat/linux/llcrypt.h
+       lustre_compat/fs/crypto/keysetup.c
+       lustre_compat/fs/crypto/llcrypt_private.h
+Copyright: 2015, Google, Inc.
+License: GPL-2
+
+Files: include/lustre_compat/linux/xarray.h
+Copyright: 2017, Microsoft Corporation
+License: GPL-2
+
+Files: lnet/klnds/gnilnd/gni_pub.h
+Copyright: 2007, 2014-2019, Cray Inc.
+License: GPL-2
+
+Files: lnet/klnds/gnilnd/gnilnd.h
+Copyright: 2014, 2016, Intel Corporation.
+           2009-2012, Cray, Inc.
+           2004, Cluster File Systems, Inc.
+License: GPL-2
+
+Files: lnet/klnds/gnilnd/gnilnd_cb.c
+       lnet/klnds/gnilnd/gnilnd_modparams.c
+Copyright: 2009-2012, Cray, Inc.
+           2004, Cluster File Systems, Inc.
+License: GPL-2
+
+Files: lnet/utils/lnetconfig/liblnd.h
+       lnet/utils/lnetconfig/liblnetconfig_lnd.c
+Copyright: 2016, 2017, Intel Corporation.
+           2015, James Simmons <jsimmons@infradead.org>
+License: LGPL-2.1
+
+Files: lnet/utils/lnetconfig/liblnetconfig_netlink.c
+Copyright: 2021, UT-Battelle, LLC
+License: LGPL-2.1
+
+Files: lnet/utils/lnetconfig/liblnetconfig_udsp.c
+Copyright: 2020, Whamcloud.
+           2018-2020, Data Direct Networks.
+           2011, 2017, Intel Corporation.
+           2007, 2010, Oracle and/or its affiliates.
+License: LGPL-2.1
+
+Files: lustre/conf/resource/Lustre
+Copyright: 2011, 2017, Intel Corporation
+License: GPL-2
+
+Files: lustre/ptlrpc/gss/gss_asn1.h
+       lustre/ptlrpc/gss/gss_krb5.h
+Copyright: 2007, 2010, Oracle and/or its affiliates.
+License: NTP
+
+Files: lustre/ptlrpc/gss/gss_crypto.c
+       lustre/utils/gss/lgss_utils.h
+Copyright: 2007, 2010, Oracle and/or its affiliates.
+License: BSD-3-clause
+
+Files: lustre/ptlrpc/gss/gss_crypto.h
+Copyright: none
+License: BSD-3-clause
+
+Files: lustre/ptlrpc/gss/gss_err.h
+Copyright: 2007, 2010, Oracle and/or its affiliates.
+License: HPND-sell-variant
+
+Files: lustre/ptlrpc/gss/gss_generic_token.c
+Copyright: 2011, Intel Corporation.
+           2007, 2010, Oracle and/or its affiliates.
+License: HPND-sell-variant
+
+Files: lustre/ptlrpc/gss/gss_krb5_mech.c
+       lustre/ptlrpc/gss/gss_mech_switch.c
+       lustre/ptlrpc/gss/sec_gss.c
+Copyright: 2011, 2012, 2015, Intel Corporation.
+           2007, 2010, Oracle and/or its affiliates.
+License: BSD-3-clause
+
+Files: lustre/ptlrpc/gss/gss_null_mech.c
+       lustre/ptlrpc/gss/gss_sk_mech.c
+       lustre/utils/gss/lgss_sk.c
+       lustre/utils/gss/sk_utils.c
+Copyright: 2013, 2015, Trustees of Indiana University
+           2013, 2014, 2016, 2017, Intel Corporation.
+License: GPL-2
+
+Files: lustre/tests/mpi/lp_utils.c
+       lustre/tests/mpi/write_append_truncate.c
+       lustre/tests/mpi/write_disjoint.c
+Copyright: 2010-2017, Intel Corporation.
+           1999, 2001-2010, Oracle and/or its affiliates.
+License: GPL-2
+
+Files: lustre/tests/mpi/mdsrate.c
+Copyright: 2003, Hewlett-Packard Development Company, LP.
+           2008, 2010, Oracle and/or its affiliates.
+           2012, 2015, Intel Corporation.
+License: GPL-2
+
+Files: lustre/tests/mpi/rr_alloc.c
+Copyright: 2017, Seagate Technology LLC
+License: GPL-2
+
+Files: lustre/utils/gss/context_lucid.c
+Copyright: 2012, 2014, Intel Corporation.
+           2006, The Regents of the University of Michigan
+License: BSD-3-clause
+
+Files: lustre/utils/gss/gss_util.c
+Copyright: 2002, The Regents of the University of Michigan.
+           1990, 1991, Massachusetts Institute of Technology.
+           1994, OpenVision Technologies, Inc.
+License: HPND-sell-variant or NTP
+
+Files: lustre/utils/gss/lgss_keyring.c
+       lustre/utils/gss/lsupport.c
+       lustre/utils/gss/lsupport.h
+Copyright: 2010-2017, Intel Corporation.
+           1999, 2001-2010, Oracle and/or its affiliates.
+License: GPL-2
+
+Files: lustre/utils/gss/lgss_krb5_utils.c
+Copyright: 2007, 2010, Oracle and/or its affiliates.
+           2002-2004, The Regents of the University of Michigan.
+           1990, 1991, Massachusetts Institute of Technology.
+           1994, OpenVision Technologies, Inc.
+License: BSD-3-clause or HPND-sell-variant or NTP
+
+Files: lustre/utils/gss/lgss_krb5_utils.h
+Copyright: 2007, 2010, Oracle and/or its affiliates.
+License: GPL-2
+
+Files: lustre/utils/gss/lgss_null_utils.c
+       lustre/utils/gss/lgss_sk_utils.c
+       lustre/utils/gss/sk_utils.h
+Copyright: 2013, 2015, Trustees of Indiana University
+License: GPL-2
+
+Files: lustre/utils/gss/lgss_utils.c
+Copyright: 2011, Intel Corporation.
+           2007, 2010, Oracle and/or its affiliates.
+           2002, The Regents of the University of Michigan.
+           1990, 1991, Massachusetts Institute of Technology.
+           1994, OpenVision Technologies, Inc.
+License: HPND-sell-variant or NTP
+
+Files: lustre/utils/gss/svcgssd.c
+Copyright: 2016, Intel Corporation.
+           2002, Marius Aamodt Eriksen <marius@UMICH.EDU>.
+           2002, J. Bruce Fields <bfields@UMICH.EDU>.
+           2002, Andy Adamson <andros@UMICH.EDU>.
+           2000, The Regents of the University of Michigan.
+           2000, Dug Song <dugsong@UMICH.EDU>.
+License: BSD-3-clause
+
+Files: lustre/utils/gss/svcgssd_mech2file.c
+Copyright: 2004, Andy Adamson <andros@UMICH.EDU>.
+           2000, The Regents of the University of Michigan.
+License: BSD-3-clause
+
+Files: lustre/utils/gss/svcgssd_proc.c
+Copyright: 2002, Bruce Fields <bfields@UMICH.EDU>
+           2000, The Regents of the University of Michigan.
+License: BSD-3-clause
+
+Files: lustre_compat/fs/crypto/crypto.c
+       lustre_compat/fs/crypto/fname.c
+Copyright: 2015, Motorola Mobility
+           2015, Google, Inc.
+License: GPL-2
+
+Files: lustre_compat/fs/crypto/policy.c
+Copyright: 2015, Motorola Mobility.
+           2015, Google, Inc.
+License: GPL-2
+
+Files: include/uapi/linux/lnet/lnet-crypto.h
+Copyright: 2012, Xyratex Technology Limited
+           2011-2014, 2016, 2017, Intel Corporation.
+License: GPL-2
+
+Files: include/uapi/linux/lnet/lnet-dlc.h
+Copyright: 2014, 2016-2018, Intel Corporation.
+License: LGPL-2.1
+
+Files: include/uapi/linux/lnet/lnet-nl.h
+Copyright: 2021, UT-Battelle, LLC
+License: LGPL-2.1
+
+Files: include/uapi/linux/lnet/lnetctl.h
+       include/uapi/linux/lustre/lustre_barrier_user.h
+       include/uapi/linux/lustre/lustre_lfsck_user.h
+       ldiskfs/kernel_patches/patches/base/ext4-htree-lock.patch
+Copyright: 2011-2018, 2020, Intel Corporation.
+License: GPL-2
+
+Files: include/uapi/linux/lustre/ec_base.h
+       include/uapi/linux/lustre/erasure_code.h
+       include/uapi/linux/lustre/gf_vect_mul.h
+Copyright: 2011-2015, Intel Corporation
+License: BSD-2-clause or BSD-3-clause
+
+Files: include/uapi/linux/lustre/lgss.h
+Copyright: 2019, 2020, 2022, 2023, 2025, Whamcloud.
+License: GPL-2
+
+Files: include/uapi/linux/lustre/lustre_access_log.h
+       include/uapi/linux/lustre/lustre_ver.h
+Copyright: none
+License: LGPL-2.1
+
+Files: include/uapi/linux/lustre/lustre_fid.h
+       include/uapi/linux/lustre/lustre_ostid.h
+Copyright: 2015-2017, Cray Inc
+           2011, 2014, 2017, Intel Corporation.
+           2007, 2010, Oracle and/or its affiliates.
+License: GPL-2
+
+Files: include/uapi/linux/lustre/lustre_kernelcomm.h
+Copyright: 2011-2013, 2017, Intel Corporation.
+           2003, 2004, 2009, 2010, Oracle and/or its affiliates.
+License: LGPL-2.1
+
+License: APSL-1.1
+        The full text of the Apple Public Source License version 1.1 can be
+        found at https://opensource.org/licenses/APSL-1.1
+
+License: Apache-2.0
+        Licensed under the Apache License, Version 2.0 (the "License");
+        you may not use this file except in compliance with the License.
+        You may obtain a copy of the License at
+        http://www.apache.org/licenses/LICENSE-2.0
+        Unless required by applicable law or agreed to in writing, software
+        distributed under the License is distributed on an "AS IS"BASIS,
+        WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+        See the License for the specific language governing permissions and
+        limitations under the License.
+        On Debian systems, the complete text of the Apache License,
+        Version 2.0 can be found in '/usr/share/common-licenses/Apache-2.0'.
+
+License: BSD-2-clause
+        Redistribution and use in source and binary forms, with or without
+        modification, are permitted provided that the following conditions
+        are met:
+        1. Redistributions of source code must retain the above copyright
+        notice, this list of conditions and the following disclaimer.
+        2. Redistributions in binary form must reproduce the above copyright
+        notice, this list of conditions and the following disclaimer in the
+        documentation and/or other materials provided with the distribution.
+        .
+        THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+        "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+        TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+        PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+        CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+        EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+        PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+        PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+        LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+        NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+        SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+License: BSD-3-clause
+        The BSD License
+        .
+        Redistribution and use in source and binary forms, with or without
+        modification, are permitted provided that the following conditions are
+        met:
+        .
+        * Redistributions of source code must retain the above copyright
+        notice, this list of conditions and the following disclaimer.
+        .
+        * Redistributions in binary form must reproduce the above copyright
+        notice, this list of conditions and the following disclaimer in the
+        documentation and/or other materials provided with the distribution.
+        .
+        * Neither the name of the copyright holder nor the names of its
+        contributors may be used to endorse or promote products derived from
+        this software without specific prior written permission.
+        .
+        THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+        IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+        TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+        PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+        CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+        EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+        PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+        PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+        LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+        NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+        SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+License: CDDL-1.0
+        The full text of the Common Development and Distribution License
+        version 1.0 can be found at
+        https://opensource.org/licenses/CDDL-1.0
+
+License: Expat
+        The MIT License
+        .
+        Permission is hereby granted, free of charge, to any person
+        obtaining a copy of this software and associated
+        documentation files (the "Software"), to deal in the Software
+        without restriction, including without limitation the rights to
+        use, copy, modify, merge, publish, distribute, sublicense,
+        and/or sell copies of the Software, and to permit persons to
+        whom the Software is furnished to do so, subject to the
+        following conditions:
+        .
+        The above copyright notice and this permission notice shall
+        be included in all copies or substantial portions of the
+        Software.
+        .
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT
+        WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+        INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+        MERCHANTABILITY, FITNESS FOR A PARTICULAR
+        PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+        SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+        LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+        TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+        CONNECTION WITH THE SOFTWARE OR THE USE OR
+        OTHER DEALINGS IN THE SOFTWARE.
+
+License: GPL-2
+        This program is free software; you can redistribute it and/or modify
+        it under the terms of the GNU General Public License as published by
+        the Free Software Foundation; version 2 dated June, 1991.
+        On Debian systems, the complete text of version 2 of the GNU General
+        Public License can be found in '/usr/share/common-licenses/GPL-2'.
+
+License: GPL-2+
+        This program is free software; you can redistribute it and/or modify
+        it under the terms of the GNU General Public License as published by
+        the Free Software Foundation; either version 2 of the License, or
+        (at your option) any later version.
+        On Debian systems, the complete text of the GNU General Public
+        License version 2 can be found in '/usr/share/common-licenses/GPL-2'.
+
+License: GPL-3+
+        This program is free software; you can redistribute it and/or modify
+        it under the terms of the GNU General Public License as published by
+        the Free Software Foundation; either version 3 of the License, or
+        (at your option) any later version.
+        On Debian systems, the complete text of the GNU General Public
+        License version 3 can be found in '/usr/share/common-licenses/GPL-3'.
+
+License: HPND-sell-variant
+        Permission to use, copy, modify, distribute, and sell this software and
+        its documentation for any purpose is hereby granted without fee, provided
+        that the above copyright notice appear in all copies and that both that
+        copyright notice and this permission notice appear in supporting
+        documentation, and that the name of the copyright holder not be used in
+        advertising or publicity pertaining to distribution of the software
+        without specific, written prior permission. The copyright holder makes
+        no representations about the suitability of this software for any
+        purpose. It is provided "as is" without express or implied warranty.
+        .
+        THE COPYRIGHT HOLDER DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS
+        SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+        FITNESS. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY
+        SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER
+        RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF
+        CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+        CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+License: LGPL-2.1
+        This program is free software; you can redistribute it and/or modify it
+        under the terms of the GNU Lesser General Public License as published by the
+        Free Software Foundation; version 2.1 of the License.
+        On Debian systems, the complete text of version 2.1 of the GNU Lesser
+        General Public License can be found in '/usr/share/common-licenses/LGPL-2.1'.
+
+License: NOASSERTION
+        The license is not asserted. See the source file for details.
+
+License: NTP
+        Permission to use, copy, modify, and distribute this software and its
+        documentation for any purpose and without fee is hereby granted, provided
+        that the above copyright notice appear in all copies and that both the
+        copyright notice and this permission notice appear in supporting
+        documentation, and that the name of the copyright holder not be used in
+        advertising or publicity pertaining to distribution of the software
+        without specific, written prior permission. THE COPYRIGHT HOLDER
+        DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING ALL
+        IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL
+        THE COPYRIGHT HOLDER BE LIABLE FOR ANY SPECIAL, INDIRECT OR
+        CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF
+        USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+        OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+        PERFORMANCE OF THIS SOFTWARE.

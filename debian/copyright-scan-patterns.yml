@@ -1,0 +1,14 @@
+---
+# Copyright-scan patterns for licensecheck (used by cme update dpkg-copyright)
+# See Dpkg::Copyright::Scanner(3pm) section "Selecting or ignoring files to scan"
+ignore:
+  pattern:
+  # Cargo.toml files with workspace inheritance (authors.workspace = true)
+  # crash cme's Cargo.toml parser (Not an ARRAY reference). See
+  # Dpkg::Copyright::Grant::ByFile line 420. Copyright info for rustreapi
+  # is provided via fill.copyright.blanks.yml instead.
+  - Cargo.toml
+  suffixes:
+  # Binary test fixtures (bzip2-compressed filesystem images) — licensecheck
+  # parses binary garbage as copyright holders
+  - tar.bz2
