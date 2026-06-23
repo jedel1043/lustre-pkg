@@ -5,7 +5,7 @@ lustre-server-modules-dkms: extra-license-file *
 lustre-server-modules-dkms: package-contains-documentation-outside-usr-share-doc *
 
 # Source tree includes empty directories
-lustre-server-modules-dkms: package-contains-empty-directory
+lustre-server-modules-dkms: package-contains-empty-directory *
 
 # TODO: patch scripts to use /bin/bash
 lustre-server-modules-dkms: bash-term-in-posix-shell *
