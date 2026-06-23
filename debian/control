@@ -103,7 +103,7 @@ Package: lustre-client-modules-dkms
 Section: kernel
 Architecture: any
 Depends: ${misc:Depends},
-	 ${perl:Depends},
+         ${perl:Depends},
          dkms,
          autoconf,
          automake,
@@ -123,8 +123,7 @@ Depends: ${misc:Depends},
          python3-dev,
          libnl-genl-3-dev,
          zlib1g-dev,
-         libmount-dev,
-         libkeyutils1
+         libmount-dev
 Provides: lustre-client-modules
 Description: Lustre Linux kernel module (DKMS)
  This package contains the loadable kernel modules for the patchless client
@@ -136,7 +135,7 @@ Package: lustre-server-modules-dkms
 Section: kernel
 Architecture: any
 Depends: ${misc:Depends},
-	 ${perl:Depends},
+         ${perl:Depends},
          dkms,
          autoconf,
          automake,
@@ -157,7 +156,6 @@ Depends: ${misc:Depends},
          libnl-genl-3-dev,
          zlib1g-dev,
          libmount-dev,
-         libkeyutils1,
          zfs-dkms (>= 2.0.7),
          libzfslinux-dev
 Provides: lustre-client-modules,

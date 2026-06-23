@@ -2,6 +2,7 @@ From: =?utf-8?q?Jos=C3=A9_Juli=C3=A1n_Espina?= <julian.espina@canonical.com>
 Date: Tue, 16 Jun 2026 20:21:23 -0600
 Subject: Check if zfs nvlist are const on userland builds
 
+Forwarded: no
 ---
  config/lustre-build-zfs.m4 | 22 ++++++++++++++++++++++
  1 file changed, 22 insertions(+)
