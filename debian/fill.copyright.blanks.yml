@@ -1,0 +1,50 @@
+# Documentation with no copyright/license info
+Documentation/dlc.txt:
+  skip: '1'
+Documentation/man1/lfs-find.1:
+  skip: '1'
+
+# License exception body text is parsed as copyright
+LICENSES/exceptions/Linux-syscall-note:
+  skip: '1'
+
+# Man pages with "GNU Public License" in troff comments
+Documentation/man7/lustre.7:
+  license: GPL-2
+Documentation/man8/llverdev.8:
+  license: GPL-2
+Documentation/man8/mkfs.lustre.8:
+  license: GPL-2
+Documentation/man8/mount.lustre.8:
+  license: GPL-2
+Documentation/man8/tunefs.lustre.8:
+  license: GPL-2
+
+# ldiskfs kernel patches — no SPDX tag, inherit GPL-2 from kernel source
+ldiskfs/kernel_patches/patches/:
+  license: GPL-2
+
+# Files with no explicit license text — inherit project default (GPL-2)
+contrib/debug_tools/:
+  license: GPL-2
+contrib/scripts/updatecw.sh:
+  license: GPL-2
+lustre/scripts/lustre_req_history:
+  license: GPL-2
+lustre/tests/mpi/mdsrate.c:
+  license: GPL-2
+lustre/utils/gss/lgss_krb5_utils.h:
+  license: GPL-2
+
+# BSD-style license that licensecheck failed to parse
+lustre/utils/gss/context_lucid.c:
+  license: BSD-3-clause
+
+# rustreapi defaults
+rustreapi/:
+  copyright: 2024-2025, DDN
+  license: Expat
+
+# debian/dkms.conf.in has SPDX-License-Identifier: NOASSERTION
+debian/dkms.conf.in:
+  license: NOASSERTION

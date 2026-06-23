@@ -1,0 +1,26 @@
+# Files: * catch-all — cme leaves copyright as "no-info-found"
+! Files:'*' Copyright='2002-2026, Sun Microsystems, Inc.\n2009-2026, Whamcloud, Inc.'
+
+# licensecheck finds varying forms of
+# "2024, 2025, DDN" / "2024, 2025" / "2024, 2025, DDN."
+# due to typo "2025. DDN" in some source files
+! Files:~"/rustreapi/" Copyright='2024-2025, DDN'
+
+# Man page copyrights (wrong years from licensecheck misparse)
+! Files:'Documentation/man7/lustre.7' Copyright='2007, 2010, Oracle and/or its affiliates.\n2015, 2016, Intel Corporation.'
+! Files:'Documentation/man8/llverdev.8' Copyright='2008, 2010, Oracle and/or its affiliates.'
+! Files:'Documentation/man8/mkfs.lustre.8' Copyright='2007, 2010, Oracle and/or its affiliates.\n2011, 2017, Intel Corporation.'
+! Files:'Documentation/man8/mount.lustre.8' Copyright='2007, 2010, Oracle and/or its affiliates.\n2012, 2017, Intel Corporation.'
+! Files:'Documentation/man8/tunefs.lustre.8' Copyright='2007, 2010, Oracle and/or its affiliates.\n2011, 2017, Intel Corporation.'
+
+# debian/dkms.conf.in — add missing copyright holder
+! Files:'debian/dkms.conf.in' Copyright='2012, Genome Research Ltd.\n2017-2018, Universität Hamburg'
+
+# kernel-doc — cme misparsed "2000, 1" as "1, 2000"
+! Files:'contrib/scripts/kernel-doc' Copyright=~s/^1, 2000,/2000,/
+
+# updatecw.sh — wrong copyright years
+! Files:'contrib/scripts/updatecw.sh' Copyright='2010, Oracle and/or its affiliates.\n2012, 2014, Intel Corporation.'
+
+# mdsrate.c — cme missed Oracle and Intel copyright lines, fix typo
+! Files:'lustre/tests/mpi/mdsrate.c' Copyright='2003, Hewlett-Packard Development Company, LP.\n2008, 2010, Oracle and/or its affiliates.\n2012, 2015, Intel Corporation.'
