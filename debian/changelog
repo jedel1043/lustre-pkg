@@ -1,3 +1,10 @@
+lustre (2.17.54-0ubuntu1~ppa2~stonking1) stonking; urgency=medium
+
+  [ José Julián Espina ]
+  * Migrate package to stonking
+
+ -- José Julián Espina Del Ángel <julian.espina@canonical.com>  Wed, 24 Jun 2026 15:08:50 -0600
+
 lustre (2.17.54-0ubuntu1~ppa2~resolute1) resolute; urgency=medium
 
   [ José Julián Espina ]
