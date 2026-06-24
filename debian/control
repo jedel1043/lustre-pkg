@@ -17,7 +17,7 @@ Build-Depends: debhelper-compat (= 13),
                zlib1g-dev,
                pkgconf,
                libzfslinux-dev,
-Standards-Version: 4.7.3
+Standards-Version: 4.7.4
 Homepage: https://www.lustre.org/
 Vcs-Git: https://github.com/lustre/lustre-release.git
 Vcs-Browser: https://github.com/lustre/lustre-release
@@ -113,7 +113,7 @@ Depends: ${misc:Depends},
          libkeyutils-dev,
          libkrb5-dev,
          libtool,
-         libselinux1-dev,
+         libselinux-dev,
          libssl-dev,
          libyaml-dev,
          linux-base,
@@ -145,7 +145,7 @@ Depends: ${misc:Depends},
          libkeyutils-dev,
          libkrb5-dev,
          libtool,
-         libselinux1-dev,
+         libselinux-dev,
          libssl-dev,
          libyaml-dev,
          linux-base,
