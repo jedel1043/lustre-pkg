@@ -1,3 +1,11 @@
+lustre (2.17.54-0ubuntu1~ppa2~resolute1) resolute; urgency=medium
+
+  [ José Julián Espina ]
+  * Add proper copyright file
+  * Cleanup debian directory
+
+ -- José Julián Espina Del Ángel <julian.espina@canonical.com>  Wed, 24 Jun 2026 14:37:18 -0600
+
 lustre (2.17.54-0ubuntu1~ppa1~resolute1) resolute; urgency=medium
 
   [ José Julián Espina ]
