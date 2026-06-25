@@ -1,0 +1,271 @@
+From: =?utf-8?q?Jos=C3=A9_Juli=C3=A1n_Espina?= <julian.espina@canonical.com>
+Date: Thu, 25 Jun 2026 14:40:17 -0600
+Subject: Add compatibility patch for Linux 7.1
+
+---
+ config/lustre-core.m4               | 60 +++++++++++++++++++++++++++++++++++++
+ include/lustre_compat/linux/folio.h |  7 +++++
+ include/lustre_compat/linux/fs.h    |  6 ++++
+ lustre/include/cl_object.h          |  1 -
+ lustre/include/lustre_compat.h      |  4 +++
+ lustre/llite/dcache.c               |  2 +-
+ lustre/llite/dir.c                  |  1 -
+ lustre/llite/namei.c                |  4 +--
+ lustre/llite/vvp_io.c               |  1 -
+ lustre/osc/osc_io.c                 |  1 -
+ lustre/osd-ldiskfs/osd_io.c         |  1 -
+ 11 files changed, 80 insertions(+), 8 deletions(-)
+
+diff --git a/config/lustre-core.m4 b/config/lustre-core.m4
+index 9ebaa5e..3dbd350 100644
+--- a/config/lustre-core.m4
++++ b/config/lustre-core.m4
+@@ -1397,6 +1397,27 @@ AC_DEFUN([LC_HAVE_WB_STAT_MOD], [
+ 	])
+ ]) # LC_HAVE_WB_STAT_MOD
+ 
++#
++# LC_HAVE_FOLIO_BATCH_HEADER
++#
++# Linux commit 4e1d77a ("folio_batch: rename pagevec.h to folio_batch.h")
++#   Renamed include/linux/pagevec.h to include/linux/folio_batch.h
++#   and removed struct pagevec.
++#
++AC_DEFUN([LC_SRC_HAVE_FOLIO_BATCH_HEADER], [
++	LB2_LINUX_TEST_SRC([folio_batch_header_exists], [
++		#include <linux/folio_batch.h>
++	],[
++	],[-Werror])
++])
++AC_DEFUN([LC_HAVE_FOLIO_BATCH_HEADER], [
++	LB2_MSG_LINUX_TEST_RESULT([if 'linux/folio_batch.h' exists],
++	[folio_batch_header_exists], [
++		AC_DEFINE(HAVE_FOLIO_BATCH_HEADER, 1,
++			['linux/folio_batch.h' exists])
++	])
++]) # LC_HAVE_FOLIO_BATCH_HEADER
++
+ #
+ # LC_HAVE_FOLIO_BATCH
+ #
+@@ -1405,7 +1426,11 @@ AC_DEFUN([LC_HAVE_WB_STAT_MOD], [
+ #
+ AC_DEFUN([LC_SRC_HAVE_FOLIO_BATCH], [
+ 	LB2_LINUX_TEST_SRC([struct_folio_batch_exists], [
++		#if __has_include(<linux/folio_batch.h>)
++		#include <linux/folio_batch.h>
++		#else
+ 		#include <linux/pagevec.h>
++		#endif
+ 	],[
+ 		struct folio_batch fbatch __attribute__ ((unused));
+ 
+@@ -2204,7 +2229,11 @@ AC_DEFUN([LC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK], [
+ #
+ AC_DEFUN([LC_SRC_HAVE_FOLIO_BATCH_REINIT], [
+ 	LB2_LINUX_TEST_SRC([folio_batch_reinit_exists], [
++		#if __has_include(<linux/folio_batch.h>)
++		#include <linux/folio_batch.h>
++		#else
+ 		#include <linux/pagevec.h>
++		#endif
+ 	],[
+ 		struct folio_batch fbatch __attribute__ ((unused));
+ 
+@@ -2673,6 +2702,29 @@ AC_DEFUN([LC_HAVE_DENTRY_D_CHILDREN], [
+ 	])
+ ]) # LC_HAVE_DENTRY_D_CHILDREN
+ 
++#
++# LC_HAVE_DENTRY_D_ALIAS
++#
++# Linux commit v7.0-rc6-2-g2420067ce
++#   struct dentry: make ->d_u anonymous
++#
++AC_DEFUN([LC_SRC_HAVE_DENTRY_D_ALIAS], [
++	LB2_LINUX_TEST_SRC([dentry_d_alias_direct], [
++		#include <linux/dcache.h>
++	],[
++		struct dentry *dentry = NULL;
++
++		return hlist_unhashed(&dentry->d_alias);
++	],[-Werror])
++])
++AC_DEFUN([LC_HAVE_DENTRY_D_ALIAS], [
++	LB2_MSG_LINUX_TEST_RESULT([if 'struct dentry' has direct d_alias member],
++	[dentry_d_alias_direct], [
++		AC_DEFINE(HAVE_DENTRY_D_ALIAS, 1,
++			['struct dentry' has direct d_alias member])
++	])
++]) # LC_HAVE_DENTRY_D_ALIAS
++
+ #
+ # LC_HAVE_GENERIC_ERROR_REMOVE_FOLIO
+ #
+@@ -3870,6 +3922,10 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
+ 
+ 	# 7.0
+ 	LC_SRC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER
++
++	# 7.1
++	LC_SRC_HAVE_FOLIO_BATCH_HEADER
++	LC_SRC_HAVE_DENTRY_D_ALIAS
+ ])
+ 
+ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
+@@ -4091,6 +4147,10 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
+ 
+ 	# 7.0
+ 	LC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER
++
++	# 7.1
++	LC_HAVE_FOLIO_BATCH_HEADER
++	LC_HAVE_DENTRY_D_ALIAS
+ ])
+ 
+ #
+diff --git a/include/lustre_compat/linux/folio.h b/include/lustre_compat/linux/folio.h
+index cae5384..c838387 100644
+--- a/include/lustre_compat/linux/folio.h
++++ b/include/lustre_compat/linux/folio.h
+@@ -22,7 +22,14 @@
+ #include <linux/backing-dev.h>
+ #include <linux/slab.h>
+ #include <linux/security.h>
++#ifdef HAVE_FOLIO_BATCH_HEADER
++#include <linux/folio_batch.h>
++#ifndef PAGEVEC_SIZE
++#define PAGEVEC_SIZE FOLIO_BATCH_SIZE
++#endif
++#elif defined(HAVE_PAGEVEC)
+ #include <linux/pagevec.h>
++#endif
+ #include <linux/workqueue.h>
+ 
+ #ifndef HAVE_GENERIC_ERROR_REMOVE_FOLIO
+diff --git a/include/lustre_compat/linux/fs.h b/include/lustre_compat/linux/fs.h
+index 139ae83..2a007b7 100644
+--- a/include/lustre_compat/linux/fs.h
++++ b/include/lustre_compat/linux/fs.h
+@@ -98,4 +98,10 @@ static inline int inode_generic_drop(struct inode *inode)
+ 	ilookup5_nowait((sb), (hash), (fn), (data))
+ #endif
+ 
++#ifdef HAVE_DENTRY_D_ALIAS
++#define LL_D_ALIAS	d_alias
++#else
++#define LL_D_ALIAS	d_u.d_alias
++#endif
++
+ #endif /* __LIBCFS_LINUX_CFS_FS_H__ */
+diff --git a/lustre/include/cl_object.h b/lustre/include/cl_object.h
+index 2cf3589..e3fdf99 100644
+--- a/lustre/include/cl_object.h
++++ b/lustre/include/cl_object.h
+@@ -78,7 +78,6 @@
+ #include <linux/spinlock.h>
+ #include <lustre_compat/linux/string.h>
+ #include <linux/wait.h>
+-#include <linux/pagevec.h>
+ 
+ #include <lu_object.h>
+ #include <lustre_dlm.h>
+diff --git a/lustre/include/lustre_compat.h b/lustre/include/lustre_compat.h
+index 2278454..889a2c5 100644
+--- a/lustre/include/lustre_compat.h
++++ b/lustre/include/lustre_compat.h
+@@ -26,7 +26,11 @@
+ #include <linux/backing-dev.h>
+ #include <linux/slab.h>
+ #include <linux/security.h>
++#ifdef HAVE_FOLIO_BATCH_HEADER
++#include <linux/folio_batch.h>
++#elif defined(HAVE_PAGEVEC)
+ #include <linux/pagevec.h>
++#endif
+ #include <linux/workqueue.h>
+ #include <lustre_compat/linux/shrinker.h>
+ #include <lustre_compat/linux/xarray.h>
+diff --git a/lustre/llite/dcache.c b/lustre/llite/dcache.c
+index e18f1a3..7ede8cf 100644
+--- a/lustre/llite/dcache.c
++++ b/lustre/llite/dcache.c
+@@ -200,7 +200,7 @@ void ll_prune_aliases(struct inode *inode)
+ 	       PFID(ll_inode2fid(inode)), inode);
+ 
+ 	spin_lock(&inode->i_lock);
+-	hlist_for_each_entry(dentry, &inode->i_dentry, d_u.d_alias)
++	hlist_for_each_entry(dentry, &inode->i_dentry, LL_D_ALIAS)
+ 		d_lustre_invalidate(dentry);
+ 	spin_unlock(&inode->i_lock);
+ 
+diff --git a/lustre/llite/dir.c b/lustre/llite/dir.c
+index 2c9008f..4cb6f44 100644
+--- a/lustre/llite/dir.c
++++ b/lustre/llite/dir.c
+@@ -22,7 +22,6 @@
+ #include <linux/uidgid.h>
+ #include <linux/uaccess.h>
+ #include <linux/buffer_head.h>   // for wait_on_buffer
+-#include <linux/pagevec.h>
+ 
+ #define DEBUG_SUBSYSTEM S_LLITE
+ 
+diff --git a/lustre/llite/namei.c b/lustre/llite/namei.c
+index 717237a..1480ac3 100644
+--- a/lustre/llite/namei.c
++++ b/lustre/llite/namei.c
+@@ -166,7 +166,7 @@ static void ll_prune_negative_children(struct inode *dir)
+ 
+ restart:
+ 	spin_lock(&dir->i_lock);
+-	hlist_for_each_entry(dentry, &dir->i_dentry, d_u.d_alias) {
++	hlist_for_each_entry(dentry, &dir->i_dentry, LL_D_ALIAS) {
+ 		spin_lock(&dentry->d_lock);
+ 		d_for_each_child(child, dentry) {
+ 			if (child->d_inode)
+@@ -581,7 +581,7 @@ static struct dentry *ll_find_alias(struct inode *inode, struct dentry *dentry)
+ 	discon_alias = invalid_alias = NULL;
+ 
+ 	spin_lock(&inode->i_lock);
+-	hlist_for_each_entry(alias, &inode->i_dentry, d_u.d_alias) {
++	hlist_for_each_entry(alias, &inode->i_dentry, LL_D_ALIAS) {
+ 		LASSERT(alias != dentry);
+ 
+ 		spin_lock(&alias->d_lock);
+diff --git a/lustre/llite/vvp_io.c b/lustre/llite/vvp_io.c
+index a0e54d4..976744b 100644
+--- a/lustre/llite/vvp_io.c
++++ b/lustre/llite/vvp_io.c
+@@ -19,7 +19,6 @@
+ #define DEBUG_SUBSYSTEM S_LLITE
+ 
+ #include <obd.h>
+-#include <linux/pagevec.h>
+ #include <lustre_compat/linux/mm.h>
+ #include <linux/memcontrol.h>
+ #include <linux/falloc.h>
+diff --git a/lustre/osc/osc_io.c b/lustre/osc/osc_io.c
+index 08e6d7b..0f4d6ad 100644
+--- a/lustre/osc/osc_io.c
++++ b/lustre/osc/osc_io.c
+@@ -20,7 +20,6 @@
+ 
+ #include <lustre_obdo.h>
+ #include <lustre_osc.h>
+-#include <linux/pagevec.h>
+ #include <linux/falloc.h>
+ 
+ #include "osc_internal.h"
+diff --git a/lustre/osd-ldiskfs/osd_io.c b/lustre/osd-ldiskfs/osd_io.c
+index 4d890da..9655dc0 100644
+--- a/lustre/osd-ldiskfs/osd_io.c
++++ b/lustre/osd-ldiskfs/osd_io.c
+@@ -24,7 +24,6 @@
+ #include <linux/fs.h>
+ #include <linux/mm.h>
+ #include <linux/swap.h>
+-#include <linux/pagevec.h>
+ #include <linux/blk_types.h>
+ 
+ /*
