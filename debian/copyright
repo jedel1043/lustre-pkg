@@ -18,7 +18,6 @@ License: GPL-2
 
 Files: include/*
        lib/*
-       libcfs/*
        lnet/*
        lustre/*
 Copyright: 2010-2017, Intel Corporation.
@@ -32,24 +31,6 @@ License: Expat
 Files: Documentation/osd-api.txt
 Copyright: 2011-2018, 2020, Intel Corporation.
 License: GPL-2
-
-Files: config/ac_pkg_swig.m4
-Copyright: 2011, Murray Cumming <murrayc@openismus.com>
-           2008, Sebastian Huber <sebastian-huber@web.de>
-           2008, Rafael Laboissiere <rafael@laboissiere.net>
-           2008, Andrew Collier
-           2008, Alan W. Irwin
-License: GPL-2+
-
-Files: config/ac_python_devel.m4
-Copyright: 2013, Daniel Mullner <muellner@math.stanford.edu>
-           2009, Sebastian Huber <sebastian-huber@web.de>
-           2009, Rafael Laboissiere <rafael@laboissiere.net>
-           2009, Matteo Settenvini <matteo@member.fsf.org>
-           2009, Horst Knorr <hk_classes@knoda.org>
-           2009, Andrew Collier
-           2009, Alan W. Irwin
-License: GPL-3+
 
 Files: contrib/yaml-event-dump.c
 Copyright: 2023, James Simmons <jsimmons@infradead.org>
@@ -1070,14 +1051,6 @@ License: GPL-2+
         (at your option) any later version.
         On Debian systems, the complete text of the GNU General Public
         License version 2 can be found in '/usr/share/common-licenses/GPL-2'.
-
-License: GPL-3+
-        This program is free software; you can redistribute it and/or modify
-        it under the terms of the GNU General Public License as published by
-        the Free Software Foundation; either version 3 of the License, or
-        (at your option) any later version.
-        On Debian systems, the complete text of the GNU General Public
-        License version 3 can be found in '/usr/share/common-licenses/GPL-3'.
 
 License: HPND-sell-variant
         Permission to use, copy, modify, distribute, and sell this software and
