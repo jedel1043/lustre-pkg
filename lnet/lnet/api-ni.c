@@ -20,6 +20,7 @@
 #include <linux/libcfs/libcfs.h>
 #include <linux/lnet/lib-lnet.h>
 #include <uapi/linux/lustre/lustre_ver.h>
+#include "lock.h"
 #include "udsp.h"
 
 #define D_LNI D_CONSOLE
@@ -36,7 +37,7 @@ struct lnet the_lnet = {
 };		/* THE state of the network */
 EXPORT_SYMBOL(the_lnet);
 
-#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 17, 53, 0)
+#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 19, 53, 0)
 static char *ip2nets = "";
 module_param(ip2nets, charp, 0444);
 MODULE_PARM_DESC(ip2nets, "LNET network <- IP table (Deprecated)");
@@ -59,7 +60,7 @@ module_param(use_tcp_bonding, int, 0444);
 MODULE_PARM_DESC(use_tcp_bonding,
 		 "use_tcp_bonding parameter has been removed");
 
-unsigned int lnet_numa_range = 0;
+unsigned int lnet_numa_range;
 module_param(lnet_numa_range, uint, 0444);
 MODULE_PARM_DESC(lnet_numa_range,
 		"NUMA range to consider during Multi-Rail selection");
@@ -77,7 +78,7 @@ static struct kernel_param_ops param_ops_health_sensitivity = {
 };
 #define param_check_health_sensitivity(name, p) \
 		__param_check(name, p, int)
-module_param(lnet_health_sensitivity, health_sensitivity, S_IRUGO|S_IWUSR);
+module_param(lnet_health_sensitivity, health_sensitivity, 0644);
 MODULE_PARM_DESC(lnet_health_sensitivity,
 		"Value to decrement the health value by on error");
 
@@ -93,7 +94,7 @@ static struct kernel_param_ops param_ops_recovery_interval = {
 };
 #define param_check_recovery_interval(name, p) \
 		__param_check(name, p, int)
-module_param(lnet_recovery_interval, recovery_interval, S_IRUGO|S_IWUSR);
+module_param(lnet_recovery_interval, recovery_interval, 0644);
 MODULE_PARM_DESC(lnet_recovery_interval,
 		"DEPRECATED - Interval to recover unhealthy interfaces in seconds");
 
@@ -134,7 +135,7 @@ module_param(lnet_interfaces_max, interfaces_max, 0644);
 MODULE_PARM_DESC(lnet_interfaces_max,
 		"Maximum number of interfaces in a node.");
 
-unsigned lnet_peer_discovery_disabled = 0;
+unsigned int lnet_peer_discovery_disabled;
 static int discovery_set(const char *val, const struct kernel_param *kp);
 
 static struct kernel_param_ops param_ops_discovery_disabled = {
@@ -172,7 +173,7 @@ static struct kernel_param_ops param_ops_transaction_timeout = {
 
 #define param_check_transaction_timeout(name, p) \
 		__param_check(name, p, int)
-module_param(lnet_transaction_timeout, transaction_timeout, S_IRUGO|S_IWUSR);
+module_param(lnet_transaction_timeout, transaction_timeout, 0644);
 MODULE_PARM_DESC(lnet_transaction_timeout,
 		"Maximum number of seconds to wait for a peer response.");
 
@@ -186,7 +187,7 @@ static struct kernel_param_ops param_ops_retry_count = {
 
 #define param_check_retry_count(name, p) \
 		__param_check(name, p, int)
-module_param(lnet_retry_count, retry_count, S_IRUGO|S_IWUSR);
+module_param(lnet_retry_count, retry_count, 0644);
 MODULE_PARM_DESC(lnet_retry_count,
 		 "Maximum number of times to retry transmitting a message");
 
@@ -239,6 +240,7 @@ struct lnet_genl_ping_list {
 	unsigned int			lgpl_failed_count;
 	signed long			lgpl_timeout;
 	struct lnet_nid			lgpl_src_nid;
+
 	GENRADIX(struct lnet_fail_ping)	lgpl_failed;
 	GENRADIX(struct lnet_processid)	lgpl_list;
 };
@@ -254,7 +256,7 @@ static int
 sensitivity_set(const char *val, const struct kernel_param *kp)
 {
 	int rc;
-	unsigned *sensitivity = (unsigned *)kp->arg;
+	unsigned int *sensitivity = kp->arg;
 	unsigned long value;
 
 	rc = kstrtoul(val, 0, &value);
@@ -333,7 +335,7 @@ static int
 discovery_set(const char *val, const struct kernel_param *kp)
 {
 	int rc;
-	unsigned *discovery_off = (unsigned *)kp->arg;
+	unsigned int *discovery_off = kp->arg;
 	unsigned long value;
 	struct lnet_ping_buffer *pbuf;
 
@@ -397,8 +399,7 @@ drop_asym_route_set(const char *val, const struct kernel_param *kp)
 
 	rc = kstrtoul(val, 0, &value);
 	if (rc) {
-		CERROR("Invalid module parameter value for "
-		       "'lnet_drop_asym_route'\n");
+		CERROR("Invalid module parameter value for 'lnet_drop_asym_route'\n");
 		return rc;
 	}
 
@@ -424,7 +425,7 @@ static int
 transaction_to_set(const char *val, const struct kernel_param *kp)
 {
 	int rc;
-	unsigned *transaction_to = (unsigned *)kp->arg;
+	unsigned int *transaction_to = kp->arg;
 	unsigned long value;
 
 	rc = kstrtoul(val, 0, &value);
@@ -441,8 +442,7 @@ transaction_to_set(const char *val, const struct kernel_param *kp)
 
 	if (value <= lnet_retry_count || value == 0) {
 		mutex_unlock(&the_lnet.ln_api_mutex);
-		CERROR("Invalid value for lnet_transaction_timeout (%lu). "
-		       "Has to be greater than lnet_retry_count (%u)\n",
+		CERROR("Invalid value for lnet_transaction_timeout (%lu). Has to be greater than lnet_retry_count (%u)\n",
 		       value, lnet_retry_count);
 		return -EINVAL;
 	}
@@ -467,7 +467,7 @@ static int
 retry_count_set(const char *val, const struct kernel_param *kp)
 {
 	int rc;
-	unsigned *retry_count = (unsigned *)kp->arg;
+	unsigned int *retry_count = kp->arg;
 	unsigned long value;
 
 	rc = kstrtoul(val, 0, &value);
@@ -490,8 +490,7 @@ retry_count_set(const char *val, const struct kernel_param *kp)
 
 	if (value > lnet_transaction_timeout) {
 		mutex_unlock(&the_lnet.ln_api_mutex);
-		CERROR("Invalid value for lnet_retry_count (%lu). "
-		       "Has to be smaller than lnet_transaction_timeout (%u)\n",
+		CERROR("Invalid value for lnet_retry_count (%lu). Has to be smaller than lnet_transaction_timeout (%u)\n",
 		       value, lnet_transaction_timeout);
 		return -EINVAL;
 	}
@@ -553,7 +552,7 @@ response_tracking_set(const char *val, const struct kernel_param *kp)
 	return 0;
 }
 
-#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 17, 53, 0)
+#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 19, 53, 0)
 static const char *
 lnet_get_routes(void)
 {
@@ -564,7 +563,7 @@ lnet_get_routes(void)
 static const char *
 lnet_get_networks(void)
 {
-#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 17, 53, 0)
+#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 19, 53, 0)
 	const char *nets;
 	int rc;
 
@@ -716,8 +715,7 @@ lnet_destroy_locks(void)
 	}
 }
 
-static int
-lnet_create_locks(void)
+static int __init lnet_create_locks(void)
 {
 	lnet_init_locks();
 
@@ -736,7 +734,7 @@ lnet_create_locks(void)
 	return -ENOMEM;
 }
 
-static void lnet_assert_wire_constants(void)
+static void __init lnet_assert_wire_constants(void)
 {
 	/* Wire protocol assertions generated by 'wirecheck'
 	 * running on Linux robert.bartonsoftware.com 2.6.8-1.521
@@ -1003,11 +1001,11 @@ lnet_counters_get_common_locked(struct lnet_counters_common *common)
 	struct lnet_counters *ctr;
 	int i;
 
-	/* FIXME !!! Their is no assert_lnet_net_locked() to ensure this
+	/* FIXME !!! There is no assert_lnet_net_locked() to ensure this
 	 * actually called under the protection of the lnet_net_lock.
+	 *
+	 * Callers are responsible for zeroing @common before calling.
 	 */
-	memset(common, 0, sizeof(*common));
-
 	cfs_percpt_for_each(ctr, i, the_lnet.ln_counters) {
 		common->lcc_msgs_max     += ctr->lct_common.lcc_msgs_max;
 		common->lcc_msgs_alloc   += ctr->lct_common.lcc_msgs_alloc;
@@ -1026,8 +1024,11 @@ lnet_counters_get_common_locked(struct lnet_counters_common *common)
 void
 lnet_counters_get_common(struct lnet_counters_common *common)
 {
+	memset(common, 0, sizeof(*common));
+
 	lnet_net_lock(LNET_LOCK_EX);
-	lnet_counters_get_common_locked(common);
+	if (the_lnet.ln_state == LNET_STATE_RUNNING)
+		lnet_counters_get_common_locked(common);
 	lnet_net_unlock(LNET_LOCK_EX);
 }
 EXPORT_SYMBOL(lnet_counters_get_common);
@@ -1098,6 +1099,60 @@ lnet_counters_reset(void)
 	cfs_percpt_for_each(counters, i, the_lnet.ln_counters)
 		memset(counters, 0, sizeof(struct lnet_counters));
 avoid_reset:
+	lnet_net_unlock(LNET_LOCK_EX);
+}
+
+static void
+lnet_obj_stats_reset(struct lnet_element_stats *es,
+		     struct lnet_latency_stats *lat)
+{
+	int op;
+
+	lnet_reset_element_stats(es);
+	for (op = 0; op < LNET_LATENCY_NR; op++)
+		lnet_latency_stats_reset(&lat[op]);
+}
+
+/**
+ * lnet_iface_stats_reset() - Zero per-NI and per-peer-NI statistics.
+ *
+ * The global counters aside, the send, receive and drop counts and the
+ * latency accumulators are kept on each local NI and peer NI and otherwise
+ * only clear when the interface or peer is torn down. Clear them here so a
+ * "lnetctl stats reset" gives those figures a fresh start too. Concurrent
+ * data-path updates race benignly; the values are telemetry.
+ */
+static void
+lnet_iface_stats_reset(void)
+{
+	struct lnet_peer_table *ptable;
+	struct lnet_peer_ni *lpni;
+	struct lnet_peer *lp;
+	struct lnet_net *net;
+	struct lnet_ni *ni;
+	int lncpt, cpt;
+
+	lnet_net_lock(LNET_LOCK_EX);
+	if (the_lnet.ln_state != LNET_STATE_RUNNING)
+		goto out_net_unlock;
+
+	list_for_each_entry(net, &the_lnet.ln_nets, net_list)
+		list_for_each_entry(ni, &net->net_ni_list, ni_netlist)
+			lnet_obj_stats_reset(&ni->ni_stats, ni->ni_latency);
+
+	lncpt = cfs_percpt_number(the_lnet.ln_peer_tables);
+	for (cpt = 0; cpt < lncpt; cpt++) {
+		ptable = the_lnet.ln_peer_tables[cpt];
+		list_for_each_entry(lp, &ptable->pt_peer_list, lp_peer_list) {
+			lpni = NULL;
+			while ((lpni = lnet_get_next_peer_ni_locked(lp, NULL,
+								    lpni)))
+				lnet_obj_stats_reset(&lpni->lpni_stats,
+						     lpni->lpni_latency);
+		}
+	}
+
+out_net_unlock:
 	lnet_net_unlock(LNET_LOCK_EX);
 }
 
@@ -2175,9 +2230,8 @@ lnet_ping_target_install_locked(struct lnet_ping_buffer *pbuf)
 		atomic_inc_return(&the_lnet.ln_ping_target_seqno);
 }
 
-static void
-lnet_ping_target_update(struct lnet_ping_buffer *pbuf,
-			struct lnet_handle_md ping_mdh)
+static void lnet_ping_target_update(struct lnet_ping_buffer *pbuf,
+				    struct lnet_handle_md ping_mdh)
 __must_hold(&the_lnet.ln_api_mutex)
 {
 	struct lnet_ping_buffer *old_pbuf = NULL;
@@ -2431,8 +2485,8 @@ lnet_ni_unlink_locked(struct lnet_ni *ni)
 	lnet_ni_decref_locked(ni, 0);
 }
 
-static void
-lnet_clear_zombies_nis_locked(struct lnet_net *net)
+static void lnet_clear_zombies_nis_locked(struct lnet_net *net)
+__must_hold(&the_lnet.ln_api_mutex)
 {
 	struct list_head *zombie_list = &net->net_ni_zombie;
 	enum lnet_ni_state state;
@@ -2515,8 +2569,8 @@ lnet_clear_zombies_nis_locked(struct lnet_net *net)
 }
 
 /* shutdown down the NI and release refcount */
-static void
-lnet_shutdown_lndni(struct lnet_ni *ni)
+static void lnet_shutdown_lndni(struct lnet_ni *ni)
+__must_hold(&the_lnet.ln_api_mutex)
 {
 	int i;
 	struct lnet_net *net = ni->ni_net;
@@ -2538,8 +2592,8 @@ lnet_shutdown_lndni(struct lnet_ni *ni)
 	lnet_net_unlock(LNET_LOCK_EX);
 }
 
-static void
-lnet_shutdown_lndnet(struct lnet_net *net)
+static void lnet_shutdown_lndnet(struct lnet_net *net)
+__must_hold(&the_lnet.ln_api_mutex)
 {
 	struct lnet_ni *ni;
 
@@ -2563,10 +2617,54 @@ lnet_shutdown_lndnet(struct lnet_net *net)
 	lnet_net_free(net);
 }
 
-static void
-lnet_shutdown_lndnets(void)
+static void lnet_shutdown_lndnet_start(struct lnet_net *net)
+__must_hold(&the_lnet.ln_api_mutex)
+{
+	struct lnet_ni *ni;
+
+	lnet_net_lock(LNET_LOCK_EX);
+	while ((ni = list_first_entry_or_null(&net->net_ni_list,
+					      struct lnet_ni,
+					      ni_netlist)) != NULL) {
+		lnet_ni_lock(ni);
+		ni->ni_state = LNET_NI_STATE_DELETING;
+		lnet_ni_unlock(ni);
+		lnet_ni_unlink_locked(ni);
+		lnet_incr_dlc_seq();
+	}
+	lnet_net_unlock(LNET_LOCK_EX);
+}
+
+static void lnet_shutdown_lndnet_finish(struct lnet_net *net)
+__must_hold(&the_lnet.ln_api_mutex)
+{
+	struct lnet_ni *ni;
+
+	lnet_net_lock(LNET_LOCK_EX);
+	list_del_init(&net->net_list);
+	lnet_net_unlock(LNET_LOCK_EX);
+
+	list_for_each_entry(ni, &net->net_ni_zombie, ni_netlist) {
+		int i;
+
+		/* clear messages for this NI on the lazy portal */
+		for (i = 0; i < the_lnet.ln_nportals; i++)
+			lnet_clear_lazy_portal(ni, i, "Shutting down NI");
+	}
+
+	lnet_net_lock(LNET_LOCK_EX);
+	lnet_clear_zombies_nis_locked(net);
+	lnet_net_unlock(LNET_LOCK_EX);
+
+	lnet_peer_tables_cleanup(net);
+	lnet_net_free(net);
+}
+
+static void lnet_shutdown_lndnets(void)
+__must_hold(&the_lnet.ln_api_mutex)
 {
 	struct lnet_net *net;
+	struct lnet_net *net_tmp;
 	LIST_HEAD(resend);
 	struct lnet_msg *msg, *tmp;
 
@@ -2594,11 +2692,17 @@ lnet_shutdown_lndnets(void)
 	}
 	lnet_net_unlock(LNET_LOCK_EX);
 
-	/* iterate through the net zombie list and delete each net */
-	while ((net = list_first_entry_or_null(&the_lnet.ln_net_zombie,
-					       struct lnet_net,
-					       net_list)) != NULL)
-		lnet_shutdown_lndnet(net);
+	/*
+	 * split the shutdown into two parts so that we can parallelize the
+	 * shutdown process.
+	 */
+	list_for_each_entry(net, &the_lnet.ln_net_zombie, net_list)
+		lnet_shutdown_lndnet_start(net);
+
+	list_for_each_entry_safe(net, net_tmp, &the_lnet.ln_net_zombie,
+				 net_list) {
+		lnet_shutdown_lndnet_finish(net);
+	}
 
 	spin_lock(&the_lnet.ln_msg_resend_lock);
 	list_splice(&the_lnet.ln_msg_resend, &resend);
@@ -2615,8 +2719,8 @@ lnet_shutdown_lndnets(void)
 	lnet_net_unlock(LNET_LOCK_EX);
 }
 
-static int
-lnet_startup_lndni(struct lnet_ni *ni, struct lnet_lnd_tunables *tun)
+static int lnet_startup_lndni(struct lnet_ni *ni, struct lnet_lnd_tunables *tun)
+__must_hold(&the_lnet.ln_api_mutex)
 {
 	int			rc = -EINVAL;
 	struct lnet_tx_queue	*tq;
@@ -2653,6 +2757,23 @@ lnet_startup_lndni(struct lnet_ni *ni, struct lnet_lnd_tunables *tun)
 		return -EEXIST;
 	}
 	lnet_net_unlock(0);
+
+	/*
+	 * Fallback for NIs whose CPTs were not explicitly configured and
+	 * whose LND did not bind them during startup (e.g. the loopback
+	 * NI). The device LNDs call lnet_ni_set_default_cpts() themselves,
+	 * before allocating their per-CPT scheduler threads and memory
+	 * pools, so that those resources match the bound CPT set and
+	 * ni_cpts is finalized before the NI goes live; for those this
+	 * call is a no-op. The helper self-gates on ni_cpts_default.
+	 */
+	rc = lnet_ni_set_default_cpts(ni);
+	if (rc != 0) {
+		LCONSOLE_ERROR("Error %d setting CPTs for LNI %s\n",
+			       rc, libcfs_lnd2str(net->net_lnd->lnd_type));
+		lnet_shutdown_lndni(ni);
+		return rc;
+	}
 
 	/* We keep a reference on the loopback net through the loopback NI */
 	if (net->net_lnd->lnd_type == LOLND) {
@@ -2741,8 +2862,9 @@ static const struct lnet_lnd *lnet_load_lnd(u32 lnd_type)
 	return lnd;
 }
 
-static int
-lnet_startup_lndnet(struct lnet_net *net, struct lnet_lnd_tunables *tun)
+static int lnet_startup_lndnet(struct lnet_net *net,
+			       struct lnet_lnd_tunables *tun)
+__must_hold(&the_lnet.ln_api_mutex)
 {
 	struct lnet_ni *ni;
 	struct lnet_net *net_l = NULL;
@@ -2807,7 +2929,7 @@ lnet_startup_lndnet(struct lnet_net *net, struct lnet_lnd_tunables *tun)
 					      ni_netlist)) != NULL) {
 		list_del_init(&ni->ni_netlist);
 
-		/* make sure that the the NI we're about to start
+		/* make sure that the NI we're about to start
 		 * up is actually unique. if it's not fail. */
 
 		if (ni->ni_interface &&
@@ -2898,8 +3020,8 @@ failed0:
 	return rc;
 }
 
-static int
-lnet_startup_lndnets(struct list_head *netlist)
+static int lnet_startup_lndnets(struct list_head *netlist)
+__must_hold(&the_lnet.ln_api_mutex)
 {
 	struct lnet_net		*net;
 	int			rc;
@@ -3100,7 +3222,7 @@ static struct genl_family lnet_family;
  * * %0 on success
  * * %negative on failures.
  */
-int lnet_lib_init(void)
+int __init lnet_lib_init(void)
 {
 	int rc;
 
@@ -3113,8 +3235,7 @@ int lnet_lib_init(void)
 	LASSERT(the_lnet.ln_cpt_number > 0);
 	if (the_lnet.ln_cpt_number > LNET_CPT_MAX) {
 		/* we are under risk of consuming all lh_cookie */
-		CERROR("Can't have %d CPTs for LNet (max allowed is %d), "
-		       "please change setting of CPT-table and retry\n",
+		CERROR("Can't have %d CPTs for LNet (max allowed is %d), please change setting of CPT-table and retry\n",
 		       the_lnet.ln_cpt_number, LNET_CPT_MAX);
 		return -E2BIG;
 	}
@@ -3258,7 +3379,7 @@ LNetNIInit(lnet_pid_t requested_pid)
 	if (rc < 0)
 		goto err_empty_list;
 
-#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 17, 53, 0)
+#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 19, 53, 0)
 	if (!the_lnet.ln_nis_from_mod_params) {
 		int im_a_router = 0;
 
@@ -3328,7 +3449,7 @@ err_acceptor_stop:
 	the_lnet.ln_refcount = 0;
 	lnet_acceptor_stop();
 err_destroy_routes:
-#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 17, 53, 0)
+#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 19, 53, 0)
 	if (!the_lnet.ln_nis_from_mod_params)
 		lnet_destroy_routes();
 err_shutdown_lndnis:
@@ -3368,6 +3489,7 @@ LNetNIFini(void)
 		the_lnet.ln_refcount--;
 	} else {
 		lnet_handler_t dc_handler = the_lnet.ln_dc_handler;
+
 		LASSERT(!the_lnet.ln_niinit_self);
 
 		lnet_net_lock(LNET_LOCK_EX);
@@ -3843,6 +3965,7 @@ static void lnet_notify_net_update(struct lnet_net *net, bool delete)
 
 static int lnet_add_net_common(struct lnet_net *net,
 			       struct lnet_ioctl_config_lnd_tunables *tun)
+__must_hold(&the_lnet.ln_api_mutex)
 {
 	struct lnet_handle_md ping_mdh;
 	struct lnet_ping_buffer *pbuf;
@@ -4613,6 +4736,7 @@ LNetCtl(unsigned int cmd, void *arg)
 	{
 		mutex_lock(&the_lnet.ln_api_mutex);
 		lnet_counters_reset();
+		lnet_iface_stats_reset();
 		mutex_unlock(&the_lnet.ln_api_mutex);
 		return 0;
 	}
@@ -4651,6 +4775,7 @@ LNetCtl(unsigned int cmd, void *arg)
 
 	case IOC_LIBCFS_SET_NUMA_RANGE: {
 		struct lnet_ioctl_set_value *numa;
+
 		numa = arg;
 		if (numa->sv_hdr.ioc_len != sizeof(*numa))
 			return -EINVAL;
@@ -4662,6 +4787,7 @@ LNetCtl(unsigned int cmd, void *arg)
 
 	case IOC_LIBCFS_GET_NUMA_RANGE: {
 		struct lnet_ioctl_set_value *numa;
+
 		numa = arg;
 		if (numa->sv_hdr.ioc_len != sizeof(*numa))
 			return -EINVAL;
@@ -4701,6 +4827,7 @@ LNetCtl(unsigned int cmd, void *arg)
 
 	case IOC_LIBCFS_GET_RECOVERY_QUEUE: {
 		struct lnet_ioctl_recovery_list *list = arg;
+
 		if (list->rlst_hdr.ioc_len < sizeof(*list))
 			return -EINVAL;
 
@@ -5176,6 +5303,7 @@ struct lnet_nid_cpt {
 struct lnet_genl_nid_cpt_list {
 	unsigned int lgncl_index;
 	unsigned int lgncl_list_count;
+
 	GENRADIX(struct lnet_nid_cpt) lgncl_lnc_list;
 };
 
@@ -5587,8 +5715,149 @@ static const struct ln_key_list local_ni_stats_list = {
 			.lkp_value	= "drop_count",
 			.lkp_data_type	= NLA_U32
 		},
+		[LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_SAMPLES] = {
+			.lkp_value	= "put_egress_samples",
+			.lkp_data_type	= NLA_U32
+		},
+		[LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_MIN_NSEC] = {
+			.lkp_value	= "put_egress_min_nsec",
+			.lkp_data_type	= NLA_U64
+		},
+		[LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_MAX_NSEC] = {
+			.lkp_value	= "put_egress_max_nsec",
+			.lkp_data_type	= NLA_U64
+		},
+		[LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_AVG_NSEC] = {
+			.lkp_value	= "put_egress_avg_nsec",
+			.lkp_data_type	= NLA_U64
+		},
+		[LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_SAMPLES] = {
+			.lkp_value	= "get_rtt_samples",
+			.lkp_data_type	= NLA_U32
+		},
+		[LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_MIN_NSEC] = {
+			.lkp_value	= "get_rtt_min_nsec",
+			.lkp_data_type	= NLA_U64
+		},
+		[LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_MAX_NSEC] = {
+			.lkp_value	= "get_rtt_max_nsec",
+			.lkp_data_type	= NLA_U64
+		},
+		[LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_AVG_NSEC] = {
+			.lkp_value	= "get_rtt_avg_nsec",
+			.lkp_data_type	= NLA_U64
+		},
+		[LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_SAMPLES] = {
+			.lkp_value	= "put_ack_samples",
+			.lkp_data_type	= NLA_U32
+		},
+		[LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_MIN_NSEC] = {
+			.lkp_value	= "put_ack_min_nsec",
+			.lkp_data_type	= NLA_U64
+		},
+		[LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_MAX_NSEC] = {
+			.lkp_value	= "put_ack_max_nsec",
+			.lkp_data_type	= NLA_U64
+		},
+		[LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_AVG_NSEC] = {
+			.lkp_value	= "put_ack_avg_nsec",
+			.lkp_data_type	= NLA_U64
+		},
 	},
 };
+
+/* Netlink attribute ids for one operation's latency fields, in
+ * enum lnet_latency_op order. The peer NI and local NI dumps share the
+ * shape under different attribute namespaces. Min, max and average are
+ * reported in nanoseconds so a sub-microsecond egress is not truncated to
+ * zero.
+ */
+struct lnet_nl_latency_keys {
+	int samples;
+	int min_nsec;
+	int max_nsec;
+	int avg_nsec;
+	int pad;
+};
+
+static const struct lnet_nl_latency_keys
+lnet_peer_ni_latency_keys[LNET_LATENCY_NR] = {
+	[LNET_LATENCY_PUT_EGRESS] = {
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_SAMPLES,
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_MIN_NSEC,
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_MAX_NSEC,
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_AVG_NSEC,
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PAD,
+	},
+	[LNET_LATENCY_GET_RTT] = {
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_SAMPLES,
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_MIN_NSEC,
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_MAX_NSEC,
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_AVG_NSEC,
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PAD,
+	},
+	[LNET_LATENCY_PUT_ACK_RTT] = {
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_SAMPLES,
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_MIN_NSEC,
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_MAX_NSEC,
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_AVG_NSEC,
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PAD,
+	},
+};
+
+static const struct lnet_nl_latency_keys
+lnet_local_ni_latency_keys[LNET_LATENCY_NR] = {
+	[LNET_LATENCY_PUT_EGRESS] = {
+		LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_SAMPLES,
+		LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_MIN_NSEC,
+		LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_MAX_NSEC,
+		LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_AVG_NSEC,
+		LNET_NET_LOCAL_NI_STATS_ATTR_PAD,
+	},
+	[LNET_LATENCY_GET_RTT] = {
+		LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_SAMPLES,
+		LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_MIN_NSEC,
+		LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_MAX_NSEC,
+		LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_AVG_NSEC,
+		LNET_NET_LOCAL_NI_STATS_ATTR_PAD,
+	},
+	[LNET_LATENCY_PUT_ACK_RTT] = {
+		LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_SAMPLES,
+		LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_MIN_NSEC,
+		LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_MAX_NSEC,
+		LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_AVG_NSEC,
+		LNET_NET_LOCAL_NI_STATS_ATTR_PAD,
+	},
+};
+
+/**
+ * lnet_nl_put_latency() - Emit per-operation latency fields into a dump.
+ * @msg: Netlink skb with a "statistics" mapping open.
+ * @latency: The LNET_LATENCY_NR accumulators to report.
+ * @keys: Attribute ids to emit under, peer NI or local NI namespace.
+ *
+ * A zero sample count reports zeros rather than an unseeded min/max.
+ */
+static void lnet_nl_put_latency(struct sk_buff *msg,
+				struct lnet_latency_stats *latency,
+				const struct lnet_nl_latency_keys *keys)
+{
+	enum lnet_latency_op op;
+
+	for (op = 0; op < LNET_LATENCY_NR; op++) {
+		struct lnet_latency_summary sum;
+
+		lnet_latency_stats_summary(&latency[op], &sum);
+
+		nla_put_u32(msg, keys[op].samples, sum.lat_samples);
+		nla_put_u64_64bit(msg, keys[op].min_nsec, sum.lat_min_ns,
+				  keys[op].pad);
+		nla_put_u64_64bit(msg, keys[op].max_nsec, sum.lat_max_ns,
+				  keys[op].pad);
+		nla_put_u64_64bit(msg, keys[op].avg_nsec, sum.lat_avg_ns,
+				  keys[op].pad);
+	}
+}
 
 static const struct ln_key_list local_ni_msg_stats_list = {
 	.lkl_maxattr			= LNET_NET_LOCAL_NI_MSG_STATS_ATTR_MAX,
@@ -5962,6 +6231,8 @@ static int lnet_net_show_dump(struct sk_buff *msg,
 					    stats.iel_recv_count);
 				nla_put_u32(msg, LNET_NET_LOCAL_NI_STATS_ATTR_DROP_COUNT,
 					    stats.iel_drop_count);
+				lnet_nl_put_latency(msg, ni->ni_latency,
+						    lnet_local_ni_latency_keys);
 				nla_nest_end(msg, ni_stats);
 				nla_nest_end(msg, stats_attr);
 
@@ -6725,10 +6996,10 @@ out:
 	return rc;
 }
 
-/* Called with ln_api_mutex */
 static int lnet_parse_peer_nis(struct nlattr *rlist, struct genl_info *info,
 			       struct lnet_nid *pnid, bool mr,
 			       bool *create_some)
+__must_hold(&the_lnet.ln_api_mutex)
 {
 	struct lnet_nid snid = LNET_ANY_NID;
 	struct nlattr *props;
@@ -7019,6 +7290,7 @@ struct lnet_route_properties {
 struct lnet_genl_route_list {
 	unsigned int				lgrl_index;
 	unsigned int				lgrl_count;
+
 	GENRADIX(struct lnet_route_properties)	lgrl_list;
 };
 
@@ -7393,6 +7665,7 @@ send_error:
 struct lnet_genl_processid_list {
 	unsigned int			lgpl_index;
 	unsigned int			lgpl_count;
+
 	GENRADIX(struct lnet_processid)	lgpl_list;
 };
 
@@ -7642,6 +7915,54 @@ static const struct ln_key_list lnet_peer_ni_list_stats_count = {
 			.lkp_value				= "drop_count",
 			.lkp_data_type				= NLA_U32,
 		},
+		[LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_SAMPLES] = {
+			.lkp_value		= "put_egress_samples",
+			.lkp_data_type		= NLA_U32,
+		},
+		[LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_MIN_NSEC] = {
+			.lkp_value		= "put_egress_min_nsec",
+			.lkp_data_type		= NLA_U64,
+		},
+		[LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_MAX_NSEC] = {
+			.lkp_value		= "put_egress_max_nsec",
+			.lkp_data_type		= NLA_U64,
+		},
+		[LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_AVG_NSEC] = {
+			.lkp_value		= "put_egress_avg_nsec",
+			.lkp_data_type		= NLA_U64,
+		},
+		[LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_SAMPLES] = {
+			.lkp_value		= "get_rtt_samples",
+			.lkp_data_type		= NLA_U32,
+		},
+		[LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_MIN_NSEC] = {
+			.lkp_value		= "get_rtt_min_nsec",
+			.lkp_data_type		= NLA_U64,
+		},
+		[LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_MAX_NSEC] = {
+			.lkp_value		= "get_rtt_max_nsec",
+			.lkp_data_type		= NLA_U64,
+		},
+		[LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_AVG_NSEC] = {
+			.lkp_value		= "get_rtt_avg_nsec",
+			.lkp_data_type		= NLA_U64,
+		},
+		[LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_SAMPLES] = {
+			.lkp_value		= "put_ack_samples",
+			.lkp_data_type		= NLA_U32,
+		},
+		[LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_MIN_NSEC] = {
+			.lkp_value		= "put_ack_min_nsec",
+			.lkp_data_type		= NLA_U64,
+		},
+		[LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_MAX_NSEC] = {
+			.lkp_value		= "put_ack_max_nsec",
+			.lkp_data_type		= NLA_U64,
+		},
+		[LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_AVG_NSEC] = {
+			.lkp_value		= "put_ack_avg_nsec",
+			.lkp_data_type		= NLA_U64,
+		},
 	},
 };
 
@@ -7879,6 +8200,8 @@ skip_state:
 				nla_put_u32(msg,
 					    LNET_PEER_NI_LIST_STATS_COUNT_ATTR_DROP_COUNT,
 					    stats.iel_drop_count);
+				lnet_nl_put_latency(msg, lpni->lpni_latency,
+						    lnet_peer_ni_latency_keys);
 				nla_nest_end(msg, ni_stats);
 				nla_nest_end(msg, stats_attr);
 
@@ -9142,6 +9465,7 @@ struct lnet_genl_debug_recovery_list {
 	unsigned int			lgdrl_len;
 	struct ln_key_list		*lgdrl_keys;
 	enum lnet_health_type		lgdrl_type;
+
 	GENRADIX(struct lnet_nid)	lgdrl_nids;
 };
 
@@ -9970,6 +10294,229 @@ report_error:
 	RETURN(rc);
 }
 
+/* ---- LNET_CMD_STATS ---- */
+
+static const struct ln_key_list lnet_stats_list = {
+	.lkl_maxattr = LNET_STATS_ATTR_MAX,
+	.lkl_list = {
+		[LNET_STATS_ATTR_HDR]		= {
+			.lkp_value	= "statistics",
+			.lkp_key_format	= LNKF_MAPPING,
+			.lkp_data_type	= NLA_NUL_STRING,
+		},
+		[LNET_STATS_ATTR_MSGS_ALLOC]	= {
+			.lkp_value	= "msgs_alloc",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_MSGS_MAX]	= {
+			.lkp_value	= "msgs_max",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_RST_ALLOC]	= {
+			.lkp_value	= "rst_alloc",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_ERRORS]	= {
+			.lkp_value	= "errors",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_SEND_COUNT]	= {
+			.lkp_value	= "send_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_RESEND_COUNT]	= {
+			.lkp_value	= "resend_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_RESPONSE_TIMEOUT_COUNT] = {
+			.lkp_value	= "response_timeout_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_LOCAL_INTERRUPT_COUNT]	= {
+			.lkp_value	= "local_interrupt_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_LOCAL_DROPPED_COUNT]	= {
+			.lkp_value	= "local_dropped_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_LOCAL_ABORTED_COUNT]	= {
+			.lkp_value	= "local_aborted_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_LOCAL_NO_ROUTE_COUNT]	= {
+			.lkp_value	= "local_no_route_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_LOCAL_TIMEOUT_COUNT]	= {
+			.lkp_value	= "local_timeout_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_LOCAL_ERROR_COUNT]	= {
+			.lkp_value	= "local_error_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_REMOTE_DROPPED_COUNT]	= {
+			.lkp_value	= "remote_dropped_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_REMOTE_ERROR_COUNT]	= {
+			.lkp_value	= "remote_error_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_REMOTE_TIMEOUT_COUNT]	= {
+			.lkp_value	= "remote_timeout_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_NETWORK_TIMEOUT_COUNT]	= {
+			.lkp_value	= "network_timeout_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_FAILED_RESENDS]	= {
+			.lkp_value	= "failed_resends",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_SUCCESSFUL_RESENDS]	= {
+			.lkp_value	= "successful_resends",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_RECV_COUNT]	= {
+			.lkp_value	= "recv_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_ROUTE_COUNT]	= {
+			.lkp_value	= "route_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_DROP_COUNT]	= {
+			.lkp_value	= "drop_count",
+			.lkp_data_type	= NLA_U32,
+		},
+		[LNET_STATS_ATTR_SEND_LENGTH]	= {
+			.lkp_value	= "send_length",
+			.lkp_data_type	= NLA_U64,
+		},
+		[LNET_STATS_ATTR_RECV_LENGTH]	= {
+			.lkp_value	= "recv_length",
+			.lkp_data_type	= NLA_U64,
+		},
+		[LNET_STATS_ATTR_ROUTE_LENGTH]	= {
+			.lkp_value	= "route_length",
+			.lkp_data_type	= NLA_U64,
+		},
+		[LNET_STATS_ATTR_DROP_LENGTH]	= {
+			.lkp_value	= "drop_length",
+			.lkp_data_type	= NLA_U64,
+		},
+	},
+};
+
+static int lnet_stats_show_dump(struct sk_buff *msg,
+				struct netlink_callback *cb)
+{
+	const struct ln_key_list *all[] = { &lnet_stats_list, NULL };
+	struct netlink_ext_ack *extack = cb->extack;
+	int portid = NETLINK_CB(cb->skb).portid;
+	int seq = cb->nlh->nlmsg_seq;
+	struct lnet_counters_common *common;
+	struct lnet_counters_health *health;
+	struct lnet_counters counters;
+	void *hdr;
+	int rc;
+
+	ENTRY;
+	/* The counters are a single record, so one message is all we send */
+	if (cb->args[0])
+		RETURN(0);
+
+	rc = lnet_counters_get(&counters);
+	if (rc < 0) {
+		NL_SET_ERR_MSG(extack, "failed to get LNet statistics");
+		RETURN(rc);
+	}
+	common = &counters.lct_common;
+	health = &counters.lct_health;
+
+	rc = lnet_genl_send_scalar_list(msg, portid, seq, &lnet_family,
+					NLM_F_CREATE | NLM_F_MULTI,
+					LNET_CMD_STATS, all);
+	if (rc < 0) {
+		NL_SET_ERR_MSG(extack, "failed to send key table");
+		RETURN(rc);
+	}
+
+	hdr = genlmsg_put(msg, portid, seq, &lnet_family, NLM_F_MULTI,
+			  LNET_CMD_STATS);
+	if (!hdr) {
+		NL_SET_ERR_MSG(extack, "failed to send statistics");
+		RETURN(-EMSGSIZE);
+	}
+
+	if (nla_put_string(msg, LNET_STATS_ATTR_HDR, "") ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_MSGS_ALLOC,
+			common->lcc_msgs_alloc) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_MSGS_MAX,
+			common->lcc_msgs_max) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_RST_ALLOC,
+			health->lch_rst_alloc) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_ERRORS,
+			common->lcc_errors) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_SEND_COUNT,
+			common->lcc_send_count) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_RESEND_COUNT,
+			health->lch_resend_count) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_RESPONSE_TIMEOUT_COUNT,
+			health->lch_response_timeout_count) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_LOCAL_INTERRUPT_COUNT,
+			health->lch_local_interrupt_count) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_LOCAL_DROPPED_COUNT,
+			health->lch_local_dropped_count) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_LOCAL_ABORTED_COUNT,
+			health->lch_local_aborted_count) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_LOCAL_NO_ROUTE_COUNT,
+			health->lch_local_no_route_count) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_LOCAL_TIMEOUT_COUNT,
+			health->lch_local_timeout_count) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_LOCAL_ERROR_COUNT,
+			health->lch_local_error_count) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_REMOTE_DROPPED_COUNT,
+			health->lch_remote_dropped_count) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_REMOTE_ERROR_COUNT,
+			health->lch_remote_error_count) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_REMOTE_TIMEOUT_COUNT,
+			health->lch_remote_timeout_count) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_NETWORK_TIMEOUT_COUNT,
+			health->lch_network_timeout_count) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_FAILED_RESENDS,
+			health->lch_failed_resends) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_SUCCESSFUL_RESENDS,
+			health->lch_successful_resends) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_RECV_COUNT,
+			common->lcc_recv_count) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_ROUTE_COUNT,
+			common->lcc_route_count) ||
+	    nla_put_u32(msg, LNET_STATS_ATTR_DROP_COUNT,
+			common->lcc_drop_count) ||
+	    nla_put_u64_64bit(msg, LNET_STATS_ATTR_SEND_LENGTH,
+			      common->lcc_send_length, LNET_STATS_ATTR_PAD) ||
+	    nla_put_u64_64bit(msg, LNET_STATS_ATTR_RECV_LENGTH,
+			      common->lcc_recv_length, LNET_STATS_ATTR_PAD) ||
+	    nla_put_u64_64bit(msg, LNET_STATS_ATTR_ROUTE_LENGTH,
+			      common->lcc_route_length, LNET_STATS_ATTR_PAD) ||
+	    nla_put_u64_64bit(msg, LNET_STATS_ATTR_DROP_LENGTH,
+			      common->lcc_drop_length, LNET_STATS_ATTR_PAD)) {
+		genlmsg_cancel(msg, hdr);
+		NL_SET_ERR_MSG(extack, "failed to send statistics");
+		RETURN(-EMSGSIZE);
+	}
+
+	genlmsg_end(msg, hdr);
+
+	cb->args[0] = 1;
+
+	RETURN(0);
+}
+
 static const struct genl_multicast_group lnet_mcast_grps[] = {
 	{ .name	=	"ip2net",	},
 	{ .name =	"net",		},
@@ -9982,7 +10529,8 @@ static const struct genl_multicast_group lnet_mcast_grps[] = {
 	{ .name =	"fault",	},
 	{ .name =	"routing",	},
 	{ .name =	"buffers",	},
-	{ .name =	"numa",	},
+	{ .name =	"numa",		},
+	{ .name =	"stats",	},
 };
 
 static const struct genl_ops lnet_genl_ops[] = {
@@ -10069,6 +10617,10 @@ static const struct genl_ops lnet_genl_ops[] = {
 		.cmd		= LNET_CMD_NUMA,
 		.flags		= GENL_ADMIN_PERM,
 		.doit		= lnet_numa_cmd,
+	},
+	{
+		.cmd		= LNET_CMD_STATS,
+		.dumpit		= lnet_stats_show_dump,
 	},
 };
 

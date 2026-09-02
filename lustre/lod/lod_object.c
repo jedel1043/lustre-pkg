@@ -51,7 +51,15 @@ static int lod_lookup(const struct lu_env *env, struct dt_object *dt,
 		      struct dt_rec *rec, const struct dt_key *key)
 {
 	struct dt_object *next = dt_object_child(dt);
-	return next->do_index_ops->dio_lookup(env, next, rec, key);
+	int rc;
+
+	rc = dt_lookup(env, next, rec, key);
+	if (rc == 0)
+		rc = 1;
+	else if (rc == -ENOENT)
+		rc = 0;
+
+	return rc;
 }
 
 /*
@@ -341,6 +349,7 @@ static int lod_striped_lookup(const struct lu_env *env, struct dt_object *dt,
 	struct lod_object *lo = lod_dt_obj(dt);
 	struct dt_object *next;
 	const char *name = (const char *)key;
+	int rc;
 
 	LASSERT(lo->ldo_dir_stripe_count > 0);
 
@@ -369,7 +378,13 @@ static int lod_striped_lookup(const struct lu_env *env, struct dt_object *dt,
 			return -ENODEV;
 	}
 
-	return next->do_index_ops->dio_lookup(env, next, rec, key);
+	rc = dt_lookup(env, next, rec, key);
+	if (rc == 0)
+		rc = 1;
+	else if (rc == -ENOENT)
+		rc = 0;
+
+	return rc;
 }
 
 /*
@@ -2842,12 +2857,10 @@ static int lod_declare_layout_add(const struct lu_env *env,
 		lod_comp->llc_extent.e_end = ext->e_end;
 		lod_comp->llc_stripe_offset = v1->lmm_stripe_offset;
 		lod_comp->llc_flags = comp_v1->lcm_entries[i].lcme_flags;
-		if (lod_comp->llc_flags & LCME_FL_PARITY) {
-			lod_comp->llc_dstripe_count =
-				comp_v1->lcm_entries[i].lcme_dstripe_count;
-			lod_comp->llc_cstripe_count =
-				comp_v1->lcm_entries[i].lcme_cstripe_count;
-		}
+		lod_comp->llc_dstripe_count =
+			comp_v1->lcm_entries[i].lcme_dstripe_count;
+		lod_comp->llc_cstripe_count =
+			comp_v1->lcm_entries[i].lcme_cstripe_count;
 
 		lod_comp->llc_stripe_size = v1->lmm_stripe_size;
 		lod_comp->llc_stripe_count = v1->lmm_stripe_count;
@@ -3073,6 +3086,12 @@ static int lod_declare_layout_set(const struct lu_env *env,
 					if ((flags & LCME_FL_PREF_RW) &&
 					    (lod_comp->llc_flags &
 					     LCME_FL_PARITY)) {
+						mutex_unlock(
+							&lo->ldo_layout_mutex);
+						RETURN(-EINVAL);
+					}
+					if (flags & LCME_FL_NOCOMPR &&
+					    lod_comp->llc_compr_type != 0) {
 						mutex_unlock(
 							&lo->ldo_layout_mutex);
 						RETURN(-EINVAL);
@@ -5365,6 +5384,7 @@ static int lod_get_default_lov_striping(const struct lu_env *env,
 	struct lov_user_md_v1 *v1 = NULL;
 	struct lov_user_md_v3 *v3 = NULL;
 	struct lov_comp_md_v1 *lcm = NULL;
+	struct lov_comp_md_entry_v1 *lcme = NULL;
 	__u32 magic;
 	int append_stripe_count = dah != NULL ? dah->dah_append_stripe_count : 0;
 	const char *append_pool = (dah != NULL &&
@@ -5452,21 +5472,34 @@ static int lod_get_default_lov_striping(const struct lu_env *env,
 		memset(llc, 0, offsetof(typeof(*llc), llc_pool));
 
 		if (lcm != NULL) {
+			lcme = &lcm->lcm_entries[i];
 			v1 = (struct lov_user_md *)((char *)lcm +
-						    lcm->lcm_entries[i].lcme_offset);
+						    lcme->lcme_offset);
 
 			if (want_composite) {
-				llc->llc_extent = lcm->lcm_entries[i].lcme_extent;
+				llc->llc_extent = lcme->lcme_extent;
 				/* We only inherit certain flags from the layout */
-				llc->llc_flags = lcm->lcm_entries[i].lcme_flags &
-					LCME_TEMPLATE_FLAGS;
+				llc->llc_flags = lcme->lcme_flags &
+						 LCME_TEMPLATE_FLAGS;
+
+				/*
+				 * A directory default is a template that
+				 * persists the unbound EC link between data and
+				 * parity comps (LCME_FL_IS_LINK_ID + shared
+				 * id). For directory templates that have a link
+				 * id set, the ids and its flag must be
+				 * inherited as well to files to be created. The
+				 * link is later bound by lod_bind_data_parity()
+				 */
+				if (lcme->lcme_flags & LCME_FL_IS_LINK_ID) {
+					llc->llc_mirror_link_id =
+						lcme_timestamp_id_unpack(
+							lcme->lcme_time_and_id);
+					llc->llc_flags |= LCME_FL_IS_LINK_ID;
+				}
 			}
-			if (llc->llc_flags & LCME_FL_PARITY) {
-				llc->llc_dstripe_count =
-					lcm->lcm_entries[i].lcme_dstripe_count;
-				llc->llc_cstripe_count =
-					lcm->lcm_entries[i].lcme_cstripe_count;
-			}
+			llc->llc_dstripe_count = lcme->lcme_dstripe_count;
+			llc->llc_cstripe_count = lcme->lcme_cstripe_count;
 		}
 
 		CDEBUG(D_LAYOUT,
@@ -6241,8 +6274,18 @@ static int lod_declare_create(const struct lu_env *env, struct dt_object *dt,
 		GOTO(out, rc);
 
 	/* Inject EDQUOT for sanity-quota test_98 */
-	if (CFS_FAIL_CHECK(OBD_FAIL_QUOTA_EDQUOT) && S_ISDIR(attr->la_mode))
-		GOTO(out, rc = -EDQUOT);
+	if (CFS_FAIL_CHECK(OBD_FAIL_QUOTA_EDQUOT) && S_ISDIR(attr->la_mode)) {
+		struct seq_server_site *ss;
+
+		ss = lu_site2seq(dt->do_lu.lo_dev->ld_site);
+		if (cfs_fail_index(cfs_fail_val, ss->ss_node_id)) {
+			rc = -EDQUOT;
+			CERROR("%s: Injecting -EDQUOT for directory create on MDT%04x (fail_val=%x): rc = %d\n",
+			       dt->do_lu.lo_dev->ld_obd->obd_name,
+			       ss->ss_node_id, cfs_fail_val, rc);
+			GOTO(out, rc);
+		}
+	}
 
 	/*
 	 * it's lod_ah_init() that has decided the object will be striped
@@ -8132,7 +8175,7 @@ static int lod_dir_layout_check(const struct lu_env *env,
 		struct lmv_user_mds_data *stripe_desc = lum->lum_objects + i;
 		struct dt_object *stripe_obj = lo->ldo_stripe[i];
 		__u32 lum_mds_idx, dt_mds_idx;
-		int type;
+		int type = LU_SEQ_RANGE_MDT;
 
 		lum_mds_idx = le32_to_cpu(stripe_desc->lum_mds);
 		rc = lod_fld_lookup(env, ld, lu_object_fid(&stripe_obj->do_lu),

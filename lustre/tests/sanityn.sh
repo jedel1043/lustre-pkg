@@ -22,8 +22,6 @@ ALWAYS_EXCEPT="$SANITYN_EXCEPT "
 	always_except LU-10870	40a
 
 if [ $mds1_FSTYPE = "zfs" ]; then
-	# bug number:    LU-15757 (test_102() causes crash in umount later)
-	ALWAYS_EXCEPT+=" 102"
 	# LU-2829 / LU-2887 - make allowances for ZFS slowness
 	TEST33_NFILES=${TEST33_NFILES:-1000}
 fi
@@ -1251,6 +1249,8 @@ run_test 31t "getattr should not revalidate invalid dentry"
 
 test_32b() { # bug 11270
 	remote_ost_nodsh && skip "remote OST with nodsh" && return
+	(( $OST1_VERSION < $(version_code 2.17.53) )) ||
+		skip "max_nolock_bytes is removed >= 2.17.53"
 
 	local node
 	local facets=$(get_facets OST)
@@ -1298,8 +1298,117 @@ test_32b() { # bug 11270
 	restore_lustre_params <$p
 	rm -f $p
 }
-# Disable test 32b prior to full removal
-#run_test 32b "lockless i/o"
+run_test 32b "lockless i/o"
+
+test_32c() {
+	# need only one client & no parallel, to keep 'contentions' correct
+	(( ${CLIENTCOUNT:-1} == 1 )) || skip "need only one client"
+	[[ $PARALLEL != "yes" ]] || skip "skip parallel run"
+	(( $OST1_VERSION >= $(version_code 2.17.53) )) ||
+		skip "contention detection is broken < 2.17.53"
+	local dd1
+	local dd2
+	local p="$TMP/$TESTSUITE-$TESTNAME.parameters"
+	# bs=1M: count is file size in MB
+	local count=${TEST32c_COUNT:-50}
+
+	save_lustre_params ost1 \
+		"ldlm.namespaces.filter-lustre-OST*.contended_locks" > $p
+	stack_trap "restore_lustre_params < $p; rm -f $p" EXIT
+	stack_trap "rm -f $DIR/$tfile"
+	$LFS setstripe -i 0 $DIR/$tfile
+
+	do_facet ost1 "$LCTL set_param \
+		ldlm.namespaces.filter-lustre-OST*.contended_locks=2"
+	do_facet ost1 "$LCTL set_param \
+		ldlm.namespaces.filter-lustre-OST*.contention_events=0"
+
+	# Write to file from both clients at different times and verify it
+	# does not register as contention
+	dd if=/dev/zero of=$DIR1/$tfile bs=1M count=$count conv=fsync
+	dd if=/dev/zero of=$DIR2/$tfile bs=1M count=$count
+
+	conevents=$(do_facet ost1 "$LCTL get_param -n \
+		ldlm.namespaces.filter-lustre-OST0000*.contention_events")
+	(( conevents == 0 )) || error "(1) $conevents detected, expected 0"
+
+	# Write to file from both clients at the same time and verify it
+	# generates some contention events
+	dd if=/dev/zero of=$DIR1/$tfile bs=1M count=$count &
+	dd1=$!
+	dd if=/dev/zero of=$DIR2/$tfile bs=1M count=$count &
+	dd2=$!
+	wait $dd1 $dd2
+
+	conevents=$(do_facet ost1 "$LCTL get_param -n \
+		ldlm.namespaces.filter-lustre-OST0000*.contention_events")
+
+	seconds=$(do_facet ost1 "$LCTL get_param -n \
+		ldlm.namespaces.filter-lustre-OST0000*.contention_seconds")
+	echo "contention_seconds $seconds, contention_events $conevents"
+
+	# It's impossible to predict how many events we'll get, because of the
+	# nature of racing processes like this, but we should definitely see
+	# more than one
+	(( conevents > 1 )) ||
+		error "(2) $conevents contention events detected, expected > 1"
+
+	# Let's continue doing i/o - We should see more contention events
+	dd if=/dev/zero of=$DIR1/$tfile bs=1M count=$count &
+	dd1=$!
+	dd if=/dev/zero of=$DIR2/$tfile bs=1M count=$count &
+	dd2=$!
+	wait $dd1 $dd2
+
+	conevents2=$(do_facet ost1 "$LCTL get_param -n \
+		ldlm.namespaces.filter-lustre-OST0000*.contention_events")
+	(( conevents2 > conevents )) ||
+		error "(3) no added contention events, $conevents2 <= $conevents"
+
+	# When the last server-side lock is released, the OST ldlm_resource is
+	# freed and lr_contention_hist (contention hold state) is destroyed with
+	# it. Which means the following read operations would not be affected by
+	# the previous writes.
+	cancel_lru_locks osc
+
+	do_facet ost1 "$LCTL set_param \
+		ldlm.namespaces.filter-lustre-OST*.contention_events=0"
+
+	# Read from the file from both clients at the same time & verify it
+	# doesn't generate contention events
+	dd of=/dev/null if=$DIR1/$tfile bs=1M count=$count &
+	dd1=$!
+	dd of=/dev/null if=$DIR2/$tfile bs=1M count=$count &
+	dd2=$!
+	wait $dd1 $dd2
+
+	conevents=$(do_facet ost1 "$LCTL get_param -n \
+		ldlm.namespaces.filter-lustre-OST0000*.contention_events")
+	(( conevents == 0 )) || error "(4) $conevents detected, expected 0"
+
+	# Now test read lockahead - This should NOT cause contention because
+	# they will be granted.
+	for i in {1..50}; do
+		$LFS ladvise -a lockahead -b -s 0M -l ${i}M -m READ $DIR/$tfile
+	done
+
+	conevents=$(do_facet ost1 "$LCTL get_param -n \
+		ldlm.namespaces.filter-lustre-OST0000*.contention_events")
+	(( conevents == 0 )) || error "(5) $conevents detected, expected == 0"
+
+	# Finally, test detection of contention events with lockahead, using
+	# incompatible async write lock requests, which are non-blocking.
+	# These *should* generate contention events because they are explicit
+	# requests which are being blocked, which counts as contention.
+	for i in {1..50}; do
+		$LFS ladvise -a lockahead -b -s 0M -l ${i}M -m WRITE $DIR/$tfile
+	done
+
+	conevents=$(do_facet ost1 "$LCTL get_param -n \
+		ldlm.namespaces.filter-lustre-OST0000*.contention_events")
+	(( conevents > 0 )) || error "(6) $conevents detected, expected > 0"
+}
+run_test 32c "contention detection"
 
 print_jbd_stat () {
 	local mds_facets=$(get_facets MDS)
@@ -4549,7 +4658,9 @@ tbf_verify() {
 	local client1=${CLIENT1:-$(hostname)}
 	local myRUNAS="$3"
 	local create_as="$4"
+	local not_under_control=${5:-0}
 
+	echo "not_under_control: $not_under_control"
 	local np=$(check_cpt_number ost1)
 	[ $np -gt 0 ] || error "CPU partitions should not be $np."
 	echo "cpu_npartitions on ost1 is $np"
@@ -4574,8 +4685,13 @@ tbf_verify() {
 	echo "Write runtime is $runtime s, speed is $rate IOPS"
 
 	# verify the write rate does not exceed TBF rate limit
-	[ $(bc <<< "$rate < 1.1 * $np * $1") -eq 1 ] ||
-		error "The write rate ($rate) exceeds 110% of rate limit ($1 * $np)"
+	[ $(bc <<< "$rate < 1.1 * $np * $1") -eq 1 ] || {
+		if (( not_under_control == 1 )); then
+			echo "write rate ($rate) should exceed limit ($1 * $np)"
+		else
+			error "write rate ($rate) exceeds limit ($1 * $np)"
+		fi
+	}
 
 	cancel_lru_locks osc
 
@@ -4588,8 +4704,13 @@ tbf_verify() {
 	echo "Read runtime is $runtime s, speed is $rate IOPS"
 
 	# verify the read rate does not exceed TBF rate limit
-	[ $(bc <<< "$rate < 1.1 * $np * $2") -eq 1 ] ||
-		error "The read rate ($rate) exceeds 110% of rate limit ($2 * $np)"
+	[ $(bc <<< "$rate < 1.1 * $np * $2") -eq 1 ] || {
+		if (( not_under_control == 1 )); then
+			echo "read rate ($rate) should exceed limit ($2 * $np)"
+		else
+			error "read rate ($rate) exceeds limit ($2 * $np)"
+		fi
+	}
 
 	cancel_lru_locks osc
 	cleanup_tbf_verify || error "rm -rf $dir failed"
@@ -5219,6 +5340,96 @@ test_77ki() {
 	cleanup_77k "ext_w ext_r" "fifo"
 }
 run_test 77ki "Add rule with unsupported TBF type should fail for generic TBF"
+
+setup_nodemap_77kj() {
+	local nm=$1
+
+	do_facet mgs $LCTL nodemap_activate 1
+	wait_nm_sync active
+	do_facet mgs $LCTL nodemap_add $nm
+	do_facet mgs $LCTL nodemap_add_range \
+			--name $nm --range $client_nid
+	do_facet mgs $LCTL nodemap_modify --name $nm \
+			--property admin --value 1
+	do_facet mgs $LCTL nodemap_modify --name $nm \
+			--property trusted --value 1
+	wait_nm_sync $nm
+}
+
+cleanup_nodemap_77kj() {
+	local nm=$1
+
+	# tolerate a nodemap already removed by the test body
+	do_facet mgs $LCTL nodemap_del $nm 2>/dev/null
+	wait_nm_sync $nm id ''
+	do_facet mgs $LCTL nodemap_activate 0
+	wait_nm_sync active
+}
+
+# Stop the given TBF rules and restore the default policy. Unlike
+# cleanup_77k() this neither overwrites nor clears the EXIT trap, so it
+# is safe to call both explicitly and from a stack_trap handler.
+cleanup_tbf_77kj() {
+	local osts=$(osts_nodes)
+	local rule
+
+	for rule in $1; do
+		do_nodes $osts $LCTL set_param \
+			ost.OSS.ost_io.nrs_tbf_rule="stop\ $rule" 2>/dev/null
+	done
+	do_nodes $osts $LCTL set_param ost.OSS.ost_io.nrs_policies="fifo"
+	sleep 3
+}
+
+test_77kj() {
+	(( "$OST1_VERSION" >= $(version_code 2.17.53) )) ||
+		skip "Need OST version at least 2.17.53"
+
+	local nm="TBF"
+	local client_ip=$(host_nids_address $HOSTNAME $NETTYPE)
+	local client_nid=$(h2nettype $client_ip)
+	local osts=$(osts_nodes)
+
+	stack_trap "cleanup_nodemap_77kj $nm"
+	setup_nodemap_77kj $nm
+
+	# TBF rule limiting a single nodemap
+	stack_trap "cleanup_tbf_77kj ext_nm_rw"
+	do_nodes $osts \
+		$LCTL set_param ost.OSS.ost_io.nrs_policies="tbf\ nodemap" \
+			ost.OSS.ost_io.nrs_tbf_rule="start\ ext_nm_rw\ nodemap={$nm}\ rate=20"
+	nrs_write_read
+	tbf_verify 20 20
+
+	# removing the nodemap lifts the rate limit
+	cleanup_nodemap_77kj $nm
+	nrs_write_read
+	tbf_verify 20 20 "" "" 1
+	cleanup_tbf_77kj "ext_nm_rw"
+
+	# nodemap+opcode rules must fail to start while the nodemap is gone
+	do_nodes $osts \
+		$LCTL set_param ost.OSS.ost_io.nrs_policies="tbf\ nodemap+opcode" ||
+		error "failed to setup NRS TBF policy for nodemap+opcode"
+	stack_trap "cleanup_tbf_77kj 'ext_w ext_r'"
+	do_nodes $osts \
+		$LCTL set_param \
+			ost.OSS.ost_io.nrs_tbf_rule="start\ ext_w\ nodemap={$nm}\&opcode={ost_write}\ rate=20" \
+			ost.OSS.ost_io.nrs_tbf_rule="start\ ext_r\ nodemap={$nm}\&opcode={ost_read}\ rate=10" &&
+			error "Start TBF rule should fail as the nodemap does not exist"
+	setup_nodemap_77kj $nm
+	do_nodes $osts \
+		$LCTL set_param \
+			ost.OSS.ost_io.nrs_tbf_rule="start\ ext_w\ nodemap={$nm}\&opcode={ost_write}\ rate=20" \
+			ost.OSS.ost_io.nrs_tbf_rule="start\ ext_r\ nodemap={$nm}\&opcode={ost_read}\ rate=10" ||
+			error "Failed to start NRS TBF rule"
+	nrs_write_read
+	tbf_verify 20 10
+
+	cleanup_tbf_77kj "ext_w ext_r"
+	cleanup_nodemap_77kj $nm
+}
+run_test 77kj "Verify nodemap support for NRS TBF rule"
 
 test_77l() {
 	[[ "$OST1_VERSION" -ge $(version_code 2.10.56) ]] ||

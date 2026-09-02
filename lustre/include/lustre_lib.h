@@ -45,6 +45,8 @@ struct l_wait_info;
 #endif
 #define LP_POISON ((void *)LL_POISON)
 
+extern int llite_enable_compression;
+
 #ifdef CONFIG_LUSTRE_FS_SERVER
 int rev_import_init(struct obd_export *exp);
 int target_handle_connect(struct ptlrpc_request *req);
@@ -76,10 +78,6 @@ void target_send_reply(struct ptlrpc_request *req, int rc, int fail_id);
 #define LUSTRE_FATAL_SIGS (sigmask(SIGKILL) | sigmask(SIGINT) |		\
 			   sigmask(SIGTERM) | sigmask(SIGQUIT) |	\
 			   sigmask(SIGALRM))
-static inline int l_fatal_signal_pending(struct task_struct *p)
-{
-	return signal_pending(p) && sigtestsetmask(&p->pending.signal, LUSTRE_FATAL_SIGS);
-}
 
 /** @} lib */
 

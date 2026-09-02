@@ -70,10 +70,8 @@ ll_get_acl_common(struct inode *inode, int type, bool rcu)
 
 	if (IS_ERR_OR_NULL(acl))
 		goto out;
-	if (type == ACL_TYPE_DEFAULT) {
-		acl = posix_acl_dup(acl);
+	if (type == ACL_TYPE_DEFAULT)
 		goto out;
-	}
 	if (type == ACL_TYPE_ACCESS)
 		lli_replace_acl(lli, acl);
 
@@ -161,8 +159,13 @@ int ll_set_acl(struct mnt_idmap *map,
 			 name, value, value_size, 0, 0, ll_i2projid(inode),
 			 &req);
 
-	if (!rc)
-		ll_i2info(inode)->lli_synced_to_mds = false;
+	if (!rc) {
+		struct ll_inode_info *lli = ll_i2info(inode);
+
+		CDEBUG(D_INODE, "inode %p need_sync_to_mds "DFID"\n",
+		       inode, PFID(&lli->lli_fid));
+		lli->lli_need_sync_to_mds = true;
+	}
 
 	ptlrpc_req_put(req);
 out:

@@ -230,9 +230,8 @@ ldlm_flock_deadlock(struct ldlm_lock *req, struct ldlm_lock *bl_lock)
 		LASSERT(flock->owner == bl_owner);
 		bl_owner = flock->blocking_owner;
 		bl_exp_new = class_export_get(flock->blocking_export);
-		class_export_put(bl_exp);
-
 		cfs_hash_put(bl_exp->exp_flock_hash, &lock->l_exp_flock_hash);
+		class_export_put(bl_exp);
 		bl_exp = bl_exp_new;
 
 		if (req == lock) {
@@ -817,7 +816,7 @@ ldlm_flock_completion_ast(struct ldlm_lock *lock, __u64 flags, void *data)
 		goto granted;
 
 	if (!(flags & LDLM_FL_BLOCKED_MASK)) {
-		if (NULL == data)
+		if (data == NULL)
 			/* mds granted the lock in the reply */
 			goto granted;
 		/* CP AST RPC: lock get granted, wake it up */

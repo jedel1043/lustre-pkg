@@ -26,6 +26,7 @@
 #include <linux/lustre/lustre_disk.h>
 #endif
 #include <linux/lustre/lustre_cfg.h>
+#include <lustre_dlm_flags.h>
 
 #define BLANK_LINE()						\
 do {								\
@@ -633,7 +634,7 @@ check_obd_connect_data(void)
 	CHECK_DEFINE_64X(OBD_CONNECT_UMASK);
 	CHECK_DEFINE_64X(OBD_CONNECT_EINPROGRESS);
 	CHECK_DEFINE_64X(OBD_CONNECT_GRANT_PARAM);
-	CHECK_DEFINE_64X(OBD_CONNECT_FLOCK_OWNER);
+	CHECK_DEFINE_64X(OBD_CONNECT_HPREQ_CHECK1);
 	CHECK_DEFINE_64X(OBD_CONNECT_LVB_TYPE);
 	CHECK_DEFINE_64X(OBD_CONNECT_NANOSEC_TIME);
 	CHECK_DEFINE_64X(OBD_CONNECT_LIGHTWEIGHT);
@@ -675,6 +676,7 @@ check_obd_connect_data(void)
 	CHECK_DEFINE_64X(OBD_CONNECT2_MODE_CONVERT);
 	CHECK_DEFINE_64X(OBD_CONNECT2_BATCH_RPC);
 	CHECK_DEFINE_64X(OBD_CONNECT2_PCCRO);
+	CHECK_DEFINE_64X(OBD_CONNECT2_LOCK_CONTENTION);
 	CHECK_DEFINE_64X(OBD_CONNECT2_ATOMIC_OPEN_LOCK);
 	CHECK_DEFINE_64X(OBD_CONNECT2_ENCRYPT_NAME);
 	CHECK_DEFINE_64X(OBD_CONNECT2_DMV_IMP_INHERIT);
@@ -935,7 +937,7 @@ check_lov_comp_md_entry_v1(void)
 	CHECK_MEMBER(lov_comp_md_entry_v1, lcme_cstripe_count);
 	CHECK_MEMBER(lov_comp_md_entry_v1, lcme_compr_type);
 	CHECK_BITFIELD(lov_comp_md_entry_v1, lcme_compr_lvl);
-	CHECK_BITFIELD(lov_comp_md_entry_v1, lcme_compr_chunk_log_bits);
+	CHECK_BITFIELD(lov_comp_md_entry_v1, lcme_compr_chunk_lum_bits);
 
 	CHECK_CVALUE_X(LCME_FL_STALE);
 	CHECK_CVALUE_X(LCME_FL_PREF_RD);
@@ -1008,6 +1010,30 @@ check_lmv_mds_md_v1(void)
 	CHECK_CDEFINE(LMV_HASH_FLAG_BAD_TYPE);
 	CHECK_CDEFINE(LMV_HASH_FLAG_MIGRATION);
 	CHECK_CDEFINE(LMV_CRUSH_PG_COUNT);
+}
+
+static void
+check_lmv_user_md_v1(void)
+{
+	BLANK_LINE();
+	CHECK_STRUCT(lmv_user_md_v1);
+	CHECK_MEMBER(lmv_user_md_v1, lum_magic);
+	CHECK_MEMBER(lmv_user_md_v1, lum_stripe_count);
+	CHECK_MEMBER(lmv_user_md_v1, lum_stripe_offset);
+	CHECK_MEMBER(lmv_user_md_v1, lum_hash_type);
+	CHECK_MEMBER(lmv_user_md_v1, lum_type);
+	CHECK_MEMBER(lmv_user_md_v1, lum_max_inherit);
+	CHECK_MEMBER(lmv_user_md_v1, lum_max_inherit_rr);
+	CHECK_MEMBER(lmv_user_md_v1, lum_padding1);
+	CHECK_MEMBER(lmv_user_md_v1, lum_padding2);
+	CHECK_MEMBER(lmv_user_md_v1, lum_padding3);
+	CHECK_MEMBER(lmv_user_md_v1, lum_pool_name[LOV_MAXPOOLNAME + 1]);
+	CHECK_MEMBER(lmv_user_md_v1, lum_objects[0]);
+
+	CHECK_STRUCT(lmv_user_mds_data);
+	CHECK_MEMBER(lmv_user_mds_data, lum_fid);
+	CHECK_MEMBER(lmv_user_mds_data, lum_padding);
+	CHECK_MEMBER(lmv_user_mds_data, lum_mds);
 }
 
 static void
@@ -2743,6 +2769,7 @@ static void check_object_update(void)
 	CHECK_CVALUE_X(UPDATE_FL_SYNC);
 	CHECK_CVALUE_X(UPDATE_FL_COMMITTED);
 	CHECK_CVALUE_X(UPDATE_FL_NOLOG);
+	CHECK_CVALUE_X(UPDATE_FL_IGNORE_QUOTA);
 }
 
 static void check_object_update_request(void)
@@ -3125,6 +3152,7 @@ static void check_nodemap_key(void)
 	CHECK_VALUE_X(NODEMAP_RBAC_LQA_QUOTA_OPS);
 	CHECK_VALUE_X(NODEMAP_RBAC_PROJID_SET);
 	CHECK_VALUE_X(NODEMAP_RBAC_FOREIGN_OPS);
+	CHECK_VALUE_X(NODEMAP_RBAC_IMMUTABLE_FLAGS);
 	CHECK_VALUE_X(NODEMAP_RBAC_NONE);
 	CHECK_VALUE_X(NODEMAP_RBAC_ALL);
 
@@ -3557,7 +3585,6 @@ main(int argc, char **argv)
 	CHECK_VALUE_X(DISP_LOOKUP_POS);
 	CHECK_VALUE_X(DISP_OPEN_CREATE);
 	CHECK_VALUE_X(DISP_OPEN_OPEN);
-	CHECK_VALUE_X(DISP_ENQ_COMPLETE);
 	CHECK_VALUE_X(DISP_ENQ_OPEN_REF);
 	CHECK_VALUE_X(DISP_ENQ_CREATE_REF);
 	CHECK_VALUE_X(DISP_OPEN_LOCK);
@@ -3614,6 +3641,35 @@ main(int argc, char **argv)
 	CHECK_VALUE(LDLM_GL_CALLBACK);
 	CHECK_VALUE(LDLM_SET_INFO);
 	CHECK_VALUE(LDLM_LAST_OPC);
+
+	COMMENT("LDLM wire-visible request flags");
+	CHECK_VALUE_64X(LDLM_FL_WIRE_REQ_FLAGS_MASK);
+	CHECK_DEFINE_64X(LDLM_FL_BLOCK_GRANTED);
+	CHECK_DEFINE_64X(LDLM_FL_BLOCK_WAIT);
+	CHECK_DEFINE_64X(LDLM_FL_SPECULATIVE);
+	CHECK_DEFINE_64X(LDLM_FL_REPLAY);
+	CHECK_DEFINE_64X(LDLM_FL_INTENT_ONLY);
+	CHECK_DEFINE_64X(LDLM_FL_HAS_INTENT);
+	CHECK_DEFINE_64X(LDLM_FL_BLOCK_NOWAIT);
+	CHECK_DEFINE_64X(LDLM_FL_TEST_LOCK);
+	CHECK_DEFINE_64X(LDLM_FL_CANCEL_ON_BLOCK);
+	CHECK_DEFINE_64X(LDLM_FL_NO_EXPANSION);
+	CHECK_DEFINE_64X(LDLM_FL_DENY_ON_CONTENTION);
+	CHECK_DEFINE_64X(LDLM_FL_AST_DISCARD_DATA);
+
+	COMMENT("LDLM wire-visible AST flags");
+	CHECK_VALUE_64X(LDLM_FL_WIRE_AST_FLAGS_MASK);
+	CHECK_DEFINE_64X(LDLM_FL_AST_SENT);
+	CHECK_DEFINE_64X(LDLM_FL_FLOCK_DEADLOCK);
+	CHECK_DEFINE_64X(LDLM_FL_DISCARD_DATA);
+	CHECK_VALUE_64X(LDLM_FL_AST_MASK);
+
+	COMMENT("LDLM wire-visible enqueue reply flags");
+	CHECK_DEFINE_64X(LDLM_FL_LOCK_CHANGED);
+	CHECK_DEFINE_64X(LDLM_FL_NO_TIMEOUT);
+	CHECK_VALUE_64X(LDLM_FL_BLOCKED_MASK);
+	CHECK_VALUE_64X(LDLM_FL_INHERIT_MASK);
+	CHECK_VALUE_64X(LDLM_FL_SRV_ENQ_MASK);
 
 	CHECK_VALUE(LCK_MODE_MIN);
 	CHECK_VALUE(LCK_EX);
@@ -3727,6 +3783,7 @@ main(int argc, char **argv)
 	check_lov_comp_md_entry_v1();
 	check_lov_comp_md_v1();
 	check_lmv_mds_md_v1();
+	check_lmv_user_md_v1();
 	check_obd_statfs();
 	check_obd_ioobj();
 	check_obd_quotactl();

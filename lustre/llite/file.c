@@ -336,12 +336,24 @@ static int ll_md_close(struct inode *inode, struct file *file)
 	struct ll_inode_info *lli = ll_i2info(inode);
 	struct lustre_handle lockh;
 	enum ldlm_mode lockmode;
-	int rc = 0;
+	int rc = 0, rc2;
 
 	ENTRY;
 	/* clear group lock, if present */
 	if (unlikely(lfd->lfd_file_flags & LL_FILE_GROUP_LOCKED))
 		ll_put_grouplock(inode, file, lfd->fd_grouplock.lg_gid);
+
+	/* Sync on close, if enabled and data modified since last open/fsync.
+	 * Sync OSS *before* close so size/blocks can be sent to MDS for LSOM.
+	 *
+	 * The OSS_SYNC RPC could be optimized if file stays open after write:
+	 * - OSC commit callback clears need_sync_to_oss on *last* write commit
+	 * - write range tracking to limit filemap_write_and_wait_range() OST
+	 *   range (only useful for small writes in a large striped file)
+	 */
+	if (test_bit(LL_SBI_SYNC_ON_CLOSE, ll_i2sbi(inode)->ll_flags) &&
+	    lli->lli_need_sync_to_oss)
+		rc = ll_fsync(file, 0, MAX_LFS_FILESIZE, 1);
 
 	mutex_lock(&lli->lli_och_mutex);
 	if (lfd->fd_lease_och != NULL) {
@@ -355,7 +367,9 @@ static int ll_md_close(struct inode *inode, struct file *file)
 		/* Usually the lease is not released when the
 		 * application crashed, we need to release here.
 		 */
-		rc = ll_lease_close(lease_och, inode, &lease_broken);
+		rc2 = ll_lease_close(lease_och, inode, &lease_broken);
+		if (!rc)
+			rc = rc2;
 
 		mutex_lock(&lli->lli_och_mutex);
 
@@ -371,7 +385,9 @@ static int ll_md_close(struct inode *inode, struct file *file)
 		lfd->fd_och = NULL;
 		mutex_unlock(&lli->lli_och_mutex);
 
-		rc = ll_close_inode_openhandle(inode, och, 0, NULL);
+		rc2 = ll_close_inode_openhandle(inode, och, 0, NULL);
+		if (!rc)
+			rc = rc2;
 		GOTO(out, rc);
 	}
 
@@ -396,10 +412,26 @@ static int ll_md_close(struct inode *inode, struct file *file)
 	/* LU-4398: do not cache write open lock if the file has exec bit */
 	if ((lockmode == LCK_CW && inode->i_mode & 0111) ||
 	    !md_lock_match(ll_i2mdexp(inode), flags, ll_inode2fid(inode),
-			   LDLM_IBITS, &policy, lockmode, 0, &lockh))
-		rc = ll_md_real_close(inode, lfd->fd_open_mode);
+			   LDLM_IBITS, &policy, lockmode, 0, &lockh)) {
+		rc2 = ll_md_real_close(inode, lfd->fd_open_mode);
+		if (!rc)
+			rc = rc2;
+	}
 
 out:
+	/* Sync on close, if enabled and inode modified since open/last fsync.
+	 * Sync MDS *after* close so that LSOM xattr will be persisted to MDT.
+	 *
+	 * The MDS_SYNC RPC could be optimized in a couple of ways:
+	 * - MDC commit callback clear need_sync_to_mds on create/setattr commit
+	 *   (maybe need separate bits for create, setattrs, truncate?)
+	 * - MDS_CLOSE with new MDS_SYNC_RPC flag to avoid extra RPC (protocol)
+	 */
+	if (test_bit(LL_SBI_SYNC_ON_CLOSE, ll_i2sbi(inode)->ll_flags)) {
+		rc2 = ll_mdsync(inode);
+		if (!rc)
+			rc = rc2;
+	}
 	file->private_data = NULL;
 	ll_file_data_put(lfd);
 
@@ -685,11 +717,11 @@ void ll_dir_finish_open(struct inode *inode, struct ptlrpc_request *req)
 	unsigned int nfolios;
 	unsigned int rd_pgs;
 	unsigned int lu_pgs;
-	int 		is_hash64;
+	int is_hash64;
 	struct lu_dirpage *dp;
-	int 		rc;
+	int rc = 0;
 	unsigned long   offset;
-	__u64		hash;
+	__u64 hash;
 	gfp_t gfp;
 
 	ENTRY;
@@ -1063,7 +1095,7 @@ int ll_file_open(struct inode *inode, struct file *file)
 	if (S_ISREG(inode->i_mode)) {
 		rc = ll_file_open_encrypt(inode, file);
 		if (rc) {
-			if (it && it->it_disposition)
+			if (it && it_disposition(it, DISP_ALL))
 				ll_release_openhandle(file_dentry(file), it);
 			GOTO(out_nofiledata, rc);
 		}
@@ -1083,7 +1115,7 @@ int ll_file_open(struct inode *inode, struct file *file)
 		RETURN(0);
 	}
 
-	if (!it || !it->it_disposition) {
+	if (!it || !it_disposition(it, DISP_ALL)) {
 		unsigned int kernel_flags = file->f_flags;
 
 		/* Convert f_flags into access mode. We cannot use file->f_mode,
@@ -1157,7 +1189,7 @@ restart:
 		}
 	} else {
 		LASSERT(*och_usecount == 0);
-		if (!it->it_disposition) {
+		if (!it_disposition(it, DISP_ALL)) {
 			struct dentry *dentry = file_dentry(file);
 			struct ll_sb_info *sbi = ll_i2sbi(inode);
 			int open_threshold = sbi->ll_oc_thrsh_count;
@@ -1238,7 +1270,7 @@ restart:
 
 		LASSERTF(it_disposition(it, DISP_ENQ_OPEN_REF),
 			 "inode %px: disposition %x, status %d\n", inode,
-			 it_disposition(it, ~0), it->it_status);
+			 it_disposition(it, DISP_ALL), it->it_status);
 
 		rc = ll_local_open(file, it, lfd, *och_p);
 		if (rc)
@@ -1657,7 +1689,7 @@ static int ll_lease_file_resync(struct obd_client_handle *och,
 		RETURN(PTR_ERR(op_data));
 
 	if (copy_from_user(&ioc, uarg, sizeof(ioc)))
-		RETURN(-EFAULT);
+		GOTO(out, rc = -EFAULT);
 
 	/* before starting file resync, it's necessary to clean up page cache
 	 * in client memory, otherwise once the layout version is increased,
@@ -2297,42 +2329,41 @@ out:
 }
 
 /**
- * ll_do_fast_read() - read data directly from the page cache
+ * ll_read_from_cache() - serve a read from the page cache
  * @iocb: kiocb from kernel
  * @iter: user space buffers where the data will be copied
  *
- * The purpose of fast read is to overcome per I/O overhead and improve IOPS
- * especially for small I/O.
+ * This is the path for all cached reads.  It serves reads
+ * directly from the page cache without the full Lustre I/O
+ * stack — no cl_io creation, no DLM lock request.
  *
- * To serve a read request, CLIO has to create and initialize a cl_io and
- * then request DLM lock. This has turned out to have siginificant overhead
- * and affects the performance of small I/O dramatically.
+ * Under the help of read ahead, most of the pages being read are
+ * already in memory cache and we can read those pages directly
+ * because if the pages exist, the corresponding DLM lock must
+ * exist so that page content must be valid.
  *
- * It's not necessary to create a cl_io for each I/O. Under the help of read
- * ahead, most of the pages being read are already in memory cache and we can
- * read those pages directly because if the pages exist, the corresponding DLM
- * lock must exist so that page content must be valid.
+ * There are three scenarios:
+ *   - If the page exists and is uptodate, kernel VM will provide
+ *     the data and CLIO won't be intervened;
+ *   - If the page was brought into memory by read ahead, it will
+ *     be exported and read ahead parameters will be updated;
+ *   - Otherwise the page is not in memory, we can't serve from
+ *     cache. Therefore, it will go back and invoke the full read
+ *     path, i.e., a cl_io will be created and DLM lock will be
+ *     requested.
  *
- * In fast read implementation, the llite speculatively finds and reads pages
- * in memory cache. There are three scenarios for fast read:
- *   - If the page exists and is uptodate, kernel VM will provide the data and
- *     CLIO won't be intervened;
- *   - If the page was brought into memory by read ahead, it will be exported
- *     and read ahead parameters will be updated;
- *   - Otherwise the page is not in memory, we can't do fast read. Therefore,
- *     it will go back and invoke normal read, i.e., a cl_io will be created
- *     and DLM lock will be requested.
+ * POSIX compliance: posix standard states that read is intended
+ * to be atomic. Lustre read implementation is in line with Linux
+ * kernel read implementation and neither of them complies with
+ * POSIX standard in this matter. Reading from cache doesn't make
+ * the situation worse on single node but it may interleave write
+ * results from multiple nodes due to short read handling in
+ * ll_file_aio_read().
  *
- * POSIX compliance: posix standard states that read is intended to be atomic.
- * Lustre read implementation is in line with Linux kernel read implementation
- * and neither of them complies with POSIX standard in this matter. Fast read
- * doesn't make the situation worse on single node but it may interleave write
- * results from multiple nodes due to short read handling in ll_file_aio_read().
- *
- * Returns number of bytes have been read, or error code if error occurred.
+ * Returns number of bytes read, or error code if error occurred.
  */
 static ssize_t
-ll_do_fast_read(struct kiocb *iocb, struct iov_iter *iter)
+ll_read_from_cache(struct kiocb *iocb, struct iov_iter *iter)
 {
 	struct ll_inode_info *lli = ll_i2info(file_inode(iocb->ki_filp));
 	ssize_t result;
@@ -2366,6 +2397,8 @@ ll_do_fast_read(struct kiocb *iocb, struct iov_iter *iter)
 		ll_heat_add(file_inode(iocb->ki_filp), CIT_READ, result);
 		ll_stats_ops_tally(ll_i2sbi(file_inode(iocb->ki_filp)),
 				   LPROC_LL_READ_BYTES, result);
+		ll_stats_ops_tally(ll_i2sbi(file_inode(iocb->ki_filp)),
+				   LPROC_LL_CACHED_READ, result);
 	}
 
 	return result;
@@ -2472,7 +2505,7 @@ static ssize_t do_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	ll_ras_enter(file, iocb->ki_pos, iov_iter_count(to));
 
 	/* read from local cache first then any reamining from remote */
-	result = ll_do_fast_read(iocb, to);
+	result = ll_read_from_cache(iocb, to);
 	if (result < 0 || iov_iter_count(to) == 0)
 		GOTO(out, result);
 
@@ -2526,7 +2559,8 @@ static ssize_t ll_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 }
 
 /*
- * Similar trick to ll_do_fast_read, this improves write speed for tiny writes.
+ * Similar trick to ll_read_from_cache(), this improves write
+ * speed for tiny writes.
  * If a page is already in the page cache and dirty (and some other things -
  * See ll_tiny_write_begin for the instantiation of these rules), then we can
  * write to it without doing a full I/O, because Lustre already knows about it
@@ -2588,6 +2622,7 @@ static ssize_t ll_do_tiny_write(struct kiocb *iocb, struct iov_iter *iter)
 static ssize_t do_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	struct file *file = iocb->ki_filp;
+	struct inode *inode = file_inode(file);
 	struct vvp_io_args *args;
 	struct lu_env *env;
 	ktime_t kstart = ktime_get();
@@ -2601,11 +2636,15 @@ static ssize_t do_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	ENTRY;
 	CDEBUG(D_VFSTRACE|D_IOTRACE,
 	       "START file "DNAME":"DFID", ppos: %lld, count: %zu\n",
-	       encode_fn_file(file), PFID(ll_inode2fid(file_inode(file))),
+	       encode_fn_file(file), PFID(ll_inode2fid(inode)),
 	       iocb->ki_pos, iov_iter_count(from));
 
 	if (!iov_iter_count(from))
 		GOTO(out, rc_normal = 0);
+
+	CDEBUG(D_INODE, "inode %p need_sync_to_oss "DFID"\n",
+	       inode, PFID(&ll_i2info(inode)->lli_fid));
+	ll_i2info(inode)->lli_need_sync_to_oss = true;
 
 	/*
 	 * When PCC write failed, we usually do not fall back to the normal
@@ -2634,7 +2673,7 @@ static ssize_t do_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	 * pages, and we can't do append writes because we can't guarantee the
 	 * required DLM locks are held to protect file size.
 	 */
-	if (ll_sbi_has_tiny_write(ll_i2sbi(file_inode(file))) &&
+	if (ll_sbi_has_tiny_write(ll_i2sbi(inode)) &&
 	    !(iocb_ki_flags_check(iocb,
 				  IOCB_DIRECT | IOCB_DSYNC | IOCB_SYNC |
 				  IOCB_APPEND)))
@@ -2670,16 +2709,16 @@ static ssize_t do_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	cl_env_put(env, &refcheck);
 out:
 	if (rc_normal > 0) {
-		ll_rw_stats_tally(ll_i2sbi(file_inode(file)), current->pid,
+		ll_rw_stats_tally(ll_i2sbi(inode), current->pid,
 				  file->private_data, iocb->ki_pos,
 				  rc_normal, WRITE);
-		ll_stats_ops_tally(ll_i2sbi(file_inode(file)), LPROC_LL_WRITE,
+		ll_stats_ops_tally(ll_i2sbi(inode), LPROC_LL_WRITE,
 				   ktime_us_delta(ktime_get(), kstart));
 	}
 
 	CDEBUG(D_IOTRACE,
 	       "COMPLETED: file "DNAME":"DFID", ppos: %lld, count: %zu, rc = %zu\n",
-	       encode_fn_file(file), PFID(ll_inode2fid(file_inode(file))),
+	       encode_fn_file(file), PFID(ll_inode2fid(inode)),
 	       iocb->ki_pos, iov_iter_count(from), rc_normal);
 
 	RETURN(rc_normal);
@@ -2958,6 +2997,7 @@ static ssize_t ll_lov_setstripe(struct inode *inode, struct file *file,
 	rc = ll_lov_setstripe_ea_info(inode, file_dentry(file), flags, klum,
 				      lum_size);
 	if (!rc) {
+		struct ll_inode_info *lli = ll_i2info(inode);
 		__u32 gen;
 
 		rc = put_user(0, &lum->lmm_stripe_count);
@@ -2968,9 +3008,12 @@ static ssize_t ll_lov_setstripe(struct inode *inode, struct file *file,
 		if (rc)
 			GOTO(out, rc);
 
+		CDEBUG(D_INODE, "inode %p need_sync_to_mds "DFID"\n",
+		       inode, PFID(&lli->lli_fid));
+		lli->lli_need_sync_to_mds = true;
 		rc = ll_file_getstripe(inode, arg, lum_size);
 		if (S_ISREG(inode->i_mode) && IS_ENCRYPTED(inode) &&
-		    ll_i2info(inode)->lli_clob) {
+		    lli->lli_clob) {
 			struct iattr attr = { 0 };
 
 			rc = cl_setattr_ost(inode, &attr, OP_XVALID_FLAGS,
@@ -4960,7 +5003,7 @@ out_ladvise:
 	}
 	case LL_IOC_FLR_SET_MIRROR: {
 		/* mirror I/O must be direct to avoid polluting page cache
-		 * by stale data.
+		 * with stale or parity data.
 		 */
 		if (!(file->f_flags & O_DIRECT))
 			RETURN(-EINVAL);
@@ -5234,6 +5277,7 @@ int cl_sync_file_range(struct inode *inode, loff_t start, loff_t end,
 	struct lu_env *env;
 	struct cl_io *io;
 	struct cl_fsync_io *fio;
+	struct ll_inode_info *lli;
 	int result;
 	__u16 refcheck;
 
@@ -5248,7 +5292,8 @@ int cl_sync_file_range(struct inode *inode, loff_t start, loff_t end,
 		RETURN(PTR_ERR(env));
 
 	io = vvp_env_new_io(env);
-	io->ci_obj = ll_i2info(inode)->lli_clob;
+	lli = ll_i2info(inode);
+	io->ci_obj = lli->lli_clob;
 	cl_object_get(io->ci_obj);
 	io->ci_ignore_layout = ignore_layout;
 
@@ -5261,6 +5306,8 @@ int cl_sync_file_range(struct inode *inode, loff_t start, loff_t end,
 	fio->fi_nr_written = 0;
 	fio->fi_prio = prio;
 
+	/* clear before sync starts, so write during sync will set it again */
+	lli->lli_need_sync_to_oss = false;
 	if (cl_io_init(env, io, CIT_FSYNC, io->ci_obj) == 0)
 		result = cl_io_loop(env, io);
 	else
@@ -5275,6 +5322,37 @@ int cl_sync_file_range(struct inode *inode, loff_t start, loff_t end,
 }
 
 /*
+ * ll_mdsync() - perform metadata sync to MDS inode
+ *
+ * Only the first sync on MDS makes sense unless MDS attributes are
+ * explicitly changed, regular file writes/timestamps are all stored on OSTs.
+ * @inode - inode to sync
+ *
+ * Return:
+ * 0 - on success
+ * -ve errno - on error
+ */
+int ll_mdsync(struct inode *inode)
+{
+	struct ptlrpc_request *req;
+	struct ll_inode_info *lli = ll_i2info(inode);
+	int rc;
+
+	CDEBUG(D_INODE, "inode %p metadata sync "DFID" (need_sync=%u)\n",
+	       inode, PFID(&lli->lli_fid), lli->lli_need_sync_to_mds);
+	if (!lli->lli_need_sync_to_mds)
+		return 0;
+
+	rc = md_fsync(ll_i2sbi(inode)->ll_md_exp, &lli->lli_fid, &req);
+	if (!rc) {
+		lli->lli_need_sync_to_mds = false;
+		ptlrpc_req_put(req);
+	}
+
+	return rc;
+}
+
+/*
  * When dentry is provided (the 'else' case), file_dentry() may be
  * null and dentry must be used directly rather than pulled from
  * file_dentry() as is done otherwise.
@@ -5284,14 +5362,15 @@ int ll_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 	struct dentry *dentry = file_dentry(file);
 	struct inode *inode = dentry->d_inode;
 	struct ll_inode_info *lli = ll_i2info(inode);
-	struct ptlrpc_request *req;
 	ktime_t kstart = ktime_get();
 	int rc, err;
 
 	ENTRY;
-	CDEBUG(D_VFSTRACE,
-	       "VFS Op:inode="DFID"(%p), start %lld, end %lld, datasync %d\n",
-	       PFID(ll_inode2fid(inode)), inode, start, end, datasync);
+	CDEBUG(D_VFSTRACE|D_IOTRACE,
+	       "START file: name="DNAME", fid="DFID", start=%lld, end=%lld, datasync=%d, need_sync %u/%u\n",
+	       encode_fn_file(file), PFID(ll_inode2fid(inode)),
+	       start, end, datasync, lli->lli_need_sync_to_mds,
+	       lli->lli_need_sync_to_oss);
 
 	/* fsync's caller has already called _fdata{sync,write}, we want
 	 * that IO to finish before calling the osc and mdc sync methods
@@ -5313,34 +5392,24 @@ int ll_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 		}
 	}
 
-	if (S_ISREG(inode->i_mode) && !lli->lli_synced_to_mds && !datasync) {
-		/*
-		 * only the first sync on MDS makes sense,
-		 * everything else is stored on OSTs
-		 */
-		err = md_fsync(ll_i2sbi(inode)->ll_md_exp,
-			       ll_inode2fid(inode), &req);
-		if (!rc)
-			rc = err;
-		if (!err) {
-			lli->lli_synced_to_mds = true;
-			ptlrpc_req_put(req);
-		}
-	}
-
+	/* Sync metadata on MDT first, and then sync the cached data on PCC */
 	if (S_ISREG(inode->i_mode)) {
 		struct ll_file_data *lfd = file->private_data;
 		bool cached;
 
-		/* Sync metadata on MDT first, and then sync the cached data
-		 * on PCC.
-		 */
+		if (!datasync) {
+			err = ll_mdsync(inode);
+			if (!rc)
+				rc = err;
+		}
+
 		err = pcc_fsync(file, start, end, datasync, &cached);
 		if (!cached)
+			/* cl_sync_file_range() clears lli_need_sync_to_oss */
 			err = cl_sync_file_range(inode, start, end,
 						 CL_FSYNC_ALL, 0,
 						 IO_PRIO_NORMAL);
-		if (rc == 0 && err < 0)
+		if (!rc && err < 0)
 			rc = err;
 		if (rc < 0)
 			lfd->fd_write_failed = true;
@@ -5351,6 +5420,12 @@ int ll_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 	if (!rc)
 		ll_stats_ops_tally(ll_i2sbi(inode), LPROC_LL_FSYNC,
 				   ktime_us_delta(ktime_get(), kstart));
+
+	CDEBUG(D_IOTRACE,
+	       "COMPLETED file: name="DNAME", fid="DFID", start=%lld, end=%lld, datasync=%d, rc=%d\n",
+	       encode_fn_file(file), PFID(ll_inode2fid(inode)),
+	       start, end, datasync, rc);
+
 	RETURN(rc);
 }
 
@@ -6216,10 +6291,19 @@ int ll_getattr_dentry(struct dentry *de, struct kstat *stat, u32 request_mask,
 
 	parent = dget_parent(de);
 	dir = d_inode(parent);
-	ll_statahead_enter(dir, de);
-	if (dentry_may_statahead(dir, de))
-		ll_start_statahead(dir, de, need_glimpse &&
-				   !(flags & AT_STATX_DONT_SYNC));
+	/*
+	 * NFS re-export hands us a disconnected (self-parented) dentry, so
+	 * dget_parent() returns the file itself and @dir is not a directory.
+	 * Statahead updates directory-only members of struct ll_inode_info
+	 * which share a union with the regular-file members (e.g.
+	 * lli_size_mutex), so it must not run unless @dir really is a directory.
+	 */
+	if (S_ISDIR(dir->i_mode)) {
+		ll_statahead_enter(dir, de);
+		if (dentry_may_statahead(dir, de))
+			ll_start_statahead(dir, de, need_glimpse &&
+					   !(flags & AT_STATX_DONT_SYNC));
+	}
 	dput(parent);
 
 	if (flags & AT_STATX_DONT_SYNC)

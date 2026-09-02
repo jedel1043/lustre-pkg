@@ -646,14 +646,6 @@ static inline int mdo_unlink(const struct lu_env *env,
 	return p->mo_dir_ops->mdo_unlink(env, p, c, lname, ma, no_name);
 }
 
-static inline int mdo_statfs(const struct lu_env *env,
-			     struct md_device *m,
-			     struct obd_statfs *sfs)
-{
-	LASSERT(m->md_ops->mdo_statfs);
-	return m->md_ops->mdo_statfs(env, m, sfs);
-}
-
 struct dt_device;
 
 void lustre_som_swab(struct lustre_som_attrs *attrs);
@@ -699,6 +691,7 @@ struct lu_ucred {
 	unsigned int		 uc_rbac_lqa_quota_ops:1;
 	unsigned int		 uc_rbac_projid_set:1;
 	unsigned int		 uc_rbac_foreign_ops:1;
+	unsigned int		 uc_rbac_immutable_flags:1;
 };
 
 struct lu_ucred *lu_ucred(const struct lu_env *env);

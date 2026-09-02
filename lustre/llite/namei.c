@@ -117,7 +117,7 @@ struct inode *ll_iget(struct super_block *sb, ino_t hash,
 	if (inode == NULL)
 		RETURN(ERR_PTR(-ENOMEM));
 
-	if (inode_state_read(inode) & I_NEW) {
+	if (inode_state_read_once(inode) & I_NEW) {
 		rc = ll_read_inode2(inode, md);
 		if (rc == 0 && S_ISREG(inode->i_mode) &&
 		    ll_i2info(inode)->lli_clob == NULL)
@@ -141,7 +141,7 @@ struct inode *ll_iget(struct super_block *sb, ino_t hash,
 	} else if (is_bad_inode(inode)) {
 		iput(inode);
 		inode = ERR_PTR(-ESTALE);
-	} else if (!(inode_state_read(inode) & (I_FREEING | I_CLEAR))) {
+	} else if (!(inode_state_read_once(inode) & (I_FREEING | I_CLEAR))) {
 		rc = ll_update_inode(inode, md);
 		CDEBUG(D_VFSTRACE, "got inode: "DFID"(%p): rc = %d\n",
 		       PFID(&md->body->mbo_fid1), inode, rc);
@@ -234,7 +234,7 @@ static void ll_lock_cancel_bits(struct ldlm_lock *lock,
 {
 	struct inode *inode = ll_inode_from_resource_lock(lock);
 	struct ll_inode_info *lli;
-	bool is_new __maybe_unused;
+	bool is_new;
 	int rc;
 
 	ENTRY;
@@ -247,7 +247,7 @@ static void ll_lock_cancel_bits(struct ldlm_lock *lock,
 		if (lock->l_resource->lr_lvb_inode)
 			LDLM_DEBUG(lock,
 				   "can't take inode for the lock (%sevicted)",
-				   inode_state_read(
+				   inode_state_read_once(
 					lock->l_resource->lr_lvb_inode) &
 				   I_FREEING ? "" : "not ");
 		RETURN_EXIT;
@@ -671,7 +671,7 @@ static int ll_lookup_it_finish(struct ptlrpc_request *request,
 	 * when I return
 	 */
 	CDEBUG(D_DENTRY, "it %p it_disposition %x\n", it,
-	       it->it_disposition);
+	       it_disposition(it, DISP_ALL));
 	if (!it_disposition(it, DISP_LOOKUP_NEG)) {
 		struct req_capsule *pill = &request->rq_pill;
 		struct mdt_body *body = req_capsule_server_get(pill,
@@ -801,31 +801,31 @@ static int ll_lookup_it_finish(struct ptlrpc_request *request,
 		struct lookup_intent parent_it = {
 					.it_op = IT_GETATTR,
 					.it_lock_handle = 0 };
-		struct lu_fid	fid = ll_i2info(parent)->lli_fid;
+		struct ll_inode_info *plli = ll_i2info(parent);
+		struct lu_fid pfid = plli->lli_fid;
 
 		/* If it is striped directory, get the real stripe parent */
 		if (unlikely(ll_dir_striped(parent))) {
-			down_read(&ll_i2info(parent)->lli_lsm_sem);
+			down_read(&plli->lli_lsm_sem);
 			rc = md_get_fid_from_lsm(ll_i2mdexp(parent),
-						 ll_i2info(parent)->lli_lsm_obj,
+						 plli->lli_lsm_obj,
 						 (*de)->d_name.name,
-						 (*de)->d_name.len, &fid);
-			up_read(&ll_i2info(parent)->lli_lsm_sem);
+						 (*de)->d_name.len, &pfid);
+			up_read(&plli->lli_lsm_sem);
 			if (rc != 0)
 				GOTO(out, rc);
 		}
 
-		if (md_revalidate_lock(ll_i2mdexp(parent), &parent_it, &fid,
+		if (md_revalidate_lock(ll_i2mdexp(parent), &parent_it, &pfid,
 				       NULL)) {
 			d_lustre_revalidate(*de);
 			ll_intent_release(&parent_it);
 		}
 	}
 
-	if (it_disposition(it, DISP_OPEN_CREATE)) {
+	if (it_disposition(it, DISP_OPEN_CREATE))
 		ll_stats_ops_tally(ll_i2sbi(parent), LPROC_LL_MKNOD,
 				   ktime_us_delta(ktime_get(), kstart));
-	}
 
 	GOTO(out, rc = 0);
 
@@ -1248,6 +1248,10 @@ inherit:
 		it->it_open_flags |= MDS_OPEN_PCC;
 	}
 
+	/* we want at least read access for getattr */
+	if (it->it_op & IT_GETATTR)
+		it->it_open_flags |= FMODE_READ;
+
 	/* If the MDS allows the client to chgrp (CFS_SETGRP_PERM), but the
 	 * client does not know which suppgid should be sent to the MDS, or
 	 * some other(s) changed the target file's GID after this RPC sent
@@ -1481,8 +1485,10 @@ static int ll_atomic_open(struct inode *dir, struct dentry *dentry,
 	CFS_FAIL_TIMEOUT(OBD_FAIL_LLITE_CREATE_FILE_PAUSE, cfs_fail_val);
 
 	if (!rc) {
+		struct inode *inode = dentry->d_inode;
+
 		if (it_disposition(it, DISP_OPEN_CREATE)) {
-			rc = pcc_inode_create_fini(dentry->d_inode, &pca);
+			rc = pcc_inode_create_fini(inode, &pca);
 			if (rc) {
 				if (de != NULL)
 					dput(de);
@@ -1490,6 +1496,9 @@ static int ll_atomic_open(struct inode *dir, struct dentry *dentry,
 			}
 
 			ll_set_created(opened, file);
+			CDEBUG(D_INODE, "inode %p need_sync_to_mds "DFID"\n",
+			       inode, PFID(&ll_i2info(inode)->lli_fid));
+			ll_i2info(inode)->lli_need_sync_to_mds = true;
 		} else {
 			/* Open the file with O_CREAT, but the file already
 			 * existed on MDT. This may happend in the case that
@@ -1508,10 +1517,10 @@ static int ll_atomic_open(struct inode *dir, struct dentry *dentry,
 		}
 
 		/* check also if a foreign file is openable */
-		if (dentry->d_inode && it_disposition(it, DISP_OPEN_OPEN) &&
+		if (inode && it_disposition(it, DISP_OPEN_OPEN) &&
 		    ll_foreign_is_openable(dentry, open_flags)) {
 			/* Open dentry. */
-			if (S_ISFIFO(dentry->d_inode->i_mode)) {
+			if (S_ISFIFO(inode->i_mode)) {
 				/* We cannot call open here as it might
 				 * deadlock. This case is unreachable in
 				 * practice because of OBD_CONNECT_NODEVOH.
@@ -1537,7 +1546,7 @@ static int ll_atomic_open(struct inode *dir, struct dentry *dentry,
 				 * the intent lock first before call PCC open.
 				 */
 				ll_intent_release(it);
-				rc = pcc_file_open(dentry->d_inode, file);
+				rc = pcc_file_open(inode, file);
 				GOTO(out_free, rc);
 			}
 		} else {
@@ -1565,7 +1574,7 @@ static struct inode *ll_create_node(struct inode *dir, struct lookup_intent *it)
 
 	ENTRY;
 
-	LASSERT(it && it->it_disposition);
+	LASSERT(it && it_disposition(it, DISP_ALL));
 
 	LASSERT(it_disposition(it, DISP_ENQ_CREATE_REF));
 	request = it->it_request;
@@ -1636,6 +1645,12 @@ static int ll_create_it(struct inode *dir, struct dentry *dentry,
 		RETURN(rc);
 
 	d_instantiate(dentry, inode);
+
+	if (it_disposition(it, DISP_OPEN_CREATE)) {
+		CDEBUG(D_INODE, "inode %p need_sync_to_mds "DFID"\n",
+		       inode, PFID(&ll_i2info(inode)->lli_fid));
+		ll_i2info(inode)->lli_need_sync_to_mds = true;
+	}
 
 	if (encrypt) {
 		bool preload = true;

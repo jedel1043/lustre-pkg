@@ -221,39 +221,10 @@ static int ll_releasepage(struct page *vmpage, RELEASEPAGE_ARG_TYPE gfp_mask)
 }
 #endif /* HAVE_AOPS_RELEASE_FOLIO */
 
-/*
- * Lustre could relax a bit for alignment, io count is not
- * necessary page alignment.
- */
 bool ll_iov_iter_is_unaligned(struct iov_iter *i)
 {
-	size_t orig_size = i->count;
-	size_t count = orig_size & ~PAGE_MASK;
-	unsigned long res;
-
-	if (iov_iter_count(i) & ~PAGE_MASK)
-		return true;
-
-	if (!iov_iter_is_aligned(i, ~PAGE_MASK, 0))
-		return true;
-
-	if (!count)
-		return iov_iter_alignment(i) & ~PAGE_MASK;
-
-	if (orig_size > PAGE_SIZE) {
-		iov_iter_truncate(i, orig_size - count);
-		res = iov_iter_alignment(i);
-		iov_iter_reexpand(i, orig_size);
-
-		return res & ~PAGE_MASK;
-	}
-
-	res = iov_iter_alignment(i);
-	/* start address is page aligned */
-	if ((res & ~PAGE_MASK) == orig_size)
-		return false;
-
-	return res & ~PAGE_MASK;
+	return (iov_iter_count(i) & ~PAGE_MASK) ||
+	       (iov_iter_alignment(i) & ~PAGE_MASK);
 }
 
 static int
@@ -390,9 +361,16 @@ static ssize_t ll_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 	       unaligned ? ", unaligned" : "",
 	       io->ci_hybrid_switched ? ", hybrid" : "");
 
-	/* Check EOF by ourselves */
-	if (rw == READ && file_offset >= i_size_read(inode))
-		RETURN(0);
+	/* Check EOF by ourselves.
+	 * For parity IO, use ci_parity_eof which is calculated from RAID
+	 * geometry in the LOV layer.
+	 */
+	if (rw == READ) {
+		loff_t eof = io->ci_parity_io ? io->ci_parity_eof :
+						i_size_read(inode);
+		if (file_offset >= eof)
+			RETURN(0);
+	}
 
 	/* if one part of an I/O is unaligned, just handle all of it that way -
 	 * otherwise we create significant complexities with managing the iovec
@@ -457,12 +435,18 @@ static ssize_t ll_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 		/* Cap sub_dio size for drain+retry testing */
 		if (CFS_FAIL_PRECHECK(OBD_FAIL_LLITE_DIO_DRAIN_RETRY))
 			bytes = min_t(size_t, bytes, PAGE_SIZE);
+
+		/* For parity IO, use ci_parity_eof which is calculated from
+		 * RAID geometry in the LOV layer.
+		 */
 		if (rw == READ) {
-			if (file_offset >= i_size_read(inode))
+			loff_t eof = io->ci_parity_io ? io->ci_parity_eof :
+						       i_size_read(inode);
+			if (file_offset >= eof)
 				break;
 
-			if (file_offset + bytes > i_size_read(inode))
-				bytes = i_size_read(inode) - file_offset;
+			if (file_offset + bytes > eof)
+				bytes = eof - file_offset;
 		}
 
 		/* if we are doing sync_submit, then we free this below,

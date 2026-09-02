@@ -27,20 +27,9 @@
 
 #define LIBCFS_VERSION LUSTRE_VERSION_STRING
 
-/* Sparse annotations */
-#if !defined(__must_hold)
-# ifdef __CHECKER__
-#  define __must_hold(x) __attribute__((context(x, 1, 1)))
-# else	/* __CHECKER__ */
-#  define __must_hold(x)
-# endif /* !__CHECKER__ */
-#endif /* !__must_hold */
-
 typedef s32 timeout_t;
 
 int libcfs_setup(void);
-int debug_module_init(void);
-void debug_module_exit(void);
 
 #ifdef HAVE_CONST_CTR_TABLE
 #define DEFINE_CTL_TABLE_INIT(__name, init)\

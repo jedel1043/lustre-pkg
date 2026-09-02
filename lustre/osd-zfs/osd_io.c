@@ -163,7 +163,7 @@ static struct page *osd_dio_page_get(const struct lu_env *env)
 	LASSERT(oti->oti_dio_pages);
 	cur = oti->oti_dio_pages_used;
 	page = oti->oti_dio_pages[cur];
-		
+
 	if (unlikely(!page)) {
 		LASSERT(cur < PTLRPC_MAX_BRW_PAGES);
 		page = alloc_page(GFP_NOFS | __GFP_HIGHMEM);
@@ -183,7 +183,7 @@ static void osd_dio_page_put(const struct lu_env *env)
 	oti->oti_dio_pages_used--;
 }
 
-static int osd_zfs_fake_lnb(const struct lu_env *env, 
+static int osd_zfs_fake_lnb(const struct lu_env *env,
 			    struct niobuf_local *lnb, loff_t offset, ssize_t len,
 			    int maxlnb)
 {
@@ -650,18 +650,6 @@ static inline arc_buf_t *osd_request_arcbuf(dnode_t *dn, size_t bs)
 	abuf = dmu_request_arcbuf(&dn->dn_bonus->db, bs);
 	if (unlikely(!abuf))
 		return ERR_PTR(-ENOMEM);
-
-#if ZFS_VERSION_CODE < OBD_OCD_VERSION(0, 7, 0, 0)
-	/**
-	 * ZFS prior to 0.7.0 doesn't guarantee PAGE_SIZE alignment for zio
-	 * blocks smaller than (PAGE_SIZE << 2). This poses a problem of
-	 * setting up page array for RDMA transfer. See LU-9305.
-	 */
-	if ((unsigned long)abuf->b_data & ~PAGE_MASK) {
-		dmu_return_arcbuf(abuf);
-		return NULL;
-	}
-#endif
 
 	return abuf;
 }

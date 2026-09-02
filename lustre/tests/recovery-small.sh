@@ -2886,6 +2886,10 @@ test_136() {
 	[[ "$MDS1_VERSION" -ge $(version_code 2.12.52) ]] ||
 		skip "Need MDS version at least 2.12.52"
 
+	# This test requires HARD failover
+	power_management_available ||
+		skip "Test requires power management for HARD failover"
+
 	local mdts=$(mdts_nodes)
 	local MDT0=$(facet_svc $SINGLEMDS)
 
@@ -3887,6 +3891,46 @@ test_163() {
 			error "Found a gap"
 }
 run_test 163 "changelog check for fail write and processing records"
+
+test_170() {
+	remote_ost_nodsh && skip "remote OST with nodsh"
+	(( "$OST1_VERSION" >= $(version_code 2.17.53) )) ||
+		skip "Need OST version at least 2.17.53"
+	[[ $(facet_host client) != $(facet_host ost1) ]] ||
+		skip "need ost1 and client on different nodes"
+	local num_files=20
+	local i
+
+	mkdir $DIR/$tdir || error "mkdir $MOUNT/$tdir failed"
+	$LFS setstripe -i 0 $DIR/$tdir || error "setstripe $tdir failed"
+
+	echo "$tfile" >  $DIR/$tdir/$tfile
+	sync
+	replay_barrier ost1
+
+	for ((i = 0; i < num_files; i++)); do
+		local file=$DIR/$tdir/$tfile-$i
+		dd if=/dev/urandom of=$file count=1 bs=4096 ||
+			error "write failed: $file"
+	done
+
+	#define OBD_FAIL_PTLRPC_FAIL_REPLAY  0x537
+
+	#delay REPLAY_LOCKS phase to accumulate reqs at client side
+	do_facet ost1 "$LCTL set_param fail_loc=0x0000537 fail_val=10"
+	#at client simulate error reply and reconnect
+	$LCTL set_param fail_loc=0x80000537
+	fail_nodf ost1
+
+	stack_trap "$LCTL get_param osc.*OST0000-osc-*.state" EXIT
+	#should be reconnection and new recovery, at client state
+	#REPLAY_LOCKS
+	#CONNECTING
+	#REPLAY..
+
+	wait_clients_import_state ${HOSTNAME} ost1 "\(FULL\|IDLE\)" 60
+}
+run_test 170 "Reconnect after REPLAY_LOCKS hangs (LU-18154)"
 
 complete_test $SECONDS
 check_and_cleanup_lustre

@@ -122,6 +122,8 @@ liblustreapi_la_SOURCES = libhsm_scanner.c \
 			  liblustreapi_root.c \
 			  liblustreapi_swap.c \
 			  liblustreapi_util.c \
+			  erasurecode/ec_base.c \
+			  erasurecode/ec_base_aliases.c \
 			  lustreapi_internal.h
 liblustreapi_la_CFLAGS = -fPIC -D_GNU_SOURCE $(LIBNL3_CFLAGS) \
 			 -I $(top_builddir)/lnet/utils \
@@ -293,9 +295,10 @@ l_getsepol_LDADD := liblustreapi.la -lcrypto $(SELINUX)
 l_getsepol_DEPENDENCIES := liblustreapi.la
 
 wirecheck_SOURCES = wirecheck.c
-wirecheck_CPPFLAGS := -DCC="\"$(CC)\""
+wirecheck_CPPFLAGS := -DCC="\"$(CC)\"" -I$(top_srcdir)/lustre/include
 
 wiretest_SOURCES = wiretest.c
+wiretest_CPPFLAGS := -I$(top_srcdir)/lustre/include
 
 endif # UTILS
 

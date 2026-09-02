@@ -22,6 +22,7 @@ obdclass-objs += page_pools.o
 ifdef CONFIG_LUSTRE_FS_SERVER
 obdclass-objs += dt_object.o
 obdclass-objs += idmap.o
+obdclass-objs += llog_cat_server.o
 obdclass-objs += llog_ioctl.o
 obdclass-objs += llog_osd.o
 obdclass-objs += local_storage.o
@@ -37,4 +38,3 @@ endif
 ifdef CONFIG_GCOV_PROFILE_LUSTRE
 GCOV_PROFILE := y
 endif
-

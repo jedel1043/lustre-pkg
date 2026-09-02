@@ -30,7 +30,10 @@
 #define generic_folio			folio
 #else
 #define generic_folio			page
-#define folio_page(page, n)		(page)
+static inline struct page *folio_page(struct page *page, int n)
+{
+	return page;
+}
 #define folio_nr_pages(page)		(1)
 #define page_folio(page)		(page)
 #endif
@@ -72,7 +75,12 @@ ll_read_cache_folio(struct address_space *mapping, pgoff_t index,
 
 #if defined(HAVE___FILEMAP_GET_FOLIO)
 #define get_folio_lock(m, i, f, g)	__filemap_get_folio((m), (i), (f), (g))
-#define get_folio_nowait(m, i, f, g)	__filemap_get_folio((m), (i), (f), (g))
+static inline struct folio *get_folio_nowait(struct address_space *mapping,
+					     pgoff_t index, int fgp_flags,
+					     gfp_t gfp)
+{
+	return __filemap_get_folio(mapping, index, fgp_flags, gfp);
+}
 #define get_folio_write(m, i, e, f, g)	__filemap_get_folio((m), (i), (f), (g))
 #define get_folio_read(m, i, f, g)	__filemap_get_folio((m), (i), (f), (g))
 #define get_folio_create(m, i, f, g)	__filemap_get_folio((m), (i), (f), (g))
@@ -81,7 +89,10 @@ ll_read_cache_folio(struct address_space *mapping, pgoff_t index,
 #define fpgptr(folio)			(&folio->page)
 
 /* older kernels maintain mapping back to kmap() */
-#define ll_kmap_local_folio(f, off)	kmap_local_folio((f), (off))
+static inline void *ll_kmap_local_folio(struct folio *folio, size_t offset)
+{
+	return kmap_local_folio(folio, offset);
+}
 #define ll_kunmap_local(kaddr)		kunmap_local((kaddr))
 
 #ifndef FGP_WRITEBEGIN
@@ -117,7 +128,12 @@ ll_read_cache_folio(struct address_space *mapping, pgoff_t index,
 
 #else /* !HAVE___FILEMAP_GET_FOLIO */
 #define get_folio_lock(m, i, f, g)	find_lock_page((m), (i))
-#define get_folio_nowait(m, i, f, g)	grab_cache_page_nowait((m), (i))
+static inline struct page *get_folio_nowait(struct address_space *mapping,
+					     pgoff_t index, int fgp_flags,
+					     gfp_t gfp)
+{
+	return grab_cache_page_nowait(mapping, index);
+}
 #ifdef HAVE_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS
 #define get_folio_write(m, i, e, f, g)	\
 	grab_cache_page_write_begin((m), (i), (e))
@@ -139,8 +155,14 @@ ll_read_cache_folio(struct address_space *mapping, pgoff_t index,
  * Note this pollutes the use of 'page' as a variable
  */
 #define folio				page
-#define kmap_local_folio(f, off)	kmap_local_page((f))
-#define ll_kmap_local_folio(f, off)	kmap(fpgptr((f)))
+static inline void *kmap_local_folio(struct page *page, size_t offset)
+{
+	return kmap_local_page(page);
+}
+static inline void *ll_kmap_local_folio(struct page *page, size_t offset)
+{
+	return kmap(page);
+}
 #define ll_kunmap_local(kaddr)		kunmap(kmap_to_page((kaddr)))
 #define page_folio(page)		(page)
 #define fpgptr(page)			(page)
@@ -343,51 +365,6 @@ static inline void cfs_folio_delete_from_cache(struct folio *folio)
 #else
 #define nsproxy_dec(ns)		atomic_dec(&(ns)->count)
 #endif
-
-#ifndef HAVE_INODE_GET_CTIME
-#define inode_get_ctime(i)		((i)->i_ctime)
-#define inode_set_ctime_to_ts(i, ts)	((i)->i_ctime = ts)
-#define inode_set_ctime_current(i) \
-	inode_set_ctime_to_ts((i), current_time((i)))
-
-static inline struct timespec64 inode_set_ctime(struct inode *inode,
-						time64_t sec, long nsec)
-{
-	struct timespec64 ts = { .tv_sec  = sec,
-				 .tv_nsec = nsec };
-
-	return inode_set_ctime_to_ts(inode, ts);
-}
-#endif /* !HAVE_INODE_GET_CTIME */
-
-#ifndef HAVE_INODE_GET_MTIME_SEC
-
-#define inode_get_ctime_sec(i)		(inode_get_ctime((i)).tv_sec)
-
-#define inode_get_atime(i)		((i)->i_atime)
-#define inode_get_atime_sec(i)		((i)->i_atime.tv_sec)
-#define inode_set_atime_to_ts(i, ts)	((i)->i_atime = ts)
-
-static inline struct timespec64 inode_set_atime(struct inode *inode,
-						time64_t sec, long nsec)
-{
-	struct timespec64 ts = { .tv_sec  = sec,
-				 .tv_nsec = nsec };
-	return inode_set_atime_to_ts(inode, ts);
-}
-
-#define inode_get_mtime(i)		((i)->i_mtime)
-#define inode_get_mtime_sec(i)		((i)->i_mtime.tv_sec)
-#define inode_set_mtime_to_ts(i, ts)	((i)->i_mtime = ts)
-
-static inline struct timespec64 inode_set_mtime(struct inode *inode,
-						time64_t sec, long nsec)
-{
-	struct timespec64 ts = { .tv_sec  = sec,
-				 .tv_nsec = nsec };
-	return inode_set_mtime_to_ts(inode, ts);
-}
-#endif  /* !HAVE_INODE_GET_MTIME_SEC */
 
 #ifdef HAVE_WRITE_BEGIN_FOLIO
 /* .write_begin is passed **folio which is put with .write_end *folio */

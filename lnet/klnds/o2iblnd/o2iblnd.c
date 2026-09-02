@@ -1031,8 +1031,14 @@ kiblnd_destroy_conn(struct kib_conn *conn)
 
 		atomic_dec(&peer_ni->ibp_nconns);
 		atomic_dec(&net->ibn_nconns);
-		kiblnd_peer_decref(peer_ni);
+
+		/* Destroy the cm_id before dropping the peer_ni reference.
+		 * A CM callback may still be running on this cm_id and may
+		 * dereference conn->ibc_peer. rdma_destroy_id() waits for
+		 * in-flight handlers to complete.
+		 */
 		rdma_destroy_id(cmid);
+		kiblnd_peer_decref(peer_ni);
 	}
 }
 
@@ -2009,10 +2015,33 @@ no_fmr:
 
 			n = ib_map_mr_sg(mr, tx->tx_frags, rd->rd_nfrags,
 					 NULL, PAGE_SIZE);
+			/* simulate an ib_map_mr_sg() short-map to exercise the
+			 * error-cleanup path
+			 */
+			if (CFS_FAIL_CHECK(CFS_FAIL_O2IBLND_FMR_MAP_SHORT) &&
+			    n == rd->rd_nfrags)
+				n = rd->rd_nfrags - 1;
+
 			if (unlikely(n != rd->rd_nfrags)) {
-				CERROR("Failed to map mr %d/%d elements\n",
-				       n, rd->rd_nfrags);
-				return n < 0 ? n : -EINVAL;
+				rc = n < 0 ? n : -EINVAL;
+				CERROR("Failed to map mr %d/%d elements: rc = %d\n",
+				       n, rd->rd_nfrags, rc);
+				/*
+				 * Return the descriptor to the pool and drop
+				 * the map count we took above; otherwise this
+				 * frd and the pool reference leak on every
+				 * short-map, the pool never goes idle, and the
+				 * FMR pool grows without bound (the fmr_frd /
+				 * fmr_pool fields are left NULL so the caller's
+				 * kiblnd_fmr_pool_unmap() is a no-op).
+				 */
+				spin_lock(&fps->fps_lock);
+				frd->frd_posted = false;
+				list_add_tail(&frd->frd_list,
+					      &fpo->fast_reg.fpo_pool_list);
+				fpo->fpo_map_count--;
+				spin_unlock(&fps->fps_lock);
+				return rc;
 			}
 
 			/* Prepare FastReg WR */
@@ -2703,7 +2732,7 @@ kiblnd_hdev_get_attr(struct kib_hca_dev *hdev)
 	if (dev_attr->device_cap_flags & IB_DEVICE_MEM_MGT_EXTENSIONS) {
 		LCONSOLE_INFO("Using FastReg for registration\n");
 		hdev->ibh_dev->ibd_dev_caps |= IBLND_DEV_CAPS_FASTREG_ENABLED;
-		if (dev_attr->device_cap_flags & IBK_SG_GAPS_REG)
+		if (ib_sg_gaps_reg_supported(dev_attr))
 			hdev->ibh_dev->ibd_dev_caps |=
 				IBLND_DEV_CAPS_FASTREG_GAPS_SUPPORT;
 	} else {
@@ -3656,6 +3685,15 @@ kiblnd_startup(struct lnet_ni *ni)
 			CWARN("ko2iblnd failed to allocate ni_interface\n");
 	}
 	ni->ni_dev_cpt = ifaces[i].li_cpt;
+
+	/* Bind the NI to the device's local CPTs (if not explicitly
+	 * configured) before starting schedulers and allocating pools
+	 * below, so those resources match the bound CPT set and ni_cpts
+	 * is finalized before the NI is published.
+	 */
+	rc = lnet_ni_set_default_cpts(ni);
+	if (rc != 0)
+		goto failed;
 
 	rc = kiblnd_dev_start_threads(ibdev, newdev, ni->ni_cpts, ni->ni_ncpts);
 	if (rc != 0)

@@ -31,6 +31,9 @@
 
 #include "ptlrpc_internal.h"
 
+int llite_enable_compression;
+EXPORT_SYMBOL(llite_enable_compression);
+
 static inline __u32 lustre_msg_hdr_size_v2(__u32 count)
 {
 	return round_up(offsetof(struct lustre_msg_v2, lm_buflens[count]), 8);
@@ -2296,17 +2299,6 @@ void lustre_swab_lov_desc(struct lov_desc *ld)
 }
 EXPORT_SYMBOL(lustre_swab_lov_desc);
 
-void lustre_swab_lmv_desc(struct lmv_desc *ld)
-{
-	__swab32s(&ld->ld_tgt_count);
-	__swab32s(&ld->ld_active_tgt_count);
-	__swab32s(&ld->ld_default_stripe_count);
-	__swab32s(&ld->ld_pattern);
-	__swab64s(&ld->ld_default_hash_size);
-	__swab32s(&ld->ld_qos_maxage);
-	/* uuid endian insensitive */
-}
-
 /* This structure is always in little-endian */
 static void lustre_swab_lmv_mds_md_v1(struct lmv_mds_md_v1 *lmm1)
 {
@@ -2475,6 +2467,15 @@ void lustre_print_user_md(unsigned int lvl, struct lov_user_md *lum,
 
 		v1 = (struct lov_user_md *)((char *)comp_v1 +
 				comp_v1->lcm_entries[i].lcme_offset);
+
+		if (v1->lmm_pattern & LOV_PATTERN_COMPRESS) {
+			CDEBUG(lvl, "\tlcme_compr_type: %u\n",
+			       ent->lcme_compr_type);
+			CDEBUG(lvl, "\tlcme_compr_lvl: %u\n",
+			       ent->lcme_compr_lvl);
+			CDEBUG(lvl, "\tlcme_compr_chunk_lum_bits: %u\n",
+			       ent->lcme_compr_chunk_lum_bits);
+		}
 		if (v1->lmm_magic == LOV_MAGIC_FOREIGN)
 			lustre_print_foreign(lvl, (struct lov_foreign_md *)v1,
 					     msg);
@@ -2584,6 +2585,9 @@ void lustre_swab_lov_comp_md_v1(struct lov_comp_md_v1 *lum)
 		__swab32s(&ent->lcme_layout_gen);
 		/* no need to swab lcme_dstripe_count */
 		/* no need to swab lcme_cstripe_count */
+		/* no need to swab lcme_compr_type */
+		/* no need to swab lcme_compr_lvl */
+		/* no need to swab lcme_compr_chunk_lum_bits */
 
 		v1 = (struct lov_user_md_v1 *)((char *)lum + off);
 		if (v1->lmm_magic == __swab32(LOV_USER_MAGIC_FOREIGN) ||
@@ -3038,14 +3042,6 @@ void lustre_swab_hsm_request(struct hsm_request *hr)
 	__swab64s(&hr->hr_flags);
 	__swab32s(&hr->hr_itemcount);
 	__swab32s(&hr->hr_data_len);
-}
-
-/* TODO: swab each sub request message */
-void lustre_swab_batch_update_request(struct batch_update_request *bur)
-{
-	__swab32s(&bur->burq_magic);
-	__swab16s(&bur->burq_count);
-	__swab16s(&bur->burq_padding);
 }
 
 /* TODO: swab each sub reply message. */

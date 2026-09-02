@@ -27,7 +27,8 @@
 
 #define LUSTRE_NODEMAP_NAME "nodemap"
 
-#define LUSTRE_NODEMAP_DEFAULT_ID 0
+#define LUSTRE_NODEMAP_DEFAULT_ID	0
+#define LUSTRE_NODEMAP_MAX_ID		UINT_MAX
 
 static const struct nodemap_rbac_name {
 	enum nodemap_rbac_roles nrn_mode;
@@ -42,6 +43,7 @@ static const struct nodemap_rbac_name {
 	{ NODEMAP_RBAC_SERVER_UPCALL,	"server_upcall"		 },
 	{ NODEMAP_RBAC_IGN_ROOT_PRJQUOTA, "ignore_root_prjquota" },
 	{ NODEMAP_RBAC_HSM_OPS,		"hsm_ops"		 },
+	{ NODEMAP_RBAC_IMMUTABLE_FLAGS,	"immutable_flags"	 },
 	{ NODEMAP_RBAC_LOCAL_ADMIN,	"local_admin"		 },
 	{ NODEMAP_RBAC_POOL_QUOTA_OPS,	"pool_quota_ops"	 },
 	{ NODEMAP_RBAC_LQA_QUOTA_OPS,	"lqa_quota_ops"		 },
@@ -268,6 +270,12 @@ char *nodemap_get_fileset_prim(const struct lu_nodemap *nodemap);
 int nodemap_fileset_get_root(struct lu_nodemap *nodemap,
 			     const char *fileset_src, char **fileset_out,
 			     int *fileset_size_out, bool *fileset_ro_out);
+int nodemap_fileset_add(const char *nodemap_name, const char *fileset_path,
+			bool alt, bool read_only);
+int nodemap_fileset_del(const char *nodemap_name, const char *fileset_path);
+int nodemap_fileset_clear(const char *nodemap_name, bool force);
+int nodemap_fileset_modify(const char *nodemap_name, const char *fileset_src,
+			   struct lu_nodemap_fileset_modify *fset_modify);
 int nodemap_set_sepol(const char *name, const char *sepol, bool checkperm);
 const char *nodemap_get_sepol(const struct lu_nodemap *nodemap);
 int nodemap_set_capabilities(const char *nodemap_name, char *caps);

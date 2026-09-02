@@ -223,7 +223,7 @@ static int lustre_device_list_dump(struct sk_buff *msg,
 
 		if (test_bit(OBDF_STOPPING, obd->obd_flags))
 			status = "ST";
-		else if (obd->obd_inactive)
+		else if (test_bit(OBDF_INACTIVE, obd->obd_flags))
 			status = "IN";
 		else if (test_bit(OBDF_SET_UP, obd->obd_flags))
 			status = "UP";
@@ -1208,7 +1208,7 @@ int libcfs_kkuc_group_add(struct file *filp, const struct obd_uuid *uuid,
 		return -ENOMEM;
 
 	reg->kr_uuid = *uuid;
-	reg->kr_fp = filp;
+	reg->kr_fp = get_file(filp);
 	reg->kr_uid = uid;
 	memcpy(reg->kr_data, data, data_len);
 

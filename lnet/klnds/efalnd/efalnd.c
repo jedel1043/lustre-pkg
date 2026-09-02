@@ -1824,15 +1824,34 @@ bad_pkt:
 	return -EPROTO;
 }
 
+static struct kefa_rx *
+kefalnd_get_rx_from_wc(struct kefa_ni *efa_ni, struct ib_wc *wc)
+{
+	u32 rx_idx = EFALND_RX_WRID_INDEX(wc->wr_id);
+	u32 epoch = EFALND_RX_WRID_EPOCH(wc->wr_id);
+	struct kefa_qp *qp = wc->qp->qp_context;
+
+	if (epoch != (u32)efa_ni->ni_epoch)
+		return NULL;
+
+	if (rx_idx >= EFALND_RX_MSGS(qp))
+		return NULL;
+
+	return qp->rx_msgs + rx_idx;
+}
+
 static void
 kefalnd_rx_complete(struct kefa_ni *efa_ni, struct ib_wc *wc)
 {
 	struct kefa_rx *rx;
 	int nob, rc;
 
-	rx = (void *)wc->wr_id;
+	rx = kefalnd_get_rx_from_wc(efa_ni, wc);
+	if (!rx)
+		return;
+
 	nob = wc->byte_len;
-	if (!rx || nob == 0) {
+	if (nob == 0) {
 		/* Reaching here means FW or LND did something bad */
 		CERROR("cpu[%u] received bad RX handle with status[%u] nob[%u]",
 		       smp_processor_id(), wc->status, nob);
@@ -1978,12 +1997,19 @@ again:
 static void
 kefalnd_destroy_all_conns(struct kefa_ni *efa_ni)
 {
-	struct kefa_conn *conn;
+	struct kefa_conn *conn, *temp_conn;
 	struct hlist_node *tmp;
 	int bkt;
 
 	hash_for_each_safe(efa_ni->conns, bkt, tmp, conn, ni_node) {
 		hlist_del_init(&conn->ni_node);
+		kefalnd_destroy_conn(conn, LNET_MSG_STATUS_LOCAL_ABORTED,
+				     -ENODEV);
+	}
+
+	list_for_each_entry_safe(conn, temp_conn, &efa_ni->cleanup_conns,
+				 cleanup_node) {
+		list_del_init(&conn->cleanup_node);
 		kefalnd_destroy_conn(conn, LNET_MSG_STATUS_LOCAL_ABORTED,
 				     -ENODEV);
 	}
@@ -2197,6 +2223,7 @@ static int
 kefalnd_init_rx_msgs(struct kefa_qp *qp)
 {
 	struct kefa_dev *efa_dev = qp->efa_dev;
+	struct kefa_ni *efa_ni = efa_dev->efa_ni;
 	struct kefa_rx *rx;
 	int i;
 
@@ -2228,7 +2255,7 @@ kefalnd_init_rx_msgs(struct kefa_qp *qp)
 
 		rx->wrq.sg_list = &rx->sge;
 		rx->wrq.num_sge = 1;
-		rx->wrq.wr_id = (u64)rx;
+		rx->wrq.wr_id = EFALND_RX_WRID(efa_ni->ni_epoch, i);
 		INIT_LIST_HEAD(&rx->list_node);
 		list_add_tail(&rx->list_node, &qp->free_rx);
 	}
@@ -2285,6 +2312,7 @@ kefalnd_create_qp(struct kefa_dev *efa_dev, struct kefa_qp *qp,
 	init_attr.send_cq = cq->ib_cq;
 	init_attr.recv_cq = cq->ib_cq;
 	init_attr.sq_sig_type = IB_SIGNAL_ALL_WR;
+	init_attr.qp_context = qp;
 
 	ib_qp = ib_create_qp(efa_dev->pd, &init_attr);
 	if (IS_ERR(ib_qp)) {
@@ -3078,6 +3106,7 @@ kefalnd_startup(struct lnet_ni *ni)
 	efa_ni->ni_epoch = ktime_get_real_ns();
 	hash_init(efa_ni->conns);
 	rwlock_init(&efa_ni->conn_lock);
+	INIT_LIST_HEAD(&efa_ni->cleanup_conns);
 	INIT_LIST_HEAD(&efa_ni->lnd_node);
 	INIT_LIST_HEAD(&efa_ni->cm_node);
 
@@ -3114,6 +3143,14 @@ kefalnd_startup(struct lnet_ni *ni)
 	efa_ni->efa_dev = efa_dev;
 	ni->ni_dev_cpt = efa_dev->cpt;
 
+	/* Bind the NI to the device's local CPTs (if not explicitly
+	 * configured) now that the device's NUMA node is known and before
+	 * the NI is published.
+	 */
+	rc = lnet_ni_set_default_cpts(ni);
+	if (rc != 0)
+		goto failed;
+
 	kefalnd_create_efa_nid(efa_ni);
 	if (nid_is_nid4(&ni->ni_nid)) {
 		efa_ni->self_peer_ni =
@@ -3121,7 +3158,8 @@ kefalnd_startup(struct lnet_ni *ni)
 							 &efa_dev->gid,
 							 efa_dev->cm_qp->ib_qp->qp_num,
 							 efa_dev->cm_qp->qkey);
-		if (!efa_ni->self_peer_ni) {
+		if (IS_ERR_OR_NULL(efa_ni->self_peer_ni)) {
+			efa_ni->self_peer_ni = NULL;
 			rc = -ENODEV;
 			goto failed;
 		}

@@ -97,7 +97,7 @@ static struct kernel_param_ops param_ops_rtr_sensitivity = {
 };
 #define param_check_rtr_sensitivity(name, p) \
 		__param_check(name, p, int)
-module_param(router_sensitivity_percentage, rtr_sensitivity, S_IRUGO|S_IWUSR);
+module_param(router_sensitivity_percentage, rtr_sensitivity, 0644);
 MODULE_PARM_DESC(router_sensitivity_percentage,
 		"(Deprecated) How healthy a gateway should be to be used in percent");
 
@@ -111,7 +111,7 @@ static int
 rtr_sensitivity_set(const char *val, const struct kernel_param *kp)
 {
 	int rc;
-	unsigned *sen = (unsigned *)kp->arg;
+	unsigned int *sen = kp->arg;
 	unsigned long value;
 
 	rc = kstrtoul(val, 0, &value);
@@ -138,9 +138,8 @@ rtr_sensitivity_set(const char *val, const struct kernel_param *kp)
 	return 0;
 }
 
-void
-lnet_move_route(struct lnet_route *route, struct lnet_peer *lp,
-		struct list_head *rt_list)
+void lnet_move_route(struct lnet_route *route, struct lnet_peer *lp,
+		     struct list_head *rt_list)
 __must_hold(&the_lnet.ln_api_mutex)
 {
 	struct lnet_remotenet *rnet;
@@ -184,8 +183,9 @@ __must_hold(&the_lnet.ln_api_mutex)
 	}
 }
 
-void
-lnet_rtr_transfer_to_peer(struct lnet_peer *src, struct lnet_peer *target)
+void lnet_rtr_transfer_to_peer(struct lnet_peer *src,
+			       struct lnet_peer *target)
+__must_hold(&the_lnet.ln_api_mutex)
 {
 	struct lnet_route *route;
 	struct lnet_route *tmp, *tmp2;
@@ -204,6 +204,7 @@ lnet_rtr_transfer_to_peer(struct lnet_peer *src, struct lnet_peer *target)
 	list_for_each_entry_safe(route, tmp, &src->lp_routes, lr_gwlist) {
 		struct lnet_route *r2;
 		bool present = false;
+
 		list_for_each_entry_safe(r2, tmp2, &target->lp_routes, lr_gwlist) {
 			if (route->lr_net == r2->lr_net) {
 				if (route->lr_priority >= r2->lr_priority)
@@ -773,8 +774,7 @@ lnet_del_route_from_rnet(struct lnet_nid *gw_nid,
 	}
 }
 
-int
-lnet_del_route(__u32 net, struct lnet_nid *gw)
+int lnet_del_route(__u32 net, struct lnet_nid *gw)
 __must_hold(&the_lnet.ln_api_mutex)
 {
 	LIST_HEAD(rnet_zombies);
@@ -865,8 +865,8 @@ delete_zombies:
 	return 0;
 }
 
-void
-lnet_destroy_routes(void)
+void lnet_destroy_routes(void)
+__must_hold(&the_lnet.ln_api_mutex)
 {
 	lnet_del_route(LNET_NET_ANY, NULL);
 }
@@ -1704,8 +1704,7 @@ lnet_rtrpools_enable(void)
 	lnet_net_unlock(LNET_LOCK_EX);
 
 	if (lnet_peer_discovery_disabled)
-		CWARN("Consider turning discovery on to enable full "
-		      "Multi-Rail routing functionality\n");
+		CWARN("Consider turning discovery on to enable full Multi-Rail routing functionality\n");
 
 	return rc;
 }
@@ -1724,6 +1723,46 @@ lnet_rtrpools_disable(void)
 	LCONSOLE_INFO("Message forwarding will stop in %ds to %ds\n",
 		      alive_router_check_interval + router_ping_timeout,
 		      3 * (alive_router_check_interval + router_ping_timeout));
+}
+
+/**
+ * lnet_local_ni_superseded() - Test if path selection prefers another
+ *                               local NI over @ni.
+ * @ni: Local NI to evaluate.
+ *
+ * Uses the same (fatal state, health value) ordering as
+ * lnet_get_best_ni(): a non-fatal NI beats a fatal one; among
+ * equal-fatal NIs, higher ni_healthv wins.
+ *
+ * ni_fatal_error_on alone is not sufficient. Only some LNDs set it,
+ * in narrow cases such as o2iblnd IB_EVENT_PORT_ERR. Connection
+ * failures that decrement ni_healthv do not set it, so a fatal-only
+ * check misses a degraded-but-not-fatal NI.
+ *
+ * Context: Caller must hold a net lock. net_ni_list modifications
+ *          require net_lock/EX, so any net lock makes the traversal
+ *          safe. ni_fatal_error_on and ni_healthv are atomics.
+ * Return: true if another NI on the same net is preferred over @ni,
+ *         false if @ni is the NI path selection would choose.
+ */
+static bool
+lnet_local_ni_superseded(struct lnet_ni *ni)
+{
+	bool ni_fatal = atomic_read(&ni->ni_fatal_error_on);
+	int ni_healthv = atomic_read(&ni->ni_healthv);
+	struct lnet_ni *alt;
+
+	list_for_each_entry(alt, &ni->ni_net->net_ni_list, ni_netlist) {
+		if (alt == ni)
+			continue;
+		if (ni_fatal && !atomic_read(&alt->ni_fatal_error_on))
+			return true;
+		if (atomic_read(&alt->ni_fatal_error_on) == ni_fatal &&
+		    atomic_read(&alt->ni_healthv) > ni_healthv)
+			return true;
+	}
+
+	return false;
 }
 
 /*
@@ -1820,8 +1859,20 @@ lnet_notify(struct lnet_ni *ni, struct lnet_nid *nid, bool alive, bool reset,
 		 */
 		if (lnet_is_discovery_disabled(lp)) {
 			list_for_each_entry(route, &lp->lp_routes, lr_gwlist) {
-				if (nid_same(&route->lr_nid, &lpni->lpni_nid))
-					lnet_set_route_aliveness(route, alive);
+				if (!nid_same(&route->lr_nid, &lpni->lpni_nid))
+					continue;
+				/*
+				 * When the local NI caused the connection
+				 * failure, the gateway may still be reachable
+				 * via a healthier NI on the same net. Marking
+				 * the route down triggers the router checker
+				 * to revive it over the healthy NI, flapping
+				 * the route and disrupting traffic on that NI.
+				 */
+				if (!alive && ni &&
+				    lnet_local_ni_superseded(ni))
+					continue;
+				lnet_set_route_aliveness(route, alive);
 			}
 		}
 	}

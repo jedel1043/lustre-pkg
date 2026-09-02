@@ -89,7 +89,6 @@ int llog_backup(const struct lu_env *env, struct obd_device *obd,
 int llog_validate(const struct lu_env *env, struct llog_ctxt *ctxt, char *name);
 int llog_read_header(const struct lu_env *env, struct llog_handle *handle,
 		     const struct obd_uuid *uuid);
-__u64 llog_size(const struct lu_env *env, struct llog_handle *llh);
 int llog_retain(const struct lu_env *env, struct llog_handle *log);
 
 /* llog_process flags */
@@ -151,10 +150,12 @@ int llog_cat_cancel_arr_rec(const struct lu_env *env,
 int llog_cat_cancel_records(const struct lu_env *env,
 			    struct llog_handle *cathandle, int count,
 			    struct llog_cookie *cookies);
+#ifdef CONFIG_LUSTRE_FS_SERVER
 int llog_cat_process_or_fork(const struct lu_env *env,
 			     struct llog_handle *cat_llh, llog_cb_t cat_cb,
 			     llog_cb_t cb, void *data, int startcat,
 			     int startidx, bool fork);
+#endif
 int llog_cat_process(const struct lu_env *env, struct llog_handle *cat_llh,
 		     llog_cb_t cb, void *data, int startcat, int startidx);
 __u64 llog_cat_size(const struct lu_env *env, struct llog_handle *cat_llh);
@@ -343,19 +344,6 @@ struct llog_ctxt {
 #define LLOG_DEL_RECORD 0x0002
 #define LLOG_DEL_PLAIN  0x0003
 #define LLOG_SKIP_PLAIN 0x0004
-
-static inline int llog_obd2ops(struct llog_ctxt *ctxt,
-			       const struct llog_operations **lop)
-{
-	if (ctxt == NULL)
-		return -ENOTCONN;
-
-	*lop = ctxt->loc_logops;
-	if (*lop == NULL)
-		return -EOPNOTSUPP;
-
-	return 0;
-}
 
 static inline int llog_handle2ops(struct llog_handle *loghandle,
 				  const struct llog_operations **lop)

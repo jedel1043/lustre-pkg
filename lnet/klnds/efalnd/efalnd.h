@@ -49,6 +49,11 @@
 #define EFALND_MSG_PAGES		(EFALND_MSG_SIZE_ALIGNED / PAGE_SIZE)
 #define EFALND_RX_MSGS(q)		(2 * (q)->rq_depth)
 
+/* RX work request ID encoding: [epoch(32) | rx_index(32)] */
+#define EFALND_RX_WRID(epoch, idx)	(((u64)(epoch) << 32) | (u32)(idx))
+#define EFALND_RX_WRID_EPOCH(wrid)	((u32)((wrid) >> 32))
+#define EFALND_RX_WRID_INDEX(wrid)	((u32)(wrid))
+
 /* max # of fragments supported. + 1 for unaligned case */
 #define EFALND_MAX_TX_FRAGS		(LNET_MAX_IOV + 1)
 
@@ -270,6 +275,7 @@ struct kefa_ni {
 	struct kefa_obj_pool tx_pool;
 	DECLARE_HASHTABLE(conns, EFALND_CONN_HASH_BITS);
 	rwlock_t conn_lock;
+	struct list_head cleanup_conns;		/* conns pending cleanup by CM daemon */
 	struct kefa_peer_ni *self_peer_ni;	/* Only valid for small NID NI*/
 };
 
@@ -310,6 +316,7 @@ struct kefa_conn {
 
 	/* Low frequency fields */
 	struct list_head abort_tx;	/* Only CM iterates this list */
+	struct list_head cleanup_node;	/* node on kefa_ni cleanup list */
 	enum kefa_conn_type type;
 	struct lnet_nid local_nid;
 	struct kefa_peer_ni *peer_ni; /* my peer NI - only valid for small NID*/

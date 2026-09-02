@@ -610,9 +610,16 @@ out:
 }
 
 /**
- * lwp is used by slaves (Non-MDT0 targets) to manage the connection to MDT0,
- * or from the OSTx to MDTy.
- **/
+ * lustre_lwp_setup() - lwp is used by slaves (Non-MDT0 targets) to manage the
+ *                      connection to MDT0 or from the OSTx to MDTy
+ * @lcfg: Lustre configuration struct
+ * @lsi: Lustre superblock info(LSI) struct
+ * @idx: Used as unique LWP name
+ *
+ * Return:
+ * * %0 on success
+ * * %negative on error
+ */
 static int lustre_lwp_setup(struct lustre_cfg *lcfg, struct lustre_sb_info *lsi,
 			    u32 idx)
 {
@@ -775,8 +782,14 @@ out:
 }
 
 /**
- * Retrieve MDT nids from the client log, then start the lwp device.
- * there are only two scenarios which would include mdt nid.
+ * client_lwp_config_process() - Retrieve MDT nids from the client log, then
+ *                               start the lwp device. there are only two
+ *                               scenarios which would include mdt nid.
+ * @env: lustre execution environment
+ * @handle: llog handle of the current llog
+ * @rec: llog record header
+ * @data: Passed as data param to class_config_parse_llog
+ *
  * 1.
  * marker   5 (flags=0x01, v2.1.54.0) lustre-MDTyyyy  'add mdc' xxx-
  * add_uuid  nid=192.168.122.162@tcp(0x20000c0a87aa2)  0:  1:192.168.122.162@tcp
@@ -791,7 +804,11 @@ out:
  * add_uuid  nid=192.168.122.2@tcp(0x20000c0a87a02)  0:  1:192.168.122.2@tcp
  * add_conn  0:lustre-MDTyyyy-mdc  1:192.168.122.2@tcp
  * marker   7 (flags=0x02, v2.1.54.0) lustre-MDTyyyy  'add failnid' xxxx-
- **/
+ *
+ * Return:
+ * * %0 on success
+ * * %negative on error
+ */
 static int client_lwp_config_process(const struct lu_env *env,
 				     struct llog_handle *handle,
 				     struct llog_rec_hdr *rec, void *data)
@@ -1015,8 +1032,13 @@ out:
 }
 
 /**
- * Stop the lwp for an OST/MDT target.
- **/
+ * lustre_stop_lwp() - Stop the lwp for an OST/MDT target.
+ * @sb: super block for this file-system
+ *
+ * Return:
+ * * %0 on success
+ * * %negative on error
+ */
 static int lustre_stop_lwp(struct super_block *sb)
 {
 	struct lustre_sb_info *lsi = s2lsi(sb);
@@ -1047,8 +1069,15 @@ static int lustre_stop_lwp(struct super_block *sb)
 }
 
 /**
+ * lustre_start_lwp() - Start the LWP
+ * @sb: super block for this file-system
+ *
  * Start the lwp(fsname-MDTyyyy-lwp-{MDT,OST}xxxx) for a MDT/OST or MDT target.
- **/
+ *
+ * Return:
+ * * %0 on success
+ * * %negative on error
+ */
 static int lustre_start_lwp(struct super_block *sb)
 {
 	struct lustre_sb_info *lsi = s2lsi(sb);
@@ -1434,8 +1463,15 @@ out:
 }
 
 /**
- * Notify the MGS that this target is ready.
+ * server_notify_target() - Notify the MGS that this target is ready.
+ * @sb: super block for this file-system
+ * @obd: OBD of (MDT/OST) notifying MGS of ready state
+ *
  * Used by IR - if the MGS receives this message, it will notify clients.
+ *
+ * Return:
+ * * %0 on success
+ * * %negative on error
  */
 static int server_notify_target(struct super_block *sb, struct obd_device *obd)
 {
@@ -1484,7 +1520,14 @@ struct tgt_notifier_work {
 };
 
 /**
- * Notify the MGS that this target has new NIDs configured.
+ * tgt_nids_notify() - Notify the MGS that this target has new NIDs configured.
+ * @lsi: Lustre superblock info(LSI) struct
+ * @mti: mgs target info
+ * @set: All request in a set
+ *
+ * Return:
+ * * %0 on success
+ * * %negative on error
  */
 static int tgt_nids_notify(struct lustre_sb_info *lsi,
 			   struct mgs_target_info *mti,
@@ -1534,8 +1577,10 @@ static int tgt_nids_notify(struct lustre_sb_info *lsi,
 }
 
 /**
- * This function is used as an upcall-callback from MGC to get re-connection
- * notification and notify MGS about local NIDs to rebuild NID table
+ * tgt_import_update() - This function is used as an upcall-callback from MGC
+ *                       to get re-connection notification and notify MGS about
+ *                       local NIDs to rebuild NID table
+ * @ws:
  */
 static void tgt_import_update(struct work_struct *ws)
 {
@@ -2614,7 +2659,10 @@ void server_calc_timeout(struct lustre_sb_info *lsi, struct obd_device *obd)
 		soft   = lmd->lmd_recovery_time_soft;
 		hard   = lmd->lmd_recovery_time_hard;
 		has_ir = has_ir && !test_bit(LMD_FLG_NOIR, lmd->lmd_flags);
-		obd->obd_no_ir = !has_ir;
+		if (has_ir)
+			clear_bit(OBDF_NO_IR, obd->obd_flags);
+		else
+			set_bit(OBDF_NO_IR, obd->obd_flags);
 	}
 
 	if (soft == 0)
@@ -2652,10 +2700,16 @@ void server_calc_timeout(struct lustre_sb_info *lsi, struct obd_device *obd)
 }
 
 /**
- * This is the entry point for the mount call into Lustre.
- * This is called when a server target is mounted,
- * and this is where we start setting things up.
- * @param data Mount options (e.g. -o flock,abort_recov)
+ * lustre_tgt_fill_super() - Entry point for the mount call into Lustre.
+ * @sb: super block for this file-system
+ * @fc: data Mount options (e.g. -o flock,abort_recov)
+ *
+ * This is called when a server target is mounted, and this is where we start
+ * setting things up.
+ *
+ * Return:
+ * * %0 on success
+ * * %negative on error
  */
 static int lustre_tgt_fill_super(struct super_block *sb, struct fs_context *fc)
 {
@@ -2670,12 +2724,6 @@ static int lustre_tgt_fill_super(struct super_block *sb, struct fs_context *fc)
 	if (!lsi)
 		RETURN(-ENOMEM);
 	lmd = lsi->lsi_lmd;
-
-	/*
-	 * Disable lockdep during mount, because mount locking patterns are
-	 * 'special'.
-	 */
-	lockdep_off();
 
 	/*
 	 * LU-639: the OBD cleanup of last mount may not finish yet, wait here.
@@ -2710,7 +2758,7 @@ out:
 		CDEBUG(D_SUPER, "Mount %s complete\n",
 		       lmd->lmd_dev);
 	}
-	lockdep_on();
+
 	return rc;
 }
 
@@ -2750,7 +2798,7 @@ static int lustre_tgt_init_fs_context(struct fs_context *fc)
  *
  * The long-term goal is to disentangle the client and server mount code.
  */
-static struct file_system_type lustre_tgt_fstype = {
+struct file_system_type lustre_tgt_fstype = {
 	.owner			= THIS_MODULE,
 	.name			= "lustre_tgt",
 	.init_fs_context	= lustre_tgt_init_fs_context,
@@ -2758,13 +2806,3 @@ static struct file_system_type lustre_tgt_fstype = {
 	.fs_flags		= FS_REQUIRES_DEV | FS_RENAME_DOES_D_MOVE,
 };
 MODULE_ALIAS_FS("lustre_tgt");
-
-int lustre_tgt_register_fs(void)
-{
-	return register_filesystem(&lustre_tgt_fstype);
-}
-
-void lustre_tgt_unregister_fs(void)
-{
-	unregister_filesystem(&lustre_tgt_fstype);
-}

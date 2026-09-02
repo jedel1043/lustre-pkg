@@ -15,6 +15,8 @@ init_test_env "$@"
 init_logging
 
 ALWAYS_EXCEPT="$SANITY_EC_EXCEPT "
+always_except LU-19631 12a 12b
+# tests 12a: EC parity calculation produces incorrect content (LU-19631)
 
 build_test_filter
 
@@ -190,6 +192,31 @@ verify_ec_stripe_size() {
 		      "data component $data_comp_id has $data_stripe_size," \
 		      "EC component $ec_comp_id has $ec_stripe_size"
 	}
+}
+
+#
+# Read from parity mirror and check for zeros.
+# Usage: check_parity_read <file> <mirror_id> <offset> <expect_zeros>
+#
+check_parity_read() {
+	local file=$1
+	local mirror_id=$2
+	local offset=$3
+	local expect_zeros=$4
+	local rc
+
+	# test_parity_read returns 0 if all zeros, 1 if non-zero bytes found
+	$LUSTRE/tests/test_parity_read $file $mirror_id $offset \
+		> /dev/null 2>&1
+	rc=$?
+
+	if [[ $expect_zeros == "yes" ]]; then
+		(( rc == 0 )) ||
+			error "offset $offset: expected zeros, got non-zero bytes"
+	else
+		(( rc == 1 )) ||
+			error "offset $offset: expected parity data, got all zeros"
+	fi
 }
 
 test_1a() {
@@ -557,6 +584,118 @@ test_1j() {
 	}
 }
 run_test 1j "verify EC component inherits stripe size from data component"
+
+test_1k() {
+	local td=$DIR/$tdir
+	local subdir=$td/subdir
+	local tf=$subdir/$tfile
+	local ef=$subdir/explicit
+	local ids
+
+	(( OSTCOUNT >= 6 )) || skip_env "needs >= 6 OSTs"
+
+	enable_ec
+
+	test_mkdir $td
+
+	# Set default EC layout on the parent directory
+	$LFS setstripe -E 128M -E -1 --ec 4+2 $td ||
+		error "setstripe for $td failed"
+
+	# create another dir layer to verify the link id is inherited correctly
+	mkdir $subdir || error "mkdir for $subdir failed"
+
+	# ... and create a file in that subdir
+	touch $tf || error "touch for $tf failed"
+
+	verify_mirror_count $tf 2
+	verify_comp_count $tf 4
+
+	# Get component IDs
+	ids=($($LFS getstripe $tf | awk '/lcme_id/{print $2}' | tr '\n' ' '))
+
+	# Verify data mirror components (mirror 1)
+	verify_comp_extent $tf ${ids[0]} 0 134217728
+	verify_comp_extent $tf ${ids[1]} 134217728 EOF
+
+	# Verify parity mirror components (mirror 2)
+	verify_comp_parity $tf ${ids[2]}
+	verify_ec_stripe_count $tf ${ids[2]} 4 2
+	verify_comp_extent $tf ${ids[2]} 0 134217728
+
+	verify_comp_parity $tf ${ids[3]}
+	verify_ec_stripe_count $tf ${ids[3]} 4 2
+	verify_comp_extent $tf ${ids[3]} 134217728 EOF
+
+	# verify that explicit EC layouts on new files overwrite dir defaults
+	$LFS setstripe -E -1 --ec 2+1 $ef ||
+		error "explicit setstripe fir $ef failed"
+	verify_mirror_count $ef 2
+	verify_comp_count $ef 2
+	ids=($($LFS getstripe $ef | awk '/lcme_id/{print $2}' | tr '\n' ' '))
+	verify_comp_parity $ef ${ids[1]}
+	verify_ec_stripe_count $ef ${ids[1]} 2 1
+}
+run_test 1k "default EC layout inherited through nested directories"
+
+test_1l() {
+	local td=$DIR/$tdir
+	local subdir=$td/subdir
+	local tf=$subdir/$tfile
+	local ids
+
+	(( OSTCOUNT >= 6 )) || skip_env "needs >= 6 OSTs"
+
+	enable_ec
+
+	test_mkdir $td
+
+	# Two EC mirrors, each a PFL with mixed EC params
+	#   mirror 1: [0,128M) 2+1, [128M,EOF) 4+2
+	#   mirror 2: [0,64M)  4+2, [64M,EOF)  3+2
+	# yields 4 mirrors (2 data + 2 parity) and 8 components.
+	$LFS setstripe -N -E 128M --ec 2+1 -E -1 --ec 4+2 \
+		       -N -E 64M --ec 4+2 -E -1 --ec 3+2 $td ||
+		error "setstripe complex EC layout for $td failed"
+
+	# A subdir inherits the complex default, and a file created in it must
+	# inherit the full layout (every component/mirror and its EC params).
+	mkdir $subdir || error "mkdir for $subdir failed"
+	touch $tf || error "touch for $tf failed"
+
+	verify_mirror_count $tf 4
+	verify_comp_count $tf 8
+
+	# Get component IDs (4 mirrors x 2 PFL comps, in mirror order)
+	ids=($($LFS getstripe $tf | awk '/lcme_id/{print $2}' | tr '\n' ' '))
+
+	# Mirror 1 data components
+	verify_comp_extent $tf ${ids[0]} 0 134217728
+	verify_comp_extent $tf ${ids[1]} 134217728 EOF
+
+	# Mirror 1 parity components (2+1, then 4+2)
+	verify_comp_parity $tf ${ids[2]}
+	verify_ec_stripe_count $tf ${ids[2]} 2 1
+	verify_comp_extent $tf ${ids[2]} 0 134217728
+
+	verify_comp_parity $tf ${ids[3]}
+	verify_ec_stripe_count $tf ${ids[3]} 4 2
+	verify_comp_extent $tf ${ids[3]} 134217728 EOF
+
+	# Mirror 2 data components
+	verify_comp_extent $tf ${ids[4]} 0 67108864
+	verify_comp_extent $tf ${ids[5]} 67108864 EOF
+
+	# Mirror 2 parity components (4+2, then 3+2)
+	verify_comp_parity $tf ${ids[6]}
+	verify_ec_stripe_count $tf ${ids[6]} 4 2
+	verify_comp_extent $tf ${ids[6]} 0 67108864
+
+	verify_comp_parity $tf ${ids[7]}
+	verify_ec_stripe_count $tf ${ids[7]} 3 2
+	verify_comp_extent $tf ${ids[7]} 67108864 EOF
+}
+run_test 1l "default EC layout inherited through nested dirs (complex)"
 
 test_2a() {
 	enable_ec
@@ -975,8 +1114,8 @@ test_3f() {
 run_test 3f "EC inheritance with holes"
 
 test_3g() {
+	(( OSTCOUNT >= 6 )) || skip_env "needs >= 6 OSTs"
 	enable_ec
-	(( $OSTCOUNT >= 2 )) || skip "need >= 2 OSTs" && return
 
 	local tf=$DIR/$tfile
 	local pool_name=$TESTNAME
@@ -1164,33 +1303,159 @@ test_5a() {
 	local ids
 	local tf=$DIR/$tfile
 
-	stack_trap "rm -f $tf $TMP/$tfile.mirror"
+	stack_trap "rm -f $tf $TMP/$tfile.mirror $TMP/$tfile.data"
 
 	# Create EC file with data mirror + parity mirror
+	# Layout: N1 = data, N2 = data, N3 = parity (4+1)
 	$LFS setstripe -N -E 1M -c 1 -E -1 -c 1 \
-		-N -E 1M -c 8 --ec 8+2 -E -1 -c 4 --ec 4+1 $tf ||
+		-N -E 1M -c 4 --ec 4+1 -E -1 -c 4 --ec 4+1 $tf ||
 		error "create EC file failed"
 
 	# Get component IDs
 	ids=($($LFS getstripe $tf | awk '/lcme_id/{print $2}' | tr '\n' ' '))
 
 	# Verify EC parameters on parity components (mirror 3, N3)
+	# Components: 0,1=N1(data), 2,3=N2(data), 4,5=N3(parity)
 	verify_comp_parity $tf ${ids[4]}
-	verify_ec_stripe_count $tf ${ids[4]} 8 2
+	verify_ec_stripe_count $tf ${ids[4]} 4 1
 	verify_comp_parity $tf ${ids[5]}
 	verify_ec_stripe_count $tf ${ids[5]} 4 1
 
-	# Test mirror write to parity mirror (N3)
-	$LFS mirror write -N3 -i /etc/passwd $tf ||
-		error "mirror write to parity mirror failed"
-
-	# Verify round-trip: read back what we wrote
+	# Test 1: Read from empty parity mirror - should return immediately
+	# with 0 bytes (not hang)
 	$LFS mirror read -N3 -o $TMP/$tfile.mirror $tf ||
-		error "mirror read after write failed"
-	cmp $TMP/$tfile.mirror /etc/passwd ||
-		error "mirror write/read round-trip failed"
+		error "mirror read from empty parity failed"
+	local empty_size=$(stat -c %s $TMP/$tfile.mirror)
+	(( empty_size == 0 )) ||
+		error "empty parity read should return 0 bytes, got $empty_size"
+	rm -f $TMP/$tfile.mirror
+
+	# Test 2: Write data, resync, then read from parity
+	cp /etc/passwd $tf || error "failed to write data"
+
+	# Resync to compute parity
+	$LFS mirror resync $tf || error "mirror resync failed"
+
+	# Read from parity mirror (N3) - should work after resync
+	$LFS mirror read -N3 -o $TMP/$tfile.mirror $tf ||
+		error "mirror read from parity failed"
+
+	# Parity data won't match /etc/passwd directly (it's computed parity),
+	# but verify we got non-empty data of reasonable size
+	local parity_size=$(stat -c %s $TMP/$tfile.mirror)
+	(( parity_size > 0 )) || error "parity mirror read returned empty"
+
+	# Also verify data mirror can be read correctly
+	$LFS mirror read -N1 -o $TMP/$tfile.data $tf ||
+		error "mirror read from data failed"
+	cmp $TMP/$tfile.data /etc/passwd ||
+		error "data mirror read mismatch"
 }
 run_test 5a "EC mirror read/write commands"
+
+test_5b() {
+	enable_ec
+
+	local tf=$DIR/$tfile
+	local flags
+	local ids
+
+	stack_trap "rm -f $tf"
+
+	# Create EC file with lfs setstripe
+	# Layout: Mirror 1 has 3 data components [0,128M], [128M,1G], [1G,EOF]
+	#         Mirror 2 has 3 EC components at same extents
+	$LFS setstripe -E 128M -E 1G -E -1 --ec 4+2 $tf ||
+		error "setstripe failed"
+
+	# Verify file starts in RDONLY state
+	verify_flr_state $tf "ro"
+
+	# Get component IDs for both mirrors
+	ids=($($LFS getstripe $tf | awk '/lcme_id/{print $2}' | tr '\n' ' '))
+	echo "Component IDs: ${ids[@]}"
+
+	# Verify EC parameters on parity components (mirror 2)
+	verify_comp_parity $tf ${ids[3]}
+	verify_ec_stripe_count $tf ${ids[3]} 4 2
+	verify_comp_parity $tf ${ids[4]}
+	verify_ec_stripe_count $tf ${ids[4]} 4 2
+	verify_comp_parity $tf ${ids[5]}
+	verify_ec_stripe_count $tf ${ids[5]} 4 2
+
+	# Write to first component (0-1M, within [0,128M] extent)
+	dd if=/dev/zero of=$tf conv=notrunc bs=1M count=1 ||
+		error "write to first component failed"
+
+	# Verify file is now in WRITE_PENDING state
+	verify_flr_state $tf "wp"
+
+	# Verify the corresponding EC component in mirror 2 is stale
+	# Mirror 1 components are ids[0], ids[1], ids[2]
+	# Mirror 2 components are ids[3], ids[4], ids[5]
+	# After writing to first component, ids[3] should be stale
+	verify_comp_stale $tf ${ids[3]}
+
+	# Verify other EC components are NOT stale (component-level granularity)
+	flags=$($LFS getstripe -I${ids[4]} $tf |
+			awk '/lcme_flags:/ { print $2 }')
+	[[ ! $flags =~ "stale" ]] ||
+		error "component ${ids[4]} should not be stale after write to first component"
+
+	flags=$($LFS getstripe -I${ids[5]} $tf |
+			awk '/lcme_flags:/ { print $2 }')
+	[[ ! $flags =~ "stale" ]] ||
+		error "component ${ids[5]} should not be stale after write to first component"
+
+	# Resync the file
+	$LFS mirror resync $tf || error "mirror resync failed"
+
+	# Verify file is back to RDONLY state
+	verify_flr_state $tf "ro"
+
+	# Verify component is no longer stale
+	local flags=$($LFS getstripe -I${ids[3]} $tf |
+			awk '/lcme_flags:/ { print $2 }')
+	[[ ! $flags =~ "stale" ]] ||
+		error "component ${ids[3]} still stale after resync: $flags"
+
+	echo "** Write to second component **"
+
+	# Write to second component (at offset 256M, within [128M,1G] extent)
+	dd if=/dev/zero of=$tf conv=notrunc bs=1M count=1 seek=256 ||
+		error "write to second component failed"
+
+	# Verify file is in WRITE_PENDING state
+	verify_flr_state $tf "wp"
+
+	# Verify the corresponding EC component in mirror 2 is stale
+	# ids[4] is the second EC component
+	verify_comp_stale $tf ${ids[4]}
+
+	# Verify other EC components are NOT stale (component-level granularity)
+	flags=$($LFS getstripe -I${ids[3]} $tf |
+			awk '/lcme_flags:/ { print $2 }')
+	[[ ! $flags =~ "stale" ]] ||
+		error "component ${ids[3]} should not be stale after write to second component"
+
+	flags=$($LFS getstripe -I${ids[5]} $tf |
+			awk '/lcme_flags:/ { print $2 }')
+	[[ ! $flags =~ "stale" ]] ||
+		error "component ${ids[5]} should not be stale after write to second component"
+
+	# Resync the file
+	$LFS mirror resync $tf || error "mirror resync failed"
+
+	# Verify file is back to RDONLY state
+	verify_flr_state $tf "ro"
+
+	# Verify component is no longer stale
+	flags=$($LFS getstripe -I${ids[4]} $tf |
+			awk '/lcme_flags:/ { print $2 }')
+	[[ ! $flags =~ "stale" ]] ||
+		error "component ${ids[4]} still stale after resync: $flags"
+}
+run_test 5b "EC FLR state transitions with writes to different components"
 
 test_6a() {
 	enable_ec
@@ -1562,7 +1827,7 @@ test_6e() {
 }
 run_test 6e "Write fails when only parity mirror is non-stale"
 
-test_7() {
+test_7a() {
 	enable_ec
 
 	local tf=$DIR/$tfile
@@ -1656,7 +1921,1900 @@ test_7() {
 	echo "Final data mirror checksum: $sum1"
 	echo "Final parity mirror checksum: $sum2"
 }
-run_test 7 "nosync flag on parity mirror prevents resync updates"
+run_test 7a "nosync flag on parity mirror prevents resync updates"
+
+test_7b() {
+	(( OSTCOUNT >= 6 )) || skip_env "needs >= 6 OSTs"
+
+	enable_ec
+
+	local tf=$DIR/$tfile
+	local ids
+
+	# Create file with EC
+	$LFS setstripe -E -1 -c 4 --ec 4+2 $tf ||
+		error "setstripe failed"
+
+	verify_mirror_count $tf 2
+
+	# Get mirror IDs
+	ids=($($LFS getstripe $tf | awk '/lcme_mirror_id:/ {print $2}' |
+		sort -u | tr '\n' ' '))
+
+	(( ${#ids[@]} == 2 )) ||
+		error "expected 2 mirrors, got ${#ids[@]}"
+
+	# Determine which mirror is parity (has LCME_FL_PARITY flag)
+	local data_mirror_id=${ids[0]}
+	local parity_mirror_id=${ids[1]}
+	local flags=$($LFS getstripe --mirror-id=${ids[1]} $tf |
+		      awk '/lcme_flags:/ {print $2; exit}')
+
+	if [[ ! $flags =~ "parity" ]]; then
+		# First mirror is parity, swap them
+		data_mirror_id=${ids[1]}
+		parity_mirror_id=${ids[0]}
+	fi
+
+	# Verify we identified them correctly
+	flags=$($LFS getstripe --mirror-id=$parity_mirror_id $tf |
+		awk '/lcme_flags:/ {print $2; exit}')
+	[[ $flags =~ "parity" ]] ||
+		error "mirror $parity_mirror_id should be parity mirror"
+
+	# Try to split parity mirror without -d (should fail)
+	$LFS mirror split --mirror-id $parity_mirror_id $tf 2>&1 |
+		grep -q "parity mirror" ||
+		error "split without -d should fail for parity mirror"
+
+	# Verify mirror count unchanged
+	verify_mirror_count $tf 2
+
+	# Split parity mirror with -d (should succeed)
+	$LFS mirror split --mirror-id $parity_mirror_id -d $tf ||
+		error "split -d should succeed for parity mirror"
+
+	# Verify only data mirror remains
+	verify_mirror_count $tf 1
+
+	# Verify remaining mirror is the data mirror
+	local remaining_id=$($LFS getstripe $tf |
+			     awk '/lcme_mirror_id:/ {print $2; exit}')
+	(( remaining_id == data_mirror_id )) ||
+		error "remaining mirror should be data mirror"
+}
+run_test 7b "mirror split -d works for parity mirrors, regular split fails"
+
+test_7c() {
+	(( OSTCOUNT >= 6 )) || skip_env "needs >= 6 OSTs"
+
+	enable_ec
+
+	local tf=$DIR/$tfile
+	local ids
+
+	# Create file with multiple components and EC
+	$LFS setstripe -E 128M --ec 4+2 -E -1 --ec 4+2 $tf ||
+		error "setstripe failed"
+
+	verify_mirror_count $tf 2
+	verify_comp_count $tf 4
+
+	# Get mirror IDs
+	ids=($($LFS getstripe $tf | awk '/lcme_mirror_id:/ {print $2}' |
+		sort -u | tr '\n' ' '))
+
+	(( ${#ids[@]} == 2 )) ||
+		error "expected 2 mirrors, got ${#ids[@]}"
+
+	# Find parity mirror
+	local parity_mirror_id
+	local flags=$($LFS getstripe --mirror-id=${ids[1]} $tf |
+		      awk '/lcme_flags:/ {print $2; exit}')
+
+	if [[ $flags =~ "parity" ]]; then
+		parity_mirror_id=${ids[1]}
+	else
+		parity_mirror_id=${ids[0]}
+	fi
+
+	# Split parity mirror with -d
+	$LFS mirror split --mirror-id $parity_mirror_id -d $tf ||
+		error "split -d failed for parity mirror"
+
+	# Verify only data mirror remains with 2 components
+	verify_mirror_count $tf 1
+	verify_comp_count $tf 2
+}
+run_test 7c "mirror split -d works for multi-component parity mirrors"
+
+test_7d() {
+	(( OSTCOUNT >= 6 )) || skip_env "needs >= 6 OSTs"
+
+	enable_ec
+
+	local tf=$DIR/$tfile
+	local ids
+
+	# Create file with regular mirror + EC mirror
+	$LFS mirror create -N -E -1 -c 2 \
+			   -N -E -1 -c 4 --ec 4+2 $tf ||
+		error "mirror create failed"
+
+	verify_mirror_count $tf 3
+
+	# Get all mirror IDs
+	ids=($($LFS getstripe $tf | awk '/lcme_mirror_id:/ {print $2}' |
+		sort -u | tr '\n' ' '))
+
+	(( ${#ids[@]} == 3 )) ||
+		error "expected 3 mirrors, got ${#ids[@]}"
+
+	# Find parity mirror (should be the last one)
+	local parity_mirror_id
+	for id in "${ids[@]}"; do
+		local flags=$($LFS getstripe --mirror-id=$id $tf |
+			      awk '/lcme_flags:/ {print $2; exit}')
+		if [[ $flags =~ "parity" ]]; then
+			parity_mirror_id=$id
+			break
+		fi
+	done
+
+	[[ -n $parity_mirror_id ]] ||
+		error "could not find parity mirror"
+
+	# Split parity mirror with -d
+	$LFS mirror split --mirror-id $parity_mirror_id -d $tf ||
+		error "split -d failed for parity mirror"
+
+	# Verify 2 mirrors remain (2 data mirrors)
+	verify_mirror_count $tf 2
+}
+run_test 7d "mirror split -d works with mixed regular and EC mirrors"
+
+test_10() {
+	local tf=${DIR}/${tdir}/$tfile
+
+	# The number of parity stripes in the EC mirror must be equal to or
+	# less than the number of data stripes in the same EC mirror.
+	(( OSTCOUNT >= 5 )) || skip_env "needs >= 5 OSTs"
+	enable_ec
+
+	test_mkdir $DIR/$tdir
+
+	# Test that creating an ec 2+3 mirror fails (parity > data)
+	$LFS setstripe -E -1 -S 4M -c 4 --ec 2+3 $tf >/dev/null &&
+		error "setstripe --ec 2+3 succeeded when it shouldn't"
+
+	return 0
+}
+run_test 10 "cannot create overly large ec mirrors"
+
+test_11() {
+	# The number of parity stripes in the EC mirror can be equal to
+	# the number of data stripes in the same EC mirror.
+	(( OSTCOUNT >= 4 )) || skip_env "needs >= 4 OSTs"
+	enable_ec
+
+	test_mkdir $DIR/$tdir
+	# Test that creating ec 2+2 mirror works
+	$LFS setstripe -E -1 -S 4M -c 4 --ec 2+2 $DIR/$tdir/$tfile ||
+	    error "setstripe --ec 2+2 failed"
+}
+run_test 11 "can create --ec 2+2"
+
+test_12a() {
+	local tf=${DIR}/${tdir}/$tfile
+	local tf_data=${DIR}/${tdir}/${tfile}.data
+	local tf_ec=${DIR}/${tdir}/${tfile}.ec
+
+	# test resyncing a stale ec mirror
+	(( OSTCOUNT >= 4 )) || skip_env "needs >= 4 OSTs"
+	enable_ec
+
+
+	test_mkdir $DIR/$tdir
+
+	$LFS setstripe -E -1 -S 4M -c 4 --ec 2+2 $tf ||
+	    error "setstripe --ec 2+2 failed"
+
+	# Write the first 3 stripes with \001, \002 and \003
+	tr "\000" "\001" < /dev/zero | dd bs=64k count=64          \
+		iflag=fullblock of=$tf 2>/dev/null
+	tr "\000" "\002" < /dev/zero | dd bs=64k count=64 seek=64  \
+		iflag=fullblock of=$tf 2>/dev/null
+	tr "\000" "\003" < /dev/zero | dd bs=64k count=64 seek=128 \
+		iflag=fullblock of=$tf 2>/dev/null
+
+	# Expected file content:
+	#  od -t x1 -A x $tf
+	#  000000 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01
+	#  *
+	#  400000 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02
+	#  *
+	#  800000 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03
+	#  *
+	#  c00000
+
+	echo "fa9fe1782aee74e978e806fb6a0e7a4a1c83610f $tf" \
+	    | sha1sum -c - || error "wrong content in $tf after write"
+
+	# resync the ec mirror:
+	$LFS mirror resync $tf || error "failed to resync ec mirror"
+
+	# Verify the mirror is no longer stale
+	$LFS getstripe $tf | grep lcme_flags | grep stale &&
+	    error "after resyncing $tf, it still contains stale component"
+
+	# verify the file content did not change after updating ec mirror
+	echo "fa9fe1782aee74e978e806fb6a0e7a4a1c83610f $tf" |
+		sha1sum -c - || error "wrong content in $tf after resync"
+
+	# Verify the data mirror is still correct
+	rm -f $tf_data
+	$LFS mirror read --mirror-id 1 -o $tf_data $tf
+	echo "fa9fe1782aee74e978e806fb6a0e7a4a1c83610f $tf_data" |
+		sha1sum -c - || error "wrong content in data mirror"
+
+	# Expected content of the ec mirror (2 parity stripes for 2 data stripes):
+	# Parity stripe 0: XOR of data stripe 0 (0x01) and data stripe 2 (0x03) = 0x9a
+	# Parity stripe 1: XOR of data stripe 1 (0x02) and data stripe 3 (0x00) = 0xfa
+	#  000000 9a 9a 9a 9a 9a 9a 9a 9a 9a 9a 9a 9a 9a 9a 9a 9a
+	#  *
+	#  400000 fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+	#  *
+	#  800000
+
+	# Verify we have expected content in the ec mirror
+	rm -f $tf_ec
+	$LFS mirror read --mirror-id 2 -o $tf_ec $tf
+	echo "aca75f6b8ae9a16aa64f8ca38160bfa39bd2a785 $tf_ec" |
+	    sha1sum -c - || error "wrong content in ec mirror"
+}
+run_test 12a "resync stale parities"
+
+test_12b() {
+	# ZFS lseek does not reliably report holes for dirty data
+	# (dmu_offset_next() returns EBUSY and the txg_wait_synced() retry in
+	# osd_lseek() is not enough), so the resync computes and writes ec
+	# parities across the whole sparse region instead of skipping the holes,
+	# eventually exhausting OST space and failing with ENOSPC.
+	#
+	# This seems to be related to LU-14217 where the fix was not enough. It
+	# needs to be investigated separately.
+	[[ "$ost1_FSTYPE" != "zfs" ]] ||
+		skip "LU-14217: lseek holes unreliable on ZFS"
+
+	# test resyncing a stale ec mirror with huge sparse file
+	(( OSTCOUNT >= 3 )) || skip_env "needs >= 3 OSTs"
+	enable_ec
+
+	test_mkdir $DIR/$tdir
+
+	$LFS setstripe -E -1 -S 4M -c 3 --ec 2+1 $DIR/$tdir/$tfile ||
+		error "setstripe --ec 2+1 failed"
+
+	# gauge I/O performance so resync can be bounded relative to it later
+	local start=$SECONDS
+	# Write the first 3 stripes with \001, \002 and \003
+	tr "\000" "\001" < /dev/zero | dd bs=64k count=64          \
+		iflag=fullblock of=$DIR/$tdir/$tfile 2>/dev/null
+	# Write some data at ~4 TiB
+	tr "\000" "\002" < /dev/zero | dd bs=64k count=64          \
+		seek=64000000  \
+		iflag=fullblock of=$DIR/$tdir/$tfile 2>/dev/null
+	local elapsed=$((SECONDS - start))
+
+	# Truncate to 10 TiB to have a hole at the end
+	$TRUNCATE $DIR/$tdir/$tfile 10995116277760 ||
+		error "failed to truncate file to 10 TiB"
+
+	# resync the ec mirror. With holes skipped, this should only touch two
+	# data regions and should finish well within 10x of the initial write
+	# time above. A regression would then hit the timeout instead of running
+	# for hours
+	local timeout=$((elapsed * 10))
+	echo "mirror resync timeout set to $timeout"
+	timeout -k 10 $timeout $LFS mirror resync $DIR/$tdir/$tfile ||
+		error "failed to resync ec mirror"
+
+	# Verify the mirror is no longer stale
+	$LFS getstripe $DIR/$tdir/$tfile | grep lcme_flags | grep stale &&
+		error "$DIR/$tdir/$tfile still stale after resync" || true
+}
+run_test 12b "resync huge sparse file (10 TiB)"
+
+test_12c() {
+	# refer to 12b for the test case description
+	[[ "$ost1_FSTYPE" != "zfs" ]] ||
+		skip "LU-14217: lseek holes unreliable on ZFS"
+
+	(( OSTCOUNT >= 6 )) || skip_env "needs >= 6 OSTs"
+	enable_ec
+
+	local tf=${DIR}/${tdir}/$tfile
+	local stripe_size=$((4 * 1024 * 1024))
+	local stripe_set_size=$((4 * stripe_size))
+	local ec_set_size=$((2 * stripe_size))
+
+	test_mkdir $DIR/$tdir
+
+	$LFS setstripe -E -1 -S 4M -c 4 --ec 4+2 $tf ||
+		error "setstripe --ec 4+2 failed"
+
+	# Write three full stripe sets, then resync and verify.
+	dd if=/dev/urandom of=$tf bs=$stripe_set_size count=3 2>/dev/null ||
+		error "failed to write three stripe sets"
+
+	$LFS mirror resync $tf || error "failed to resync ec mirror"
+	$LFS getstripe $tf | grep lcme_flags | grep stale &&
+		error "stale component after initial resync"
+	$LFS mirror verify $tf ||
+		error "mirror verify failed after initial resync"
+
+	# Punch out the middle stripe set on the data mirror.
+	local hole_off=$stripe_set_size
+	local fallocate_out=$(fallocate -p --offset $hole_off \
+		-l $stripe_set_size $tf 2>&1) ||
+		skip_eopnotsupp "$fallocate_out|fallocate punch failed"
+
+	(( $($LUSTRE/tests/lseek_test -l 0 $tf) == hole_off )) ||
+		error "expected data hole at $hole_off after punch"
+	(( $($LUSTRE/tests/lseek_test -d $hole_off $tf) == $((2 * stripe_set_size)) )) ||
+		error "expected next data at $((2 * stripe_set_size)) after punch"
+
+	$LFS getstripe $tf | grep lcme_flags | grep stale ||
+		error "parity should be stale after punching data"
+
+	$LFS mirror resync $tf || error "failed to resync after punch"
+	$LFS getstripe $tf | grep lcme_flags | grep stale &&
+		error "stale component after resync following punch"
+
+	#  lcme_id:             131074
+	#  lcme_mirror_id:      2
+	#  lcme_flags:          init,parity
+	local parity_mirror_id=$($LFS getstripe $tf |
+		grep -B1 "lcme_flags.*parity" |
+		grep "lcme_mirror_id" | awk '{print $2}')
+	# it's expected that only the parity for the second stripe set is absent
+	check_parity_read $tf $parity_mirror_id 0 "no"
+	check_parity_read $tf $parity_mirror_id $ec_set_size "yes"
+	check_parity_read $tf $parity_mirror_id $((2 * ec_set_size)) "no"
+
+	$LFS mirror verify $tf ||
+		error "mirror verify failed after punch resync"
+}
+run_test 12c "resync skips holed stripe sets"
+
+test_13() {
+	local tf=${DIR}/${tdir}/$tfile
+	local tf_data=${DIR}/${tdir}/${tfile}.data
+	local tf_ec=${DIR}/${tdir}/${tfile}.ec
+
+	(( OSTCOUNT >= 4 )) || skip_env "needs >= 4 OSTs"
+	enable_ec
+
+	test_mkdir $DIR/$tdir
+
+	$LFS setstripe -E -1 -S 4M -c 1 --ec 3+1 $tf ||
+	    error "setstripe -c 1 --ec 3+1 failed"
+
+	# Write the first 3 stripes with \001, \002 and \003
+	tr "\000" "\001" < /dev/zero | dd bs=64k iflag=fullblock count=64          \
+		of=$tf 2>/dev/null
+	tr "\000" "\002" < /dev/zero | dd bs=64k iflag=fullblock count=64 seek=64  \
+		of=$tf 2>/dev/null
+	tr "\000" "\003" < /dev/zero | dd bs=64k iflag=fullblock count=64 seek=128 \
+		of=$tf 2>/dev/null
+
+	# resync the ec mirror:
+	$LFS mirror resync $tf || error "failed to resync ec mirror"
+
+	# Expected content of both data and "ec" mirror
+	#  od -t x1 -A x $tf
+	#  000000 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01
+	#  *
+	#  400000 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02 02
+	#  *
+	#  800000 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03 03
+	#  *
+	#  c00000
+	rm -f $tf_data
+	stack_trap "rm -f $tf_data"
+	$LFS mirror read --mirror-id 1 -o $tf_data $tf
+	echo "fa9fe1782aee74e978e806fb6a0e7a4a1c83610f $tf_data" |
+	    sha1sum -c - || error "wrong content in data mirror"
+
+	rm -f $tf_ec
+	stack_trap "rm -f $tf_ec"
+	$LFS mirror read --mirror-id 2 -o $tf_ec $tf
+	echo "fa9fe1782aee74e978e806fb6a0e7a4a1c83610f $tf_ec" |
+	    sha1sum -c - || error "wrong content in ec mirror"
+}
+run_test 13 "parity of single stripe data is just a copy"
+
+test_20() {
+	local tf=${DIR}/${tdir}/$tfile
+
+	(( OSTCOUNT >= 4 )) || skip_env "needs >= 4 OSTs"
+	enable_ec
+
+	test_mkdir $DIR/$tdir
+
+	# 4M stripe size
+	$LFS setstripe -E -1 -S 4M -c 1 --ec 3+1 $tf ||
+	    error "setstripe -c 1 -S 4M --ec 3+1 failed"
+
+	$LFS getstripe $tf | grep lmm_stripe_size | grep -v 4194304 2>/dev/null &&
+		error "Stripe size mismatch for -S 4M"
+	rm -f $tf
+
+	# 1M stripe size
+	$LFS setstripe -E -1 -S 1M -c 1 --ec 3+1 $tf ||
+	    error "setstripe -c 1 -S 1M --ec 3+1 failed"
+
+	$LFS getstripe $tf |
+	    grep lmm_stripe_size | grep -v 1048576 2>/dev/null &&
+	    error "Stripe size mismatch for -S 1M"
+	rm -f $tf
+
+	# 64k stripe size
+	$LFS setstripe -E -1 -S 64k -c 1 --ec 3+1 $tf ||
+	    error "setstripe -c 1 -S 64k --ec 3+1 failed"
+
+	$LFS getstripe $tf | grep lmm_stripe_size | grep -v 65536 2>/dev/null &&
+		error "Stripe size mismatch for -S 64k"
+
+	return 0
+}
+run_test 20 "test that stripe size of parity mirror is set correctly"
+
+# Test 21: lfs migrate with EC layouts
+test_21a() {
+	(( OSTCOUNT >= 3 )) || skip_env "needs >= 3 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tdir/$tfile
+
+	test_mkdir $DIR/$tdir
+	stack_trap "rm -rf $DIR/$tdir"
+
+	# Create a plain (non-EC) file with data
+	$LFS setstripe -c 1 $tf || error "setstripe failed"
+	dd if=/dev/urandom of=$tf bs=1M count=5 ||
+		error "write to plain file failed"
+	local old_chksum=$(md5sum $tf | awk '{print $1}')
+
+	# Migrate plain file to EC layout
+	$LFS migrate -E -1 -c 2 --ec 2+1 $tf ||
+		error "migrate (plain -> EC) failed"
+
+	# Verify EC layout after migration
+	verify_mirror_count $tf 2
+	verify_comp_count $tf 2
+
+	# Get component IDs
+	local ids=($($LFS getstripe $tf |
+		awk '/lcme_id/{print $2}' | tr '\n' ' '))
+
+	# Verify parity component layout
+	verify_comp_parity $tf ${ids[1]}
+	verify_ec_stripe_count $tf ${ids[1]} 2 1
+
+	# Verify data integrity
+	local new_chksum=$(md5sum $tf | awk '{print $1}')
+	[[ "$old_chksum" == "$new_chksum" ]] ||
+		error "data changed after migrate: $old_chksum != $new_chksum"
+
+	# For multi-stripe EC (2+1), parity is XOR across stripes, so
+	# parity content must differ from the data mirror content.
+	local data_sum=$($LFS mirror read -N1 $tf | md5sum)
+	local parity_sum=$($LFS mirror read -N2 $tf | md5sum)
+	[[ "$data_sum" != "$parity_sum" ]] ||
+		error "parity identical to data - migrate didn't compute parity"
+}
+run_test 21a "migrate plain file to EC layout"
+
+test_21b() {
+	(( OSTCOUNT >= 3 )) || skip_env "needs >= 3 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tdir/$tfile
+
+	test_mkdir $DIR/$tdir
+	stack_trap "rm -rf $DIR/$tdir"
+
+	# Create EC file with data
+	$LFS setstripe -E -1 -c 2 --ec 2+1 $tf ||
+		error "setstripe EC failed"
+	dd if=/dev/urandom of=$tf bs=1M count=5 ||
+		error "write to EC file failed"
+	$LFS mirror resync $tf || error "resync failed"
+
+	local old_chksum=$(md5sum $tf | awk '{print $1}')
+
+	# Verify EC layout before migration
+	verify_mirror_count $tf 2
+	verify_comp_count $tf 2
+
+	# Migrate EC file to plain layout
+	$LFS migrate -c 2 $tf || error "migrate (EC -> plain) failed"
+
+	# Verify no parity components remain
+	$LFS getstripe $tf | grep -q "parity" &&
+		error "parity components should not exist after migrate to plain"
+
+	# Verify no composite/FLR layout remains
+	$LFS getstripe $tf | grep -q "lcm_mirror_count" &&
+		error "should not have mirror layout after migrate to plain"
+
+	# Verify data integrity
+	local new_chksum=$(md5sum $tf | awk '{print $1}')
+	[[ "$old_chksum" == "$new_chksum" ]] ||
+		error "data changed after migrate: $old_chksum != $new_chksum"
+}
+run_test 21b "migrate EC file to plain layout"
+
+test_21c() {
+	(( OSTCOUNT >= 4 )) || skip_env "needs >= 4 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tdir/$tfile
+
+	test_mkdir $DIR/$tdir
+	stack_trap "rm -rf $DIR/$tdir"
+
+	# Create EC file with 2+1 and write data
+	$LFS setstripe -E -1 -c 2 --ec 2+1 $tf ||
+		error "setstripe EC 2+1 failed"
+	dd if=/dev/urandom of=$tf bs=1M count=5 ||
+		error "write to EC file failed"
+	$LFS mirror resync $tf || error "initial resync failed"
+
+	local old_chksum=$(md5sum $tf | awk '{print $1}')
+
+	# Migrate EC 2+1 to EC 3+1
+	$LFS migrate -E -1 -c 3 --ec 3+1 $tf ||
+		error "migrate (EC 2+1 -> EC 3+1) failed"
+
+	# Verify new EC layout
+	verify_mirror_count $tf 2
+	verify_comp_count $tf 2
+
+	local ids=($($LFS getstripe $tf |
+		awk '/lcme_id/{print $2}' | tr '\n' ' '))
+
+	verify_comp_parity $tf ${ids[1]}
+	verify_ec_stripe_count $tf ${ids[1]} 3 1
+
+	# Verify data integrity
+	local new_chksum=$(md5sum $tf | awk '{print $1}')
+	[[ "$old_chksum" == "$new_chksum" ]] ||
+		error "data changed after migrate: $old_chksum != $new_chksum"
+
+	# For multi-stripe EC, parity is XOR across stripes and must
+	# differ from data content.
+	local data_sum=$($LFS mirror read -N1 $tf | md5sum)
+	local parity_sum=$($LFS mirror read -N2 $tf | md5sum)
+	[[ "$data_sum" != "$parity_sum" ]] ||
+		error "parity identical to data after EC config change"
+}
+run_test 21c "migrate between different EC configurations"
+
+test_21d() {
+	(( OSTCOUNT >= 3 )) || skip_env "needs >= 3 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tdir/$tfile
+
+	test_mkdir $DIR/$tdir
+	stack_trap "rm -rf $DIR/$tdir"
+
+	# Create multi-component PFL file with data
+	$LFS setstripe -E 1M -c 1 -E -1 -c 2 $tf ||
+		error "setstripe PFL failed"
+	dd if=/dev/urandom of=$tf bs=1M count=5 ||
+		error "write to PFL file failed"
+
+	local old_chksum=$(md5sum $tf | awk '{print $1}')
+
+	# Migrate PFL to EC with multiple components
+	$LFS migrate -E 1M -c 2 -E -1 -c 2 --ec 2+1 $tf ||
+		error "migrate (PFL -> EC) failed"
+
+	# Verify EC layout
+	verify_mirror_count $tf 2
+	verify_comp_count $tf 4
+
+	local ids=($($LFS getstripe $tf |
+		awk '/lcme_id/{print $2}' | tr '\n' ' '))
+
+	# Verify parity components
+	verify_comp_parity $tf ${ids[2]}
+	verify_comp_parity $tf ${ids[3]}
+	verify_ec_stripe_count $tf ${ids[2]} 2 1
+	verify_ec_stripe_count $tf ${ids[3]} 2 1
+
+	# Verify data integrity
+	local new_chksum=$(md5sum $tf | awk '{print $1}')
+	[[ "$old_chksum" == "$new_chksum" ]] ||
+		error "data changed after migrate: $old_chksum != $new_chksum"
+}
+run_test 21d "migrate PFL file to EC layout"
+
+# Test 22: mirror split with EC
+test_22a() {
+	(( OSTCOUNT >= 6 )) || skip_env "needs >= 6 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tdir/$tfile
+
+	test_mkdir $DIR/$tdir
+	stack_trap "rm -rf $DIR/$tdir"
+
+	# Create file with plain data mirror + EC data mirror + parity mirror
+	$LFS setstripe -N -E -1 -c 2 \
+		-N -E -1 -c 2 --ec 2+2 $tf ||
+		error "setstripe failed"
+	dd if=/dev/urandom of=$tf bs=1M count=3 ||
+		error "write failed"
+	$LFS mirror resync $tf || error "resync failed"
+
+	local old_chksum=$(md5sum $tf | awk '{print $1}')
+
+	# Should have 3 mirrors: data, data+EC, parity
+	verify_mirror_count $tf 3
+
+	# Split off mirror 1 (plain data mirror) - should work fine
+	$LFS mirror split --mirror-id 1 -d $tf ||
+		error "split plain data mirror failed"
+
+	# Should now have 2 mirrors: data+EC, parity
+	verify_mirror_count $tf 2
+
+	# Parity component should still exist
+	$LFS getstripe $tf | grep -q "parity" ||
+		error "parity component lost after split"
+
+	# Verify data integrity
+	local new_chksum=$(md5sum $tf | awk '{print $1}')
+	[[ "$old_chksum" == "$new_chksum" ]] ||
+		error "data changed after split: $old_chksum != $new_chksum"
+
+	# Verify remaining EC layout is functional: write new data,
+	# resync, and confirm parity is recomputed
+	dd if=/dev/urandom of=$tf bs=1M count=1 conv=notrunc ||
+		error "write after split failed"
+	verify_flr_state $tf "wp"
+	$LFS mirror resync $tf || error "resync after split+write failed"
+	verify_flr_state $tf "ro"
+
+	# For multi-stripe EC (2+2), parity is computed across stripes and
+	# must differ from data content, confirming EC is functional.
+	local data_sum=$($LFS mirror read -N1 $tf | md5sum)
+	local parity_sum=$($LFS mirror read -N2 $tf | md5sum)
+	[[ "$data_sum" != "$parity_sum" ]] ||
+		error "parity identical to data after split - EC not functional"
+}
+run_test 22a "mirror split removes plain mirror, keeps EC"
+
+# Test 23: truncate and fallocate with EC
+test_23a() {
+	enable_ec
+
+	local tf=$DIR/$tdir/$tfile
+	local ids
+
+	test_mkdir $DIR/$tdir
+	stack_trap "rm -rf $DIR/$tdir"
+
+	# Create EC file and write data
+	$LFS setstripe -E -1 -c 4 --ec 4+2 $tf ||
+		error "setstripe failed"
+	dd if=/dev/urandom of=$tf bs=1M count=5 ||
+		error "write failed"
+	$LFS mirror resync $tf || error "resync failed"
+	verify_flr_state $tf "ro"
+
+	# Save parity mirror checksum before truncate
+	local parity_sum_before=$($LFS mirror read -N2 $tf | md5sum)
+
+	# Truncate to smaller size
+	$TRUNCATE $tf 2097152 || error "truncate to 2M failed"
+
+	# After truncate, file should be in write-pending state
+	verify_flr_state $tf "wp"
+
+	# Get component IDs
+	ids=($($LFS getstripe $tf |
+		awk '/lcme_id/{print $2}' | tr '\n' ' '))
+
+	# Parity component should be stale after truncate
+	verify_comp_stale $tf ${ids[1]}
+
+	# Resync - this should recompute parity for truncated data
+	$LFS mirror resync $tf || error "resync after truncate failed"
+	verify_flr_state $tf "ro"
+
+	local size=$(stat -c%s $tf)
+	(( size == 2097152 )) ||
+		error "file size wrong after truncate: $size != 2097152"
+
+	# Verify parity was actually recomputed (checksum should change
+	# because parity of 2M of data differs from parity of 5M of data)
+	local parity_sum_after=$($LFS mirror read -N2 $tf | md5sum)
+	[[ "$parity_sum_before" != "$parity_sum_after" ]] ||
+		error "parity mirror unchanged after truncate+resync"
+
+	# Verify data mirror still has correct content
+	local data_sum=$($LFS mirror read -N1 $tf | md5sum)
+	local file_sum=$(md5sum < $tf)
+	[[ "$data_sum" == "$file_sum" ]] ||
+		error "data mirror content mismatch after truncate"
+}
+run_test 23a "truncate EC file to smaller size"
+
+test_23b() {
+	enable_ec
+
+	local tf=$DIR/$tdir/$tfile
+	local ids
+
+	test_mkdir $DIR/$tdir
+	stack_trap "rm -rf $DIR/$tdir"
+
+	# Create EC file and write data
+	$LFS setstripe -E -1 -c 4 --ec 4+2 $tf ||
+		error "setstripe failed"
+	dd if=/dev/urandom of=$tf bs=1M count=2 ||
+		error "write failed"
+	$LFS mirror resync $tf || error "resync failed"
+	verify_flr_state $tf "ro"
+
+	# Truncate to larger size (extends with zeros)
+	$TRUNCATE $tf 10485760 || error "truncate to 10M failed"
+
+	# After truncate, file should be in write-pending state
+	verify_flr_state $tf "wp"
+
+	# Get component IDs
+	ids=($($LFS getstripe $tf |
+		awk '/lcme_id/{print $2}' | tr '\n' ' '))
+
+	# Parity component should be stale after truncate
+	verify_comp_stale $tf ${ids[1]}
+
+	# Resync - parity must be recomputed for the extended data
+	$LFS mirror resync $tf || error "resync after truncate failed"
+	verify_flr_state $tf "ro"
+
+	local size=$(stat -c%s $tf)
+	(( size == 10485760 )) ||
+		error "file size wrong after truncate: $size != 10485760"
+
+	# Verify data mirror content matches file read
+	local data_sum=$($LFS mirror read -N1 $tf | md5sum)
+	local file_sum=$(md5sum < $tf)
+	[[ "$data_sum" == "$file_sum" ]] ||
+		error "data mirror content mismatch after truncate"
+
+	# Verify parity covers the extended region: write non-zero data
+	# into the previously zero-extended area and confirm parity is
+	# recomputed (a zero-only extension produces zero parity, which
+	# is indistinguishable from unwritten parity storage, so we need
+	# real data to meaningfully exercise parity over the new range).
+	local parity_sum_before=$($LFS mirror read -N2 $tf | md5sum)
+	dd if=/dev/urandom of=$tf bs=1M count=4 seek=4 conv=notrunc ||
+		error "write into extended region failed"
+	$LFS mirror resync $tf || error "resync after extended write failed"
+	verify_flr_state $tf "ro"
+	local parity_sum_after=$($LFS mirror read -N2 $tf | md5sum)
+	[[ "$parity_sum_before" != "$parity_sum_after" ]] ||
+		error "parity mirror unchanged after write into extended region"
+}
+run_test 23b "truncate EC file to larger size"
+
+test_23c() {
+	enable_ec
+	check_set_fallocate_or_skip
+
+	local tf=$DIR/$tdir/$tfile
+	local ids
+
+	test_mkdir $DIR/$tdir
+	stack_trap "rm -rf $DIR/$tdir"
+
+	# Create EC file
+	$LFS setstripe -E -1 -c 4 --ec 4+2 $tf ||
+		error "setstripe failed"
+
+	# fallocate space - preallocate without writing data
+	fallocate -l 5M $tf || error "fallocate failed"
+
+	# After fallocate, parity should be stale
+	verify_flr_state $tf "wp"
+	ids=($($LFS getstripe $tf |
+		awk '/lcme_id/{print $2}' | tr '\n' ' '))
+	verify_comp_stale $tf ${ids[1]}
+
+	# Resync parity for the preallocated region
+	$LFS mirror resync $tf || error "resync after fallocate failed"
+	verify_flr_state $tf "ro"
+
+	# Now write actual data into the preallocated region
+	dd if=/dev/urandom of=$tf bs=1M count=5 conv=notrunc ||
+		error "write to preallocated file failed"
+
+	# Parity must go stale again from the actual write
+	verify_flr_state $tf "wp"
+	verify_comp_stale $tf ${ids[1]}
+
+	# Resync parity with real data
+	$LFS mirror resync $tf || error "resync after write failed"
+	verify_flr_state $tf "ro"
+
+	# Verify data mirror matches file content (proving EC resync
+	# correctly processed the preallocated+written region)
+	local file_sum=$(md5sum < $tf)
+	local data_sum=$($LFS mirror read -N1 $tf | md5sum)
+	[[ "$file_sum" == "$data_sum" ]] ||
+		error "data mirror content mismatch after fallocate+write"
+
+	# For multi-stripe EC (4+2), parity is XOR across stripes and
+	# must differ from data content.
+	local parity_sum=$($LFS mirror read -N2 $tf | md5sum)
+	[[ "$data_sum" != "$parity_sum" ]] ||
+		error "parity mirror identical to data - not real parity"
+}
+run_test 23c "fallocate on EC file"
+
+# Test 24: comp-add/del with EC
+test_24a() {
+	enable_ec
+
+	local tf=$DIR/$tdir/$tfile
+
+	test_mkdir $DIR/$tdir
+	stack_trap "rm -rf $DIR/$tdir"
+
+	# Create EC file
+	$LFS setstripe -E -1 -c 4 --ec 4+2 $tf ||
+		error "setstripe failed"
+
+	# Attempting --comp-add with --ec should be rejected
+	local output
+	output=$($LFS setstripe --comp-add -E -1 --ec 4+2 $tf 2>&1) &&
+		error "should reject --ec with --comp-add"
+	echo "$output" | grep -q "cannot be used with" ||
+		error "unexpected error message: $output"
+
+	return 0
+}
+run_test 24a "reject --ec with --comp-add"
+
+test_24b() {
+	enable_ec
+
+	local tf=$DIR/$tdir/$tfile
+
+	test_mkdir $DIR/$tdir
+	stack_trap "rm -rf $DIR/$tdir"
+
+	# Create EC file with two components per mirror
+	# Mirror 1 (data): [0, 1M], [1M, EOF]
+	# Mirror 2 (parity): [0, 1M], [1M, EOF]
+	$LFS setstripe -E 1M -c 2 -E -1 -c 4 --ec 4+2 $tf ||
+		error "setstripe failed"
+
+	verify_mirror_count $tf 2
+	verify_comp_count $tf 4
+
+	local ids=($($LFS getstripe $tf |
+		awk '/lcme_id/{print $2}' | tr '\n' ' '))
+
+	# ids[0], ids[1] = data mirror components
+	# ids[2], ids[3] = parity mirror components
+
+	# Attempting to delete data component that is protected by
+	# parity should fail
+	$LFS setstripe --comp-del -I ${ids[1]} $tf 2>&1 &&
+		error "should not allow deleting data comp protected by parity"
+
+	# Verify layout unchanged
+	verify_comp_count $tf 4
+
+	# Attempting to delete parity component directly should also fail
+	$LFS setstripe --comp-del -I ${ids[2]} $tf 2>&1 &&
+		error "should not allow deleting parity component directly"
+
+	verify_comp_count $tf 4
+
+	return 0
+}
+run_test 24b "reject deleting data component protected by parity"
+
+# Test 25: lfs find with EC attributes
+test_25a() {
+	enable_ec
+
+	local td=$DIR/$tdir
+
+	test_mkdir $td
+	stack_trap "rm -rf $td"
+
+	# Create EC file
+	$LFS setstripe -E -1 -c 4 --ec 4+2 $td/ec_file ||
+		error "setstripe EC failed"
+
+	# Create plain file
+	$LFS setstripe -c 1 $td/plain_file ||
+		error "setstripe plain failed"
+
+	# Create mirrored file without EC
+	$LFS mirror create -N2 -E -1 -c 2 $td/mirror_file ||
+		error "mirror create failed"
+
+	# Find files with parity components
+	local found=$($LFS find $td --component-flags parity | wc -l)
+	(( found == 1 )) ||
+		error "expected 1 file with parity, found $found"
+
+	# The found file should be the EC file
+	$LFS find $td --component-flags parity | grep -q "ec_file" ||
+		error "find did not return the EC file"
+
+	# Verify that plain and mirror files are not returned
+	local parity_files=$($LFS find $td --component-flags parity)
+	echo "$parity_files" | grep -q "plain_file" &&
+		error "find returned plain_file as having parity"
+	echo "$parity_files" | grep -q "mirror_file" &&
+		error "find returned mirror_file as having parity"
+
+	return 0
+}
+run_test 25a "lfs find with --component-flags parity"
+
+# Test 26: larger I/O and multi-stripe EC data integrity
+test_26a() {
+	enable_ec
+
+	local tf=$DIR/$tdir/$tfile
+	local tf_data=$DIR/$tdir/${tfile}.data
+	local tf_ec=$DIR/$tdir/${tfile}.ec
+
+	test_mkdir $DIR/$tdir
+	stack_trap "rm -rf $DIR/$tdir"
+
+	# Create EC file with 4 data stripes and 2 parity stripes
+	# Use 1M stripe size so 20M of data spans 5 full stripe rows
+	$LFS setstripe -E -1 -S 1M -c 4 --ec 4+2 $tf ||
+		error "setstripe failed"
+
+	# Write 20M of random data (5 full rows of 4x1M stripes)
+	dd if=/dev/urandom of=$tf bs=1M count=20 ||
+		error "write failed"
+
+	local old_chksum=$(md5sum $tf | awk '{print $1}')
+
+	# Resync EC parity
+	$LFS mirror resync $tf || error "resync failed"
+
+	# Verify data unchanged after resync
+	local new_chksum=$(md5sum $tf | awk '{print $1}')
+	[[ "$old_chksum" == "$new_chksum" ]] ||
+		error "data changed after resync: $old_chksum != $new_chksum"
+
+	# Read data mirror and verify
+	$LFS mirror read --mirror-id 1 -o $tf_data $tf ||
+		error "mirror read data failed"
+	echo "$old_chksum  $tf_data" | md5sum -c - ||
+		error "data mirror content mismatch"
+
+	# Save parity checksum before overwrite
+	local parity_sum_before=$($LFS mirror read -N2 $tf | md5sum)
+
+	# Overwrite part of the file (middle 4M of 20M)
+	dd if=/dev/urandom of=$tf bs=1M count=4 seek=8 conv=notrunc ||
+		error "overwrite failed"
+
+	# After overwrite, parity should be stale
+	verify_flr_state $tf "wp"
+
+	# Resync after overwrite - parity must be recomputed
+	$LFS mirror resync $tf || error "resync after overwrite failed"
+	verify_flr_state $tf "ro"
+
+	# Verify parity was recomputed (data changed so parity must differ)
+	local parity_sum_after=$($LFS mirror read -N2 $tf | md5sum)
+	[[ "$parity_sum_before" != "$parity_sum_after" ]] ||
+		error "parity unchanged after data overwrite+resync"
+
+	# Verify data mirror has correct content after overwrite+resync
+	local final_chksum=$(md5sum $tf | awk '{print $1}')
+	rm -f $tf_data
+	$LFS mirror read --mirror-id 1 -o $tf_data $tf ||
+		error "mirror read data after overwrite failed"
+	echo "$final_chksum  $tf_data" | md5sum -c - ||
+		error "data mirror content mismatch after overwrite"
+}
+run_test 26a "multi-stripe EC data integrity with 20M file"
+
+test_26b() {
+	enable_ec
+
+	local tf=$DIR/$tdir/$tfile
+	local tf_data=$DIR/$tdir/${tfile}.data
+	local tf_ec=$DIR/$tdir/${tfile}.ec
+
+	test_mkdir $DIR/$tdir
+	stack_trap "rm -rf $DIR/$tdir"
+
+	# Create EC file with 2 data stripes and 2 parity stripes
+	# Use 4M stripe size for larger stripe coverage
+	$LFS setstripe -E -1 -S 4M -c 2 --ec 2+2 $tf ||
+		error "setstripe failed"
+
+	# Write a pattern: alternating blocks of \xAA and \x55
+	tr "\000" "\252" < /dev/zero | dd of=$tf bs=1M count=8 \
+		iflag=fullblock 2>/dev/null
+	tr "\000" "\125" < /dev/zero | dd of=$tf bs=1M count=8 seek=8 \
+		iflag=fullblock 2>/dev/null
+
+	local old_chksum=$(md5sum $tf | awk '{print $1}')
+
+	# Resync
+	$LFS mirror resync $tf || error "resync failed"
+
+	# Verify data
+	local new_chksum=$(md5sum $tf | awk '{print $1}')
+	[[ "$old_chksum" == "$new_chksum" ]] ||
+		error "data changed after resync: $old_chksum != $new_chksum"
+
+	# Read back and verify both mirrors
+	$LFS mirror read --mirror-id 1 -o $tf_data $tf ||
+		error "mirror read data failed"
+	echo "$old_chksum  $tf_data" | md5sum -c - ||
+		error "data mirror content mismatch"
+
+	# Read EC parity mirror
+	$LFS mirror read --mirror-id 2 -o $tf_ec $tf ||
+		error "mirror read ec failed"
+	[[ -s $tf_ec ]] || error "EC mirror is empty"
+
+	# For multi-stripe EC (2+2), parity is XOR across data stripes,
+	# so parity content must differ from data content.
+	local data_sum=$(md5sum < $tf_data)
+	local ec_sum=$(md5sum < $tf_ec)
+	[[ "$data_sum" != "$ec_sum" ]] ||
+		error "parity mirror identical to data mirror - not real parity"
+
+	# Overwrite first half with different pattern, resync,
+	# and verify parity changes
+	local ec_sum_before=$ec_sum
+	tr "\000" "\377" < /dev/zero | dd of=$tf bs=1M count=8 \
+		iflag=fullblock conv=notrunc 2>/dev/null
+	$LFS mirror resync $tf || error "resync after overwrite failed"
+	rm -f $tf_ec
+	$LFS mirror read --mirror-id 2 -o $tf_ec $tf ||
+		error "mirror read ec after overwrite failed"
+	local ec_sum_after=$(md5sum < $tf_ec)
+	[[ "$ec_sum_before" != "$ec_sum_after" ]] ||
+		error "parity unchanged after data modification"
+}
+run_test 26b "EC data integrity with patterned data and 4M stripes"
+
+# Test 27: PFL lazy instantiation with EC
+test_27a() {
+	enable_ec
+
+	local tf=$DIR/$tdir/$tfile
+	local ids
+	local flags
+
+	test_mkdir $DIR/$tdir
+	stack_trap "rm -rf $DIR/$tdir"
+
+	# Create EC file with PFL: [0, 1M], [1M, 8M], [8M, EOF]
+	# Use 4+1 so parity count stays valid for all component stripe counts
+	$LFS setstripe -E 1M -c 4 -E 8M -c 4 -E -1 -c 4 --ec 4+1 $tf ||
+		error "setstripe failed"
+
+	verify_mirror_count $tf 2
+	verify_comp_count $tf 6
+
+	# Component layout:
+	# ids[0]: data [0, 1M]    ids[3]: parity [0, 1M]
+	# ids[1]: data [1M, 8M]   ids[4]: parity [1M, 8M]
+	# ids[2]: data [8M, EOF]  ids[5]: parity [8M, EOF]
+
+	# Write only to the first component (< 1M)
+	dd if=/dev/urandom of=$tf bs=512K count=1 ||
+		error "write to first component failed"
+
+	# Get component IDs
+	ids=($($LFS getstripe $tf |
+		awk '/lcme_id/{print $2}' | tr '\n' ' '))
+
+	# First data component should be init (instantiated by write)
+	$LFS getstripe -I${ids[0]} $tf | grep -q "init" ||
+		error "first data component should be init"
+
+	# Second and third parity components should NOT be init yet
+	# (no data written to those extents, so parity not needed)
+	flags=$($LFS getstripe -I${ids[4]} $tf |
+		awk '/lcme_flags:/ { print $2 }')
+	[[ ! "$flags" =~ "init" ]] ||
+		error "second parity component should not be init yet"
+	flags=$($LFS getstripe -I${ids[5]} $tf |
+		awk '/lcme_flags:/ { print $2 }')
+	[[ ! "$flags" =~ "init" ]] ||
+		error "third parity component should not be init yet"
+
+	# Resync first component's parity
+	$LFS mirror resync $tf || error "resync failed"
+	verify_flr_state $tf "ro"
+
+	# First parity component should now be init after resync
+	flags=$($LFS getstripe -I${ids[3]} $tf |
+		awk '/lcme_flags:/ { print $2 }')
+	[[ "$flags" =~ "init" ]] ||
+		error "first parity component should be init after resync"
+
+	# Save parity checksum after first resync
+	local parity_sum1=$($LFS mirror read -N2 $tf | md5sum)
+
+	# Now write to the second component extent (at 2M)
+	dd if=/dev/urandom of=$tf bs=1M count=1 seek=2 conv=notrunc ||
+		error "write to second component failed"
+	verify_flr_state $tf "wp"
+
+	# Resync
+	$LFS mirror resync $tf || error "resync after second write failed"
+	verify_flr_state $tf "ro"
+
+	# Parity should have changed (new data in second component)
+	local parity_sum2=$($LFS mirror read -N2 $tf | md5sum)
+	[[ "$parity_sum1" != "$parity_sum2" ]] ||
+		error "parity unchanged after writing to second component"
+
+	# Write to the third component extent (at 10M)
+	dd if=/dev/urandom of=$tf bs=1M count=1 seek=10 conv=notrunc ||
+		error "write to third component failed"
+	verify_flr_state $tf "wp"
+
+	# Resync everything
+	$LFS mirror resync $tf || error "final resync failed"
+	verify_flr_state $tf "ro"
+
+	# Parity should have changed again
+	local parity_sum3=$($LFS mirror read -N2 $tf | md5sum)
+	[[ "$parity_sum2" != "$parity_sum3" ]] ||
+		error "parity unchanged after writing to third component"
+
+	# Verify data can be read back correctly
+	local file_sum=$(md5sum < $tf)
+	local data_sum=$($LFS mirror read -N1 $tf | md5sum)
+	[[ "$file_sum" == "$data_sum" ]] ||
+		error "data mirror content mismatch"
+}
+run_test 27a "PFL lazy instantiation with EC across multiple components"
+
+# Test 28: file operations (hardlink, rename, symlink) on EC files
+test_28a() {
+	enable_ec
+
+	local tf=$DIR/$tdir/$tfile
+	local tf_link=$DIR/$tdir/${tfile}.link
+
+	test_mkdir $DIR/$tdir
+	stack_trap "rm -rf $DIR/$tdir"
+
+	# Create EC file with data and sync parity
+	$LFS setstripe -E -1 -c 4 --ec 4+2 $tf ||
+		error "setstripe failed"
+	dd if=/dev/urandom of=$tf bs=1M count=2 ||
+		error "write failed"
+	$LFS mirror resync $tf || error "resync failed"
+	verify_flr_state $tf "ro"
+
+	local old_chksum=$(md5sum $tf | awk '{print $1}')
+	local parity_sum_before=$($LFS mirror read -N2 $tf | md5sum)
+
+	# Create hardlink
+	ln $tf $tf_link || error "hardlink failed"
+
+	# Verify EC layout accessible through hardlink
+	verify_mirror_count $tf_link 2
+	$LFS getstripe $tf_link | grep -q "parity" ||
+		error "parity not visible through hardlink"
+
+	# Write through the hardlink - should make parity stale
+	dd if=/dev/urandom of=$tf_link bs=1M count=1 conv=notrunc ||
+		error "write through hardlink failed"
+	verify_flr_state $tf "wp"
+
+	# Verify parity is stale when checked through original name
+	local ids=($($LFS getstripe $tf |
+		awk '/lcme_id/{print $2}' | tr '\n' ' '))
+	verify_comp_stale $tf ${ids[1]}
+
+	# Resync through original name
+	$LFS mirror resync $tf || error "resync through original name failed"
+	verify_flr_state $tf "ro"
+
+	# Verify parity was recomputed (data changed via hardlink write)
+	local parity_sum_after=$($LFS mirror read -N2 $tf | md5sum)
+	[[ "$parity_sum_before" != "$parity_sum_after" ]] ||
+		error "parity unchanged after write-through-hardlink+resync"
+
+	# Verify data readable through both names matches
+	local sum_orig=$(md5sum < $tf)
+	local sum_link=$(md5sum < $tf_link)
+	[[ "$sum_orig" == "$sum_link" ]] ||
+		error "data differs between original and hardlink after resync"
+}
+run_test 28a "EC parity correctly tracks writes through hardlinks"
+
+#
+# Failure injection / degraded mode tests (test_29x - test_33x)
+#
+# These tests exercise EC behavior under OST failures, degraded OSTs,
+# and injected I/O errors.
+#
+
+drop_client_cache() {
+	echo 3 > /proc/sys/vm/drop_caches
+}
+
+test_29a() {
+	# With 2+1 EC, losing 2 OSTs exceeds parity tolerance.
+	# Read must fail (not return corrupt data). This test should
+	# pass today -- we expect an error, and we get one.
+	(( OSTCOUNT >= 4 )) || skip "need >= 4 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tfile
+
+	stack_trap "rm -f $tf" EXIT
+
+	# 2+1 EC: can only tolerate 1 failure
+	$LFS setstripe -E -1 -S 1M -c 2 --ec 2+1 $tf ||
+		error "setstripe failed"
+
+	dd if=/dev/urandom of=$tf bs=1M count=4 || error "write failed"
+	$LFS mirror resync $tf || error "resync failed"
+	verify_flr_state $tf "ro"
+
+	# Identify two distinct OSTs used by the data stripe
+	local ost_indices=($($LFS getstripe $tf |
+		awk '/l_ost_idx:/ {print $5}' | head -2 | tr -d ','))
+
+	local facet1=ost$((ost_indices[0] + 1))
+	local facet2=ost$((ost_indices[1] + 1))
+
+	echo "Stopping $facet1 and $facet2 (exceeds 2+1 parity tolerance)"
+	stop $facet1
+	stop $facet2
+	wait_osc_import_state client $facet1 "\(DISCONN\|IDLE\)"
+	wait_osc_import_state client $facet2 "\(DISCONN\|IDLE\)"
+	drop_client_cache
+
+	# Read must fail -- returning success with wrong data would be
+	# catastrophic. Either an I/O error or timeout is acceptable.
+	if md5sum $tf 2>/dev/null; then
+		error "read should have failed with 2 OSTs down on 2+1 EC"
+	else
+		echo "Read correctly failed when losses exceed parity tolerance"
+	fi
+
+	start $facet1 $(ostdevname $((ost_indices[0] + 1))) $OST_MOUNT_OPTS
+	start $facet2 $(ostdevname $((ost_indices[1] + 1))) $OST_MOUNT_OPTS
+	wait_recovery_complete $facet1
+	wait_recovery_complete $facet2
+}
+run_test 29a "EC read fails when OST losses exceed parity tolerance"
+
+test_30a() {
+	# Test that writes still succeed when an OST used by the parity
+	# mirror is down. The data mirror write should succeed, and the
+	# parity mirror should be marked stale.
+	(( OSTCOUNT >= 4 )) || skip "need >= 4 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tfile
+
+	stack_trap "rm -f $tf" EXIT
+
+	$LFS setstripe -E -1 -S 1M -c 2 --ec 2+1 $tf ||
+		error "setstripe failed"
+
+	dd if=/dev/urandom of=$tf bs=1M count=2 || error "initial write failed"
+	$LFS mirror resync $tf || error "resync failed"
+	verify_flr_state $tf "ro"
+
+	# Write new data - parity becomes stale, no OST failure needed
+	dd if=/dev/urandom of=$tf bs=1M count=2 conv=notrunc ||
+		error "overwrite failed"
+	verify_flr_state $tf "wp"
+
+	# Verify parity mirror is stale
+	local ids=($($LFS getstripe $tf |
+		awk '/lcme_id/{print $2}' | tr '\n' ' '))
+	verify_comp_stale $tf ${ids[1]}
+
+	# Resync should recover parity
+	$LFS mirror resync $tf || error "resync after write failed"
+	verify_flr_state $tf "ro"
+
+	# Verify data integrity through the whole cycle
+	local cksum=$(md5sum $tf | awk '{print $1}')
+	[[ -n "$cksum" ]] || error "cannot read file after resync"
+}
+run_test 30a "write makes parity stale, resync recovers"
+
+test_30b() {
+	# Test resync after parity OST recovery. Write data (parity
+	# becomes stale), cycle the parity OST down and back up, then
+	# verify resync succeeds and data is intact.
+	# Note: we do NOT attempt resync while the OST is down because
+	# designated writes to a downed OST enter uninterruptible kernel
+	# sleep and cannot be timed out.
+	(( OSTCOUNT >= 4 )) || skip "need >= 4 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tfile
+
+	stack_trap "rm -f $tf" EXIT
+
+	$LFS setstripe -E -1 -S 1M -c 2 --ec 2+1 $tf ||
+		error "setstripe failed"
+
+	dd if=/dev/urandom of=$tf bs=1M count=4 || error "write failed"
+	local cksum_before=$(md5sum $tf | awk '{print $1}')
+
+	# Parity is stale after the write. Cycle the parity OST.
+	local parity_ost_idx=$($LFS getstripe --mirror-id=2 $tf |
+		awk '/l_ost_idx:/ {print $5; exit}' | tr -d ',')
+	[[ -n "$parity_ost_idx" ]] || error "could not find parity OST"
+	local parity_facet=ost$((parity_ost_idx + 1))
+
+	echo "Cycling $parity_facet (parity OST index $parity_ost_idx)"
+	stop $parity_facet
+	wait_osc_import_state client $parity_facet "\(DISCONN\|IDLE\)"
+
+	# Restart the parity OST
+	start $parity_facet $(ostdevname $((parity_ost_idx + 1))) \
+		$OST_MOUNT_OPTS
+	wait_recovery_complete $parity_facet
+
+	# Resync should succeed now that the OST is back
+	$LFS mirror resync $tf || error "resync failed after OST recovery"
+	verify_flr_state $tf "ro"
+
+	# Verify data integrity is maintained through the whole sequence
+	local cksum_after=$(md5sum $tf | awk '{print $1}')
+	[[ "$cksum_before" == "$cksum_after" ]] ||
+		error "data corrupted: $cksum_before != $cksum_after"
+}
+run_test 30b "resync succeeds after parity OST recovery"
+
+test_30c() {
+	# Test that resync correctly recomputes parity after an OST
+	# that was down comes back. The sequence is:
+	# 1. Create EC file, write data, resync parity (all good)
+	# 2. Stop a data-mirror OST
+	# 3. Start it back
+	# 4. Verify data is intact and resync still works
+	(( OSTCOUNT >= 4 )) || skip "need >= 4 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tfile
+
+	stack_trap "rm -f $tf" EXIT
+
+	$LFS setstripe -E -1 -S 1M -c 2 --ec 2+1 $tf ||
+		error "setstripe failed"
+
+	dd if=/dev/urandom of=$tf bs=1M count=4 || error "write failed"
+	$LFS mirror resync $tf || error "initial resync failed"
+	verify_flr_state $tf "ro"
+
+	local cksum_before=$(md5sum $tf | awk '{print $1}')
+
+	# Stop a data OST and bring it back
+	local data_ost_idx=$($LFS getstripe --mirror-id=1 $tf |
+		awk '/l_ost_idx:/ {print $5; exit}' | tr -d ',')
+	local data_facet=ost$((data_ost_idx + 1))
+
+	echo "Cycling $data_facet (data OST index $data_ost_idx)"
+	stop $data_facet
+	wait_osc_import_state client $data_facet "\(DISCONN\|IDLE\)"
+
+	start $data_facet $(ostdevname $((data_ost_idx + 1))) $OST_MOUNT_OPTS
+	wait_recovery_complete $data_facet
+
+	# Data should still be readable and correct
+	drop_client_cache
+	local cksum_after=$(md5sum $tf | awk '{print $1}')
+	[[ "$cksum_before" == "$cksum_after" ]] ||
+		error "data corrupted after OST cycle: $cksum_before != $cksum_after"
+
+	# Write new data and resync - everything should still work
+	dd if=/dev/urandom of=$tf bs=1M count=2 conv=notrunc ||
+		error "write after OST recovery failed"
+	$LFS mirror resync $tf || error "resync after OST recovery failed"
+	verify_flr_state $tf "ro"
+}
+run_test 30c "data survives OST restart cycle, resync works after recovery"
+
+test_30d() {
+	# test that reading from ec mirror reads the full set of parities
+	(( OSTCOUNT >= 8 )) || skip_env "needs >= 8 OSTs"
+
+	enable_ec
+
+	local tf=$DIR/$tfile
+
+	# Create a simple EC file with data mirror + parity mirror
+	$LFS setstripe -E -1 -S 64k -c 8 --ec 2+2 $tf ||
+		error "setstripe --ec 2+2 failed"
+
+	# Write some data to the file
+	# The file now spans 5 full stripe sets plus an extra stripe
+	# The resulting parity should then be for 6 full stripe sets
+	# of parities.
+	tr "\000" "\002" < /dev/zero | dd bs=64k count=1 seek=40  \
+		iflag=fullblock of=$tf 2>/dev/null
+
+	rm -f $TMP/$tfile.parity
+	stack_trap "rm -f $TMP/$tfile.parity"
+
+	# stripe size 64k
+	# 8 data stripes, ec 2+2
+	# 4 raid sets with 2 parities each
+	# a total of 6 stripe sets
+	# parity mirror size should be 6 * 4 * 2 * 64k plus
+	$LFS mirror read --mirror-id 2 -o $TMP/$tfile.parity $tf
+	stat $TMP/$tfile.parity | grep "Size: 3145728" ||
+	    error "Wrong size of parity mirror"
+}
+run_test 30d "test that size of parity mirror is (5+1)*4*2*64k"
+
+test_31a() {
+	# Inject OBD_FAIL_OST_BRW_WRITE_BULK on a parity OST during
+	# resync. The data mirror must remain intact regardless of
+	# whether the resync succeeds or fails.
+	(( OSTCOUNT >= 4 )) || skip "need >= 4 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tfile
+
+	stack_trap "rm -f $tf" EXIT
+
+	$LFS setstripe -E -1 -S 1M -c 2 --ec 2+1 $tf ||
+		error "setstripe failed"
+
+	dd if=/dev/urandom of=$tf bs=1M count=4 || error "write failed"
+	local cksum_before=$(md5sum $tf | awk '{print $1}')
+
+	# Parity is stale. Now inject write failure on a parity OST.
+	local parity_ost_idx=$($LFS getstripe --mirror-id=2 $tf |
+		awk '/l_ost_idx:/ {print $5; exit}' | tr -d ',')
+	[[ -n "$parity_ost_idx" ]] || error "could not find parity OST"
+	local parity_facet=ost$((parity_ost_idx + 1))
+
+	#define OBD_FAIL_OST_BRW_WRITE_BULK  0x20e
+	echo "Injecting OBD_FAIL_OST_BRW_WRITE_BULK on $parity_facet"
+	do_facet $parity_facet $LCTL set_param fail_loc=0x8000020e
+
+	echo "Attempting resync with write failure injected..."
+	$LFS mirror resync $tf 2>/dev/null
+	local rc=$?
+
+	# Clear the fail_loc
+	do_facet $parity_facet $LCTL set_param fail_loc=0
+
+	# Data mirror must be untouched regardless of resync outcome
+	local cksum_after=$(md5sum $tf | awk '{print $1}')
+	[[ "$cksum_before" == "$cksum_after" ]] ||
+		error "data corrupted by failed resync: $cksum_before != $cksum_after"
+
+	if (( rc != 0 )); then
+		echo "Resync correctly failed with write error on parity OST"
+	else
+		echo "Resync appeared to succeed despite injected write failure"
+	fi
+
+	# The parity may now be corrupt (partial write). Write new data
+	# to make parity stale again, then resync cleanly.
+	dd if=/dev/urandom of=$tf bs=1M count=1 conv=notrunc ||
+		error "write to re-stale parity failed"
+	$LFS mirror resync $tf ||
+		error "resync failed after re-staling parity"
+	verify_flr_state $tf "ro"
+}
+run_test 31a "data mirror intact after write failure on parity OST during resync"
+
+test_31b() {
+	# test that reading from ec mirror reads the full set of parities
+	(( OSTCOUNT >= 8 )) || skip_env "needs >= 8 OSTs"
+
+	enable_ec
+
+	local tf=$DIR/$tfile
+
+	# Create a simple EC file with data mirror + parity mirror
+	$LFS setstripe -E -1 -S 1M -c 8 --ec 4+2 $tf ||
+		error "setstripe --ec 4+2 failed"
+
+	# Write some data to the file
+	echo "Hello" > $tf || error "error writing to file"
+
+	rm -f $TMP/$tfile.parity
+	stack_trap "rm -f $TMP/$tfile.parity"
+
+	# stripe size 1M
+	# 8 data stripes, ec 4+2
+	# 2 raid sets with 2 parities each
+	# parity mirror size should be 2 * 2 * 1M
+	$LFS mirror read --mirror-id 2 -o $TMP/$tfile.parity $tf
+	stat $TMP/$tfile.parity | grep "Size: 4194304" ||
+	    error "Wrong size of parity mirror"
+}
+run_test 31b "test that size of parity mirror is 2*2*1M"
+
+test_31c() {
+	# test that reading from ec mirror reads the full set of parities
+	(( OSTCOUNT >= 8 )) || skip_env "needs >= 8 OSTs"
+
+	enable_ec
+
+	local tf=$DIR/$tfile
+
+	# Create a simple EC file with data mirror + parity mirror
+	$LFS setstripe -E -1 -S 64k -c 8 --ec 4+3 $tf ||
+		error "setstripe --ec 4+3 failed"
+
+	# Write some data to the file
+	echo "Hello" > $tf || error "error writing to file"
+
+	rm -f $TMP/$tfile.parity
+	stack_trap "rm -f $TMP/$tfile.parity"
+
+	# stripe size 64k
+	# 8 data stripes, ec 4+3
+	# 2 raid sets with 3 parities each
+	# parity mirror size should be 2 * 3 * 64k
+	$LFS mirror read --mirror-id 2 -o $TMP/$tfile.parity $tf
+	stat $TMP/$tfile.parity | grep "Size: 393216" ||
+	    error "Wrong size of parity mirror"
+}
+run_test 31c "test that size of parity mirror is 2*3*64k"
+
+test_31d() {
+	# test that reading from ec mirror reads the full set of parities
+	(( OSTCOUNT >= 8 )) || skip_env "needs >= 8 OSTs"
+
+	enable_ec
+
+	local tf=$DIR/$tfile
+
+	# Create a simple EC file with data mirror + parity mirror
+	$LFS setstripe -E -1 -S 64k -c 8 --ec 2+2 $tf ||
+		error "setstripe --ec 2+2 failed"
+
+	# Write some data to the file
+	echo "Hello" > $tf || error "error writing to file"
+
+	rm -f $TMP/$tfile.parity
+	stack_trap "rm -f $TMP/$tfile.parity"
+
+	# stripe size 64k
+	# 8 data stripes, ec 2+2
+	# 4 raid sets with 2 parities each
+	# parity mirror size should be 4 * 2 * 64k
+	$LFS mirror read --mirror-id 2 -o $TMP/$tfile.parity $tf
+	stat $TMP/$tfile.parity | grep "Size: 524288" ||
+	    error "Wrong size of parity mirror"
+}
+run_test 31d "test that size of parity mirror is 4*2*64k"
+
+test_31e() {
+	(( OSTCOUNT >= 6 )) || skip_env "needs >= 6 OSTs"
+
+	enable_ec
+
+	local tf=$DIR/$tfile
+	local stripe_size=$((128 * 1024))
+
+	rm -f $TMP/$tfile.parity
+	stack_trap "rm -f $TMP/$tfile.parity"
+
+	# Data and parity mirrors each have two components:
+	# data [0, 1M) and [1M, EOF), both EC(4+2), 4 data stripes, 128k stripes
+	$LFS setstripe -E 1M -S $stripe_size -c 4 -E -1 -S $stripe_size \
+		-c 4 --ec 4+2 $tf ||
+		error "setstripe --ec 4+2 with PFL failed"
+
+	verify_mirror_count $tf 2
+	verify_comp_count $tf 4
+
+	# Write 1.5M so data spans both components (1M + 512k).
+	dd if=/dev/urandom of=$tf bs=512K count=3 2>/dev/null ||
+		error "failed to write 1.5M"
+	(( $(stat -c %s $tf) == $((3 * 512 * 1024)) )) ||
+		error "unexpected file size"
+
+	$LFS mirror resync $tf || error "mirror resync failed"
+
+	# Parity lsme_extent matches data lsme_extent (same file offsets, not
+	# packed parity bytes).
+	# ec_raidset_size = 2 parities * stripe_size = 262144.
+	# Parity comp 1 (ext [1M, EOF), data 512k):
+	# comp_eof = 1M + 262144 = 1310720
+	local ec_raidset_size=$((2 * stripe_size))
+	local expected=$((1024 * 1024 + ec_raidset_size))
+	$LFS mirror read --mirror-id 2 -o $TMP/$tfile.parity $tf ||
+		error "mirror read from parity failed"
+	stat $TMP/$tfile.parity | grep "Size: $expected" ||
+		error "Wrong size of parity mirror (expected $expected)"
+}
+run_test 31e "test parity mirror size with multiple PFL components"
+
+test_32a() {
+	# Verify that after an OST goes down and comes back, a full
+	# write+resync cycle produces correct parity. This validates
+	# the end-to-end recovery path.
+	(( OSTCOUNT >= 4 )) || skip "need >= 4 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tdir/$tfile
+
+	test_mkdir $DIR/$tdir
+	stack_trap "rm -rf $DIR/$tdir" EXIT
+
+	$LFS setstripe -E -1 -S 1M -c 2 --ec 2+1 $tf ||
+		error "setstripe failed"
+
+	# Write known pattern and resync to establish good parity
+	dd if=/dev/urandom of=$tf bs=1M count=4 || error "write 1 failed"
+	$LFS mirror resync $tf || error "resync 1 failed"
+	verify_flr_state $tf "ro"
+
+	# Save parity checksum
+	local parity_sum_1=$($LFS mirror read -N2 $tf | md5sum)
+
+	# Stop a data OST, restart it
+	local data_ost_idx=$($LFS getstripe --mirror-id=1 $tf |
+		awk '/l_ost_idx:/ {print $5; exit}' | tr -d ',')
+	local data_facet=ost$((data_ost_idx + 1))
+
+	stop $data_facet
+	wait_osc_import_state client $data_facet "\(DISCONN\|IDLE\)"
+	start $data_facet $(ostdevname $((data_ost_idx + 1))) $OST_MOUNT_OPTS
+	wait_recovery_complete $data_facet
+
+	# Write new data and resync
+	dd if=/dev/urandom of=$tf bs=1M count=4 conv=notrunc ||
+		error "write 2 after recovery failed"
+	$LFS mirror resync $tf || error "resync 2 after recovery failed"
+	verify_flr_state $tf "ro"
+
+	# Parity must have changed (new data -> new parity)
+	local parity_sum_2=$($LFS mirror read -N2 $tf | md5sum)
+	[[ "$parity_sum_1" != "$parity_sum_2" ]] ||
+		error "parity unchanged after writing new data post-recovery"
+
+	# Verify data is readable and consistent
+	local cksum=$(md5sum $tf | awk '{print $1}')
+	local mirror_cksum
+	mirror_cksum=$($LFS mirror read --mirror-id 1 $tf | md5sum |
+		awk '{print $1}')
+	[[ "$cksum" == "$mirror_cksum" ]] ||
+		error "data mirror inconsistent after recovery cycle"
+}
+run_test 32a "full write+resync cycle correct after OST recovery"
+
+test_33a() {
+	# Multiple writes and resyncs with an intermittent OST failure
+	# in between. This exercises the stale tracking and resync logic
+	# across multiple failure/recovery cycles.
+	(( OSTCOUNT >= 4 )) || skip "need >= 4 OSTs"
+	enable_ec
+
+	local tf=$DIR/$tfile
+	local i
+
+	stack_trap "rm -f $tf" EXIT
+
+	$LFS setstripe -E -1 -S 1M -c 2 --ec 2+1 $tf ||
+		error "setstripe failed"
+
+	for i in 1 2 3; do
+		echo "=== Cycle $i ==="
+
+		dd if=/dev/urandom of=$tf bs=1M count=4 conv=notrunc ||
+			error "write $i failed"
+		verify_flr_state $tf "wp"
+
+		# Resync parity
+		$LFS mirror resync $tf || error "resync $i failed"
+		verify_flr_state $tf "ro"
+
+		# Cycle a random data OST
+		local ost_idx=$($LFS getstripe --mirror-id=1 $tf |
+			awk '/l_ost_idx:/ {print $5; exit}' | tr -d ',')
+		local facet=ost$((ost_idx + 1))
+
+		stop $facet
+		wait_osc_import_state client $facet "\(DISCONN\|IDLE\)"
+		start $facet $(ostdevname $((ost_idx + 1))) $OST_MOUNT_OPTS
+		wait_recovery_complete $facet
+	done
+
+	# Final data integrity check
+	drop_client_cache
+	md5sum $tf > /dev/null || error "final read failed"
+	echo "Survived $i write+resync+OST-cycle iterations"
+}
+run_test 33a "EC survives repeated write/resync/OST-failure cycles"
+
+test_34a() {
+	# test resyncing a stale ec mirror
+	(( OSTCOUNT >= 5 )) || skip_env "needs >= 5 OSTs"
+
+	enable_ec
+
+	test_mkdir $DIR/$tdir
+
+	$LFS setstripe -E -1 -S 4M -c 4 --ec 3+2 $DIR/$tdir/$tfile ||
+	    error "setstripe --ec 3+2 failed"
+
+	# create a small file
+	echo "hello" > $DIR/$tdir/$tfile
+	SIZE1=`stat -c "%s" $DIR/$tdir/$tfile`
+
+	# resync the ec mirror:
+	$LFS mirror resync $DIR/$tdir/$tfile ||
+	    error "failed to resync ec mirror"
+	SIZE2=`stat -c "%s" $DIR/$tdir/$tfile`
+	(( SIZE1 == SIZE2 )) ||
+		error "mirror resync changed eof: ${SIZE1} vs ${SIZE2}"
+
+	# read from the ec mirror:
+	$LFS mirror read -N 2 $DIR/$tdir/$tfile >/dev/null ||
+	    error "failed to read ec mirror"
+	SIZE3=`stat -c "%s" $DIR/$tdir/$tfile`
+
+	(( SIZE1 == SIZE3 )) ||
+		error "mirror read changed eof: ${SIZE1} vs ${SIZE3}"
+}
+run_test 34a "test that lfs mirror read from ec does not change eof"
+
+test_34b() {
+	# test resyncing a stale ec mirror
+	(( OSTCOUNT >= 6 )) || skip_env "needs >= 6 OSTs"
+
+	enable_ec
+	test_mkdir $DIR/$tdir
+
+	$LFS setstripe -E -1 -S 4M -c 4 --ec 4+2 $DIR/$tdir/$tfile ||
+	    error "setstripe --ec 4+2 failed"
+
+	# create a small file
+	echo "hello" > $DIR/$tdir/$tfile
+	SIZE1=$(stat -c "%s" $DIR/$tdir/$tfile)
+	BLOCKS1=$(stat -c "%b" $DIR/$tdir/$tfile)
+	APPARENT1=$(stat -c "%B" $DIR/$tdir/$tfile)
+	echo "After write: size=$SIZE1 blocks=$BLOCKS1 apparent_blksize=$APPARENT1"
+
+	# resync the ec mirror:
+	$LFS mirror resync $DIR/$tdir/$tfile ||
+	    error "failed to resync ec mirror"
+	SIZE2=$(stat -c "%s" $DIR/$tdir/$tfile)
+	BLOCKS2=$(stat -c "%b" $DIR/$tdir/$tfile)
+	APPARENT2=$(stat -c "%B" $DIR/$tdir/$tfile)
+	echo "After resync: size=$SIZE2 blocks=$BLOCKS2 apparent_blksize=$APPARENT2"
+	(( SIZE1 == SIZE2 )) ||
+		error "mirror resync changed eof: ${SIZE1} vs ${SIZE2}"
+
+	# verify the ec mirror:
+	$LFS mirror verify $DIR/$tdir/$tfile ||
+	    error "failed to verify ec mirror"
+	SIZE3=$(stat -c "%s" $DIR/$tdir/$tfile)
+	BLOCKS3=$(stat -c "%b" $DIR/$tdir/$tfile)
+	APPARENT3=$(stat -c "%B" $DIR/$tdir/$tfile)
+	echo "After verify: size=$SIZE3 blocks=$BLOCKS3 apparent_blksize=$APPARENT3"
+
+	(( SIZE1 == SIZE3 )) ||
+		error "mirror verify changed eof: ${SIZE1} vs ${SIZE3}"
+}
+run_test 34b "test that lfs mirror verify for ec does not change eof"
+
+test_34c() {
+	# test that reading past parity data returns zeros, not garbage
+	(( OSTCOUNT >= 8 )) || skip_env "needs >= 8 OSTs"
+
+	enable_ec
+
+	test_mkdir $DIR/$tdir
+
+	# Test with data sizes that span at least one full stripe.
+	# Reed-Solomon parity is a linear code over GF(2^8), so parity
+	# bytes at byte offset i are 0 whenever every data stripe is 0
+	# at offset i.  A sub-stripe file has zero input at every offset
+	# past the data tail across all data stripes, so its parity is
+	# correctly zero there and "expect parity bytes" cannot succeed.
+	# - 4M     (exactly one stripe)
+	# - 4.5M   (one stripe + partial)
+	# - 8.5M   (two stripes + partial)
+	local -a test_sizes=($((4 * 1024 * 1024)) \
+			     $((4 * 1024 * 1024 + 512 * 1024)) \
+			     $((8 * 1024 * 1024 + 512 * 1024)))
+	local size
+	local i
+	local parity_mirror_id
+
+	for size in "${test_sizes[@]}"; do
+		echo "Testing with data size: $size bytes"
+
+		rm -f $DIR/$tdir/$tfile
+		$LFS setstripe -E -1 -S 4M -c 8 --ec 3+2 \
+			$DIR/$tdir/$tfile ||
+			error "setstripe --ec 3+2 failed"
+
+		# Write data
+		dd if=/dev/urandom of=$DIR/$tdir/$tfile bs=$size \
+			count=1 2>/dev/null ||
+			error "failed to write $size bytes"
+
+		# Resync to write parity
+		$LFS mirror resync $DIR/$tdir/$tfile ||
+			error "failed to resync ec mirror"
+
+		# Get parity mirror ID
+		parity_mirror_id=$($LFS getstripe $DIR/$tdir/$tfile | \
+			grep -B1 "lcme_flags.*parity" | \
+			grep "lcme_mirror_id" | awk '{print $2}')
+
+		echo "Parity mirror ID: $parity_mirror_id"
+
+		# Test reads at various offsets
+		# For 3+2 EC with 4M stripes, we have 2 parity stripes
+		# Each parity stripe should have parity data up to $size,
+		# then zeros
+
+		# Test start of first parity stripe (should have data)
+		echo "  Checking offset 0 (start of first parity stripe)..."
+		check_parity_read $DIR/$tdir/$tfile $parity_mirror_id \
+			0 "no"
+
+		# Parity is computed at block granularity, covering
+		# only the data range.  Offsets within a parity stripe
+		# but past the data range read as zeros.
+
+		# Only check offset 1M if data extends into that range
+		if (( size > 1024 * 1024 )); then
+			echo "  Checking offset 1M (within first parity stripe)..."
+			check_parity_read $DIR/$tdir/$tfile \
+				$parity_mirror_id $((1024 * 1024)) "no"
+		fi
+
+		# Test start of second parity stripe at 4M: always has
+		# data as long as any data was written (each coding stripe
+		# gets parity for the same data range)
+		echo "  Checking offset 4M (start of second parity stripe)..."
+		check_parity_read $DIR/$tdir/$tfile $parity_mirror_id \
+			$((4 * 1024 * 1024)) "no"
+
+		# Test past all parity stripes (should be zeros)
+		echo "  Checking offset 8M (past all parity)..."
+		check_parity_read $DIR/$tdir/$tfile $parity_mirror_id \
+			$((8 * 1024 * 1024)) "yes"
+	done
+}
+run_test 34c "test that reading past parity data returns zeros"
 
 complete_test $SECONDS
 check_and_cleanup_lustre

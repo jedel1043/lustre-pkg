@@ -68,7 +68,7 @@ static void cpu_latency_work(struct work_struct *work)
 
 	latency_qos = container_of(work, struct cpu_latency_qos,
 				   delayed_work.work);
-	cpu = (latency_qos - cpus_latency_qos) / sizeof(struct cpu_latency_qos);
+	cpu = latency_qos - cpus_latency_qos;
 	mutex_lock(&latency_qos->lock);
 	if (time_after_eq64(jiffies_64, latency_qos->deadline)) {
 		CDEBUG(D_INFO, "work item of %p (cpu %d) has reached its deadline %llu, at %llu\n",
@@ -204,14 +204,24 @@ int ptlrpc_connection_init(void)
 
 static void ptlrpc_latency_req_fini(struct cpu_latency_qos *lq, int cpu)
 {
+	/*
+	 * Wait for any in-flight (or self-rescheduling) cpu_latency_work() to
+	 * finish before touching or freeing what it dereferences.  This must
+	 * be done without holding lq->lock, which cpu_latency_work() also
+	 * takes.  cancel_delayed_work() alone does not wait for a work item
+	 * that has already been dispatched, so the freed request could be
+	 * used after the module is unloaded.
+	 */
+	cancel_delayed_work_sync(&lq->delayed_work);
+
 	mutex_lock(&lq->lock);
 	if (lq->pm_qos_req != NULL) {
 		if (dev_pm_qos_request_active(lq->pm_qos_req))
 			dev_pm_qos_remove_request(lq->pm_qos_req);
-		cancel_delayed_work(&lq->delayed_work);
 		CDEBUG(D_INFO, "remove PM QoS request %p and associated work" \
 		       " item, still active for this cpu %d\n", lq, cpu);
 		OBD_FREE_PTR(lq->pm_qos_req);
+		lq->pm_qos_req = NULL;
 	}
 	mutex_unlock(&lq->lock);
 }

@@ -2561,27 +2561,23 @@ int lod_qos_parse_config(const struct lu_env *env, struct lod_object *lo,
 	for (i = 0; i < comp_cnt; i++) {
 		struct lu_extent *ext;
 		char *pool_name;
+		struct lov_comp_md_entry_v1 *lcme = NULL;
 
 		lod_comp = &lo->ldo_comp_entries[i];
 
 		if (lo->ldo_is_composite) {
-			struct lov_comp_md_entry_v1 *ent =
-				&comp_v1->lcm_entries[i];
+			lcme = &comp_v1->lcm_entries[i];
 			v1 = (struct lov_user_md *)((char *)comp_v1 +
-						    ent->lcme_offset);
-			ext = &ent->lcme_extent;
+						    lcme->lcme_offset);
+			ext = &lcme->lcme_extent;
 			lod_comp->llc_extent = *ext;
-			lod_comp->llc_flags = ent->lcme_flags &
+			lod_comp->llc_flags = lcme->lcme_flags &
 					      LCME_CL_COMP_FLAGS;
 			lod_comp->llc_mirror_link_id =
-				lcme_timestamp_id_unpack(ent->lcme_time_and_id);
+				lcme_timestamp_id_unpack(lcme->lcme_time_and_id);
 
-			if (lod_comp->llc_flags & LCME_FL_PARITY) {
-				lod_comp->llc_dstripe_count =
-					ent->lcme_dstripe_count;
-				lod_comp->llc_cstripe_count =
-					ent->lcme_cstripe_count;
-			}
+			lod_comp->llc_dstripe_count = lcme->lcme_dstripe_count;
+			lod_comp->llc_cstripe_count = lcme->lcme_cstripe_count;
 		}
 
 		pool_name = NULL;
@@ -2655,6 +2651,14 @@ int lod_qos_parse_config(const struct lu_env *env, struct lod_object *lo,
 				DIV_ROUND_UP(lod_comp->llc_extent.e_end -
 					     lod_comp->llc_extent.e_start,
 					     lod_comp->llc_stripe_size);
+
+		if ((lov_pattern(lod_comp->llc_pattern) & LOV_PATTERN_COMPRESS) &&
+		    lcme) {
+			lod_comp->llc_compr_type = lcme->lcme_compr_type;
+			lod_comp->llc_compr_lvl = lcme->lcme_compr_lvl;
+			lod_comp->llc_compr_chunk_lum_bits =
+					lcme->lcme_compr_chunk_lum_bits;
+		}
 
 		lod_comp->llc_stripe_offset = v1->lmm_stripe_offset;
 		lod_qos_set_pool(lo, i, pool_name);
@@ -2840,7 +2844,9 @@ int lod_qos_prep_create(const struct lu_env *env, struct lod_object *lo,
 	__u32 *ost_indices = NULL;
 	enum lod_uses_hint flags = LOD_USES_ASSIGNED_STRIPE;
 	int stripe_len;
-	int i, rc = 0;
+	int i, j, rc = 0;
+	bool data_comp_found = false;
+
 	ENTRY;
 
 	LASSERT(lo);
@@ -2863,7 +2869,75 @@ int lod_qos_prep_create(const struct lu_env *env, struct lod_object *lo,
 	if (lod_comp->llc_pool)
 		lod_check_and_spill_pool(env, d, &lod_comp->llc_pool);
 
-	if (likely(lod_comp->llc_stripe == NULL)) {
+	/*
+	 * If this is a parity component, find its data component so we can size
+	 * it correctly (one OST per parity per raidset). Parity components need
+	 * at least llc_cstripe_count number of stripes.
+	 *
+	 * Data and parity comps are paired via their "mirror_link_id". It can
+	 * either be a link id, in which case the data/parity comp share the
+	 * same id, or it is a mirror id, in which case each component's
+	 * "mirror_link_id" field points to the other's mirror id. Initially,
+	 * the llapi assigns the link id and it is later resolved to the
+	 * (permanently-stored) mirror id by lod_bind_data_parity().
+	 */
+	if (lod_comp->llc_flags & LCME_FL_PARITY) {
+		bool is_link_id = lod_comp->llc_flags & LCME_FL_IS_LINK_ID;
+
+		lod_comp->llc_stripe_count = lod_comp->llc_cstripe_count;
+
+		if (lod_comp->llc_mirror_link_id == 0)
+			GOTO(out, rc = -EINVAL);
+
+		for (j = 0;  j < lo->ldo_comp_cnt; j++) {
+			struct lod_layout_component *tmp_comp;
+			struct ec_split_comp sc;
+			__u16 link_id;
+
+			tmp_comp = &lo->ldo_comp_entries[j];
+
+			/* only a data component can match a parity component */
+			if (tmp_comp->llc_flags & LCME_FL_PARITY)
+				continue;
+
+			/* resolve the candidate's link id for the comparison */
+			if (is_link_id) {
+				if (!(tmp_comp->llc_flags & LCME_FL_IS_LINK_ID))
+					continue;
+				link_id = tmp_comp->llc_mirror_link_id;
+			} else {
+				link_id = mirror_id_of(tmp_comp->llc_id);
+			}
+
+			/* linked d/p components share the same link id */
+			if (link_id != lod_comp->llc_mirror_link_id)
+				continue;
+
+			/* sanity: link id matches; extents must also match */
+			if (tmp_comp->llc_extent.e_start !=
+				    lod_comp->llc_extent.e_start ||
+			    tmp_comp->llc_extent.e_end !=
+				    lod_comp->llc_extent.e_end)
+				continue;
+
+			ec_split_stripes(tmp_comp->llc_stripe_count,
+					 lod_comp->llc_dstripe_count, &sc);
+			lod_comp->llc_stripe_count =
+				(sc.esc_n0 + sc.esc_n1) *
+				lod_comp->llc_cstripe_count;
+			data_comp_found = true;
+			break;
+		}
+
+		/*
+		 * A parity component being allocated must have a matching data
+		 * component. Another case should not happen and so we error out
+		 */
+		if (!data_comp_found)
+			GOTO(out, rc = -EINVAL);
+	}
+
+	if (likely(!lod_comp->llc_stripe)) {
 		/*
 		 * no striping has been created so far
 		 */

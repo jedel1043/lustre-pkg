@@ -102,6 +102,8 @@ struct lnet_rsp_tracker {
 	struct lnet_nid rspt_next_hop_nid;
 	/* deadline of the REPLY/ACK */
 	ktime_t rspt_deadline;
+	/* when the tracked request was sent, for round-trip latency */
+	ktime_t rspt_start;
 	/* parent MD */
 	struct lnet_handle_md rspt_mdh;
 };
@@ -129,6 +131,10 @@ struct lnet_msg {
 	 * has not completed.
 	 */
 	ktime_t			msg_deadline;
+
+	/* Latency window: start stamped at commit, end at lnet_finalize(). */
+	ktime_t			msg_t_start;
+	ktime_t			msg_t_end;
 
 	/* The message health status. */
 	enum lnet_msg_hstatus	msg_health_status;
@@ -403,6 +409,37 @@ struct lnet_element_stats {
 	struct lnet_comm_count el_drop_stats;
 };
 
+/* The operations we time separately, since each answers a different
+ * question. PUT egress is the time to local send completion. The round
+ * trips are request to response and need the response tracker, so they are
+ * only recorded when lnet_response_tracking covers the operation.
+ */
+enum lnet_latency_op {
+	LNET_LATENCY_PUT_EGRESS,
+	LNET_LATENCY_GET_RTT,
+	LNET_LATENCY_PUT_ACK_RTT,
+	LNET_LATENCY_NR,
+};
+
+/* Per-peer-NI / per-NI operation latency accumulator. Self-initializing
+ * from zeroed memory so allocation and reset need no special handling: the
+ * first sample seeds lls_min_ns and lls_max_ns.
+ */
+struct lnet_latency_stats {
+	atomic_t	lls_samples;	/* timed completions */
+	atomic64_t	lls_sum_ns;	/* sum of latencies (ns) */
+	atomic64_t	lls_min_ns;	/* min latency (ns) */
+	atomic64_t	lls_max_ns;	/* max latency (ns) */
+};
+
+/* Reduced snapshot of a lnet_latency_stats accumulator for reporting. */
+struct lnet_latency_summary {
+	u32		lat_samples;
+	u64		lat_min_ns;
+	u64		lat_max_ns;
+	u64		lat_avg_ns;
+};
+
 struct lnet_health_local_stats {
 	atomic_t hlt_local_interrupt;
 	atomic_t hlt_local_dropped;
@@ -611,13 +648,38 @@ enum lnet_net_local_ni_intf_attrs {
  *						(NLA_U32)
  * @LNET_NET_LOCAL_NI_STATS_ATTR_DROP_COUNT:	Number of dropped messages
  *						(NLA_U32)
+ * @LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_SAMPLES: sample count
+ * @LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_MIN_NSEC: min (ns)
+ * @LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_MAX_NSEC: max (ns)
+ * @LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_AVG_NSEC: mean (ns)
+ * @LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_SAMPLES: sample count
+ * @LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_MIN_NSEC: min (ns)
+ * @LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_MAX_NSEC: max (ns)
+ * @LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_AVG_NSEC: mean (ns)
+ * @LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_SAMPLES: sample count
+ * @LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_MIN_NSEC: min (ns)
+ * @LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_MAX_NSEC: max (ns)
+ * @LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_AVG_NSEC: mean (ns)
  */
 enum lnet_net_local_ni_stats_attrs {
 	LNET_NET_LOCAL_NI_STATS_ATTR_UNSPEC = 0,
+	LNET_NET_LOCAL_NI_STATS_ATTR_PAD = LNET_NET_LOCAL_NI_STATS_ATTR_UNSPEC,
 
 	LNET_NET_LOCAL_NI_STATS_ATTR_SEND_COUNT,
 	LNET_NET_LOCAL_NI_STATS_ATTR_RECV_COUNT,
 	LNET_NET_LOCAL_NI_STATS_ATTR_DROP_COUNT,
+	LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_SAMPLES,
+	LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_MIN_NSEC,
+	LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_MAX_NSEC,
+	LNET_NET_LOCAL_NI_STATS_ATTR_PUT_EGRESS_AVG_NSEC,
+	LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_SAMPLES,
+	LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_MIN_NSEC,
+	LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_MAX_NSEC,
+	LNET_NET_LOCAL_NI_STATS_ATTR_GET_RTT_AVG_NSEC,
+	LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_SAMPLES,
+	LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_MIN_NSEC,
+	LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_MAX_NSEC,
+	LNET_NET_LOCAL_NI_STATS_ATTR_PUT_ACK_AVG_NSEC,
 	__LNET_NET_LOCAL_NI_STATS_ATTR_MAX_PLUS_ONE,
 };
 
@@ -890,13 +952,39 @@ enum lnet_peer_ni_list_attr {
  *							for remote peer (NLA_U32)
  * @LNET_PEER_NI_LIST_STATS_COUNT_ATTR_DROP_COUNT:	Number of dropped packets
  *							for remote peer (NLA_U32)
+ * @LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_SAMPLES: sample count
+ * @LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_MIN_NSEC: min (ns)
+ * @LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_MAX_NSEC: max (ns)
+ * @LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_AVG_NSEC: mean (ns)
+ * @LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_SAMPLES: sample count
+ * @LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_MIN_NSEC: min (ns)
+ * @LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_MAX_NSEC: max (ns)
+ * @LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_AVG_NSEC: mean (ns)
+ * @LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_SAMPLES: sample count
+ * @LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_MIN_NSEC: min (ns)
+ * @LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_MAX_NSEC: max (ns)
+ * @LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_AVG_NSEC: mean (ns)
  */
 enum lnet_peer_ni_list_stats_count {
 	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_UNSPEC = 0,
+	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PAD =
+		LNET_PEER_NI_LIST_STATS_COUNT_ATTR_UNSPEC,
 
 	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_SEND_COUNT,
 	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_RECV_COUNT,
 	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_DROP_COUNT,
+	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_SAMPLES,
+	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_MIN_NSEC,
+	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_MAX_NSEC,
+	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_EGRESS_AVG_NSEC,
+	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_SAMPLES,
+	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_MIN_NSEC,
+	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_MAX_NSEC,
+	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_GET_RTT_AVG_NSEC,
+	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_SAMPLES,
+	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_MIN_NSEC,
+	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_MAX_NSEC,
+	LNET_PEER_NI_LIST_STATS_COUNT_ATTR_PUT_ACK_AVG_NSEC,
 	__LNET_PEER_NI_LIST_STATS_COUNT_ATTR_MAX_PLUS_ONE,
 };
 
@@ -1196,6 +1284,75 @@ enum lnet_fault_rule_attr {
 
 #define LNET_FAULT_ATTR_MAX (__LNET_FAULT_ATTR_MAX_PLUS_ONE - 1)
 
+/** enum lnet_stats_attrs		- Global LNet statistics attributes
+ *					  for LNET_CMD_STATS
+ *
+ * @LNET_STATS_ATTR_UNSPEC:		unspecified attribute to catch errors
+ * @LNET_STATS_ATTR_PAD:		padding for 64-bit attributes
+ *
+ * @LNET_STATS_ATTR_HDR:		"statistics" grouping (NLA_NUL_STRING)
+ * @LNET_STATS_ATTR_MSGS_ALLOC:		messages currently allocated (NLA_U32)
+ * @LNET_STATS_ATTR_MSGS_MAX:		peak messages allocated (NLA_U32)
+ * @LNET_STATS_ATTR_RST_ALLOC:		response trackers allocated (NLA_U32)
+ * @LNET_STATS_ATTR_ERRORS:		message errors (NLA_U32)
+ * @LNET_STATS_ATTR_SEND_COUNT:		messages sent (NLA_U32)
+ * @LNET_STATS_ATTR_RESEND_COUNT:	messages resent (NLA_U32)
+ * @LNET_STATS_ATTR_RESPONSE_TIMEOUT_COUNT: response timeouts (NLA_U32)
+ * @LNET_STATS_ATTR_LOCAL_INTERRUPT_COUNT: local interrupt errors (NLA_U32)
+ * @LNET_STATS_ATTR_LOCAL_DROPPED_COUNT: local dropped errors (NLA_U32)
+ * @LNET_STATS_ATTR_LOCAL_ABORTED_COUNT: local aborted errors (NLA_U32)
+ * @LNET_STATS_ATTR_LOCAL_NO_ROUTE_COUNT: local no-route errors (NLA_U32)
+ * @LNET_STATS_ATTR_LOCAL_TIMEOUT_COUNT: local timeout errors (NLA_U32)
+ * @LNET_STATS_ATTR_LOCAL_ERROR_COUNT:	local errors (NLA_U32)
+ * @LNET_STATS_ATTR_REMOTE_DROPPED_COUNT: remote dropped errors (NLA_U32)
+ * @LNET_STATS_ATTR_REMOTE_ERROR_COUNT:	remote errors (NLA_U32)
+ * @LNET_STATS_ATTR_REMOTE_TIMEOUT_COUNT: remote timeout errors (NLA_U32)
+ * @LNET_STATS_ATTR_NETWORK_TIMEOUT_COUNT: network timeout errors (NLA_U32)
+ * @LNET_STATS_ATTR_FAILED_RESENDS:	resends that failed (NLA_U32)
+ * @LNET_STATS_ATTR_SUCCESSFUL_RESENDS:	resends that succeeded (NLA_U32)
+ * @LNET_STATS_ATTR_RECV_COUNT:		messages received (NLA_U32)
+ * @LNET_STATS_ATTR_ROUTE_COUNT:	messages routed (NLA_U32)
+ * @LNET_STATS_ATTR_DROP_COUNT:		messages dropped (NLA_U32)
+ * @LNET_STATS_ATTR_SEND_LENGTH:	bytes sent (NLA_U64)
+ * @LNET_STATS_ATTR_RECV_LENGTH:	bytes received (NLA_U64)
+ * @LNET_STATS_ATTR_ROUTE_LENGTH:	bytes routed (NLA_U64)
+ * @LNET_STATS_ATTR_DROP_LENGTH:	bytes dropped (NLA_U64)
+ */
+enum lnet_stats_attrs {
+	LNET_STATS_ATTR_UNSPEC			= 0,
+	LNET_STATS_ATTR_PAD			= LNET_STATS_ATTR_UNSPEC,
+	LNET_STATS_ATTR_HDR			= 1,
+	LNET_STATS_ATTR_MSGS_ALLOC		= 2,
+	LNET_STATS_ATTR_MSGS_MAX		= 3,
+	LNET_STATS_ATTR_RST_ALLOC		= 4,
+	LNET_STATS_ATTR_ERRORS			= 5,
+	LNET_STATS_ATTR_SEND_COUNT		= 6,
+	LNET_STATS_ATTR_RESEND_COUNT		= 7,
+	LNET_STATS_ATTR_RESPONSE_TIMEOUT_COUNT	= 8,
+	LNET_STATS_ATTR_LOCAL_INTERRUPT_COUNT	= 9,
+	LNET_STATS_ATTR_LOCAL_DROPPED_COUNT	= 10,
+	LNET_STATS_ATTR_LOCAL_ABORTED_COUNT	= 11,
+	LNET_STATS_ATTR_LOCAL_NO_ROUTE_COUNT	= 12,
+	LNET_STATS_ATTR_LOCAL_TIMEOUT_COUNT	= 13,
+	LNET_STATS_ATTR_LOCAL_ERROR_COUNT	= 14,
+	LNET_STATS_ATTR_REMOTE_DROPPED_COUNT	= 15,
+	LNET_STATS_ATTR_REMOTE_ERROR_COUNT	= 16,
+	LNET_STATS_ATTR_REMOTE_TIMEOUT_COUNT	= 17,
+	LNET_STATS_ATTR_NETWORK_TIMEOUT_COUNT	= 18,
+	LNET_STATS_ATTR_FAILED_RESENDS		= 19,
+	LNET_STATS_ATTR_SUCCESSFUL_RESENDS	= 20,
+	LNET_STATS_ATTR_RECV_COUNT		= 21,
+	LNET_STATS_ATTR_ROUTE_COUNT		= 22,
+	LNET_STATS_ATTR_DROP_COUNT		= 23,
+	LNET_STATS_ATTR_SEND_LENGTH		= 24,
+	LNET_STATS_ATTR_RECV_LENGTH		= 25,
+	LNET_STATS_ATTR_ROUTE_LENGTH		= 26,
+	LNET_STATS_ATTR_DROP_LENGTH		= 27,
+	__LNET_STATS_ATTR_MAX_PLUS_ONE,
+};
+
+#define LNET_STATS_ATTR_MAX (__LNET_STATS_ATTR_MAX_PLUS_ONE - 1)
+
 struct lnet_ni {
 	/* chain on the lnet_net structure */
 	struct list_head	ni_netlist;
@@ -1254,9 +1411,14 @@ struct lnet_ni {
 	/* lnd tunables set explicitly */
 	bool ni_lnd_tunables_set;
 
+	/* CPTs were not specified; bind to the local NUMA node at startup */
+	bool ni_cpts_default;
+
 	/* NI statistics */
 	struct lnet_element_stats ni_stats;
 	struct lnet_health_local_stats ni_hstats;
+	/* per-operation latency, indexed by enum lnet_latency_op */
+	struct lnet_latency_stats ni_latency[LNET_LATENCY_NR];
 
 	/* physical device CPT */
 	int			ni_dev_cpt;
@@ -1377,6 +1539,8 @@ struct lnet_peer_ni {
 	/* statistics kept on each peer NI */
 	struct lnet_element_stats lpni_stats;
 	struct lnet_health_remote_stats lpni_hstats;
+	/* per-operation latency, indexed by enum lnet_latency_op */
+	struct lnet_latency_stats lpni_latency[LNET_LATENCY_NR];
 	/* spin lock protecting credits and lpni_txq */
 	spinlock_t		lpni_lock;
 	/* # tx credits available */
@@ -1455,104 +1619,106 @@ struct lnet_peer_ni {
 
 struct lnet_peer {
 	/* chain on pt_peer_list */
-	struct list_head	lp_peer_list;
+	struct list_head	 lp_peer_list;
 
 	/* list of peer nets */
-	struct list_head	lp_peer_nets;
+	struct list_head	 lp_peer_nets;
 
 	/* list of messages pending discovery*/
-	struct list_head	lp_dc_pendq;
+	struct list_head	 lp_dc_pendq;
 
 	/* chain on router list */
-	struct list_head	lp_rtr_list;
-
-	/* primary NID of the peer */
-	struct lnet_nid		lp_primary_nid;
-
-	/* source NID to use during discovery */
-	struct lnet_nid		lp_disc_src_nid;
-	/* destination NID to use during discovery */
-	struct lnet_nid		lp_disc_dst_nid;
-
-	/* net to perform discovery on */
-	__u32			lp_disc_net_id;
-
-	/* CPT of peer_table */
-	int			lp_cpt;
-
-	/* number of NIDs on this peer */
-	int			lp_nnis;
-
-	/* # refs from lnet_route::lr_gateway */
-	int			lp_rtr_refcount;
+	struct list_head	 lp_rtr_list;
 
 	/* messages blocking for router credits */
-	struct list_head	lp_rtrq;
+	struct list_head	 lp_rtrq;
 
 	/* routes on this peer */
-	struct list_head	lp_routes;
-
-	/* reference count */
-	atomic_t		lp_refcount;
-
-	/* lock protecting peer state flags and lpni_rtrq */
-	spinlock_t		lp_lock;
-
-	/* peer state flags */
-	unsigned		lp_state;
-
-	/* buffer for data pushed by peer */
-	struct lnet_ping_buffer	*lp_data;
-
-	/* MD handle for ping in progress */
-	struct lnet_handle_md	lp_ping_mdh;
-
-	/* MD handle for push in progress */
-	struct lnet_handle_md	lp_push_mdh;
-
-	/* number of bytes for sizing pb_info in push data */
-	int			lp_data_bytes;
-
-	/* NI config sequence number of peer */
-	__u32			lp_peer_seqno;
-
-	/* Local NI config sequence number acked by peer */
-	__u32			lp_node_seqno;
-
-	/* Local NI config sequence number sent to peer */
-	__u32			lp_node_seqno_sent;
-
-	/* Ping error encountered during discovery. */
-	int			lp_ping_error;
-
-	/* Push error encountered during discovery. */
-	int			lp_push_error;
-
-	/* Error encountered during discovery. */
-	int			lp_dc_error;
-
-	/* time it was put on the ln_dc_working queue */
-	time64_t		lp_last_queued;
+	struct list_head	 lp_routes;
 
 	/* link on discovery-related lists */
-	struct list_head	lp_dc_list;
+	struct list_head	 lp_dc_list;
 
 	/* tasks waiting on discovery of this peer */
-	wait_queue_head_t	lp_dc_waitq;
+	wait_queue_head_t	 lp_dc_waitq;
 
-	/* cached peer aliveness */
-	bool			lp_alive;
+	/* primary NID of the peer */
+	struct lnet_nid		 lp_primary_nid;
 
-	/* sequence number used to round robin traffic to this peer's
-	 * nets/NIs
-	 */
-	__u32                   lp_send_seq;
+	/* source NID to use during discovery */
+	struct lnet_nid		 lp_disc_src_nid;
 
-	/* timestamp of primary nid lock */
-	__u64			lp_prim_lock_ts;
+	/* destination NID to use during discovery */
+	struct lnet_nid		 lp_disc_dst_nid;
 
 	/* merge and assign this NID as primary when discovery completes */
-	struct lnet_nid         lp_merge_primary_nid;
+	struct lnet_nid		 lp_merge_primary_nid;
+
+	/* buffer for data pushed by peer */
+	struct lnet_ping_buffer *lp_data;
+
+	/* MD handle for ping in progress */
+	struct lnet_handle_md	 lp_ping_mdh;
+
+	/* MD handle for push in progress */
+	struct lnet_handle_md	 lp_push_mdh;
+
+	/* time it was put on the ln_dc_working queue */
+	time64_t		 lp_last_queued;
+
+	/* timestamp of primary nid lock */
+	__u64			 lp_prim_lock_ts;
+
+	/* lock protecting peer state flags and lpni_rtrq */
+	spinlock_t		 lp_lock;
+
+	/* reference count */
+	atomic_t		 lp_refcount;
+
+	/* peer state flags */
+	unsigned int		  lp_state;
+
+	/* net to perform discovery on */
+	__u32			 lp_disc_net_id;
+
+	/* CPT of peer_table */
+	int			 lp_cpt;
+
+	/* number of NIDs on this peer */
+	int			 lp_nnis;
+
+	/* # refs from lnet_route::lr_gateway */
+	int			 lp_rtr_refcount;
+
+	/* number of bytes for sizing pb_info in push data */
+	int			 lp_data_bytes;
+
+	/* NI config sequence number of peer */
+	__u32			 lp_peer_seqno;
+
+	/* Local NI config sequence number acked by peer */
+	__u32			 lp_node_seqno;
+
+	/* Local NI config sequence number sent to peer */
+	__u32			 lp_node_seqno_sent;
+
+	/* Ping error encountered during discovery. */
+	int			 lp_ping_error;
+
+	/* Push error encountered during discovery. */
+	int			 lp_push_error;
+
+	/* Error encountered during discovery. */
+	int			 lp_dc_error;
+
+	/*
+	 * sequence number used to round robin traffic to this peer's
+	 * nets/NIs
+	 */
+	__u32			 lp_send_seq;
+
+	/* cached peer aliveness */
+	bool			 lp_alive;
 };
 
 /*

@@ -1847,6 +1847,34 @@ AC_DEFUN([LC_HAVE_IOV_ITER_GET_PAGES_ALLOC2], [
 ]) # LC_HAVE_IOV_ITER_GET_PAGES_ALLOC2
 
 #
+# LC_IOV_ITER_EXTRACT_PAGES
+#
+# Linux commit v6.3
+#  iov_iter: Introduce iov_iter_extract_pages()
+#
+AC_DEFUN([LC_SRC_IOV_ITER_EXTRACT_PAGES], [
+	LB2_LINUX_TEST_SRC([iov_iter_extract_pages], [
+		#include <linux/uio.h>
+	],[
+		struct iov_iter *iter = NULL;
+		struct page ***pages = NULL;
+		size_t maxsize = 1;
+		unsigned int maxpages = 1;
+		iov_iter_extraction_t flags = 0;
+		size_t start;
+		size_t result __attribute__ ((unused));
+		result = iov_iter_extract_pages(iter, pages, maxsize, maxpages, flags, &start);
+	],[-Werror])
+])
+AC_DEFUN([LC_IOV_ITER_EXTRACT_PAGES], [
+	LB2_MSG_LINUX_TEST_RESULT([if iov_iter_extract_pages() is available],
+	[iov_iter_extract_pages], [
+		AC_DEFINE(HAVE_IOV_ITER_EXTRACT_PAGES, 1,
+			[iov_iter_extract_pages() is available])
+	])
+]) # LC_IOV_ITER_EXTRACT_PAGES
+
+#
 # LC_HAVE_USER_BACKED_ITER
 #
 # Linux commit v5.19-10287-gfcb14cb1bdac
@@ -1871,29 +1899,6 @@ AC_DEFUN([LC_HAVE_USER_BACKED_ITER], [
 ]) # LC_HAVE_USER_BACKED_ITER
 
 #
-# LC_HAVE_IOV_ITER_IS_ALIGNED
-#
-# Linux commit v5.19-rc4-8-gcfa320f72882
-#    iov: introduce iov_iter_aligned
-#
-AC_DEFUN([LC_SRC_HAVE_IOV_ITER_IS_ALIGNED], [
-	LB2_LINUX_TEST_SRC([iov_iter_is_aligned], [
-		#include <linux/uio.h>
-	],[
-		struct iov_iter *iter = NULL;
-		bool result __attribute__ ((unused));
-
-		result = iov_iter_is_aligned(iter, ~PAGE_MASK, ~PAGE_MASK);
-	],[-Werror])
-])
-AC_DEFUN([LC_HAVE_IOV_ITER_IS_ALIGNED], [
-	LB2_MSG_LINUX_TEST_RESULT([if iov_iter_is_aligned() is available],
-	[iov_iter_is_aligned], [
-		AC_DEFINE(HAVE_IOV_ITER_IS_ALIGNED, 1,
-			[iov_iter_is_aligned() is available])
-	])
-]) # LC_HAVE_IOV_ITER_IS_ALIGNED
-
 #
 # LC_HAVE_GET_RANDOM_U32_AND_U64
 #
@@ -3551,6 +3556,8 @@ AC_DEFUN([LC_HAVE_INODE_STATE_READ],[
 	], [
 		AC_DEFINE([inode_state_read(inode)], [((inode)->i_state)],
 			  [inode_state_read() does not exist, provide one])
+		AC_DEFINE([inode_state_read_once(inode)], [((inode)->i_state)],
+			  [inode_state_read_once() does not exist, provide one])
 	])
 ]) # LC_HAVE_INODE_STATE_READ
 
@@ -3632,6 +3639,54 @@ AC_DEFUN([LC_HAVE_FILEMAP_ALLOC_FOLIO_NUMA],[
 ]) # LC_HAVE_FILEMAP_ALLOC_FOLIO_NUMA
 
 #
+## LC_HAVE_KILL_LITTER_SUPER
+#
+# Linux commit v6.18-rc5-51-gfc45aee662232
+#   get rid of kill_litter_super()
+#
+AC_DEFUN([LC_SRC_HAVE_KILL_LITTER_SUPER],[
+	LB2_LINUX_TEST_SRC([kill_litter_super], [
+		#include <linux/fs.h>
+	],[
+		struct super_block *sb = NULL;
+
+		kill_litter_super(sb);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_KILL_LITTER_SUPER],[
+	LB2_MSG_LINUX_TEST_RESULT([if kill_litter_super() exists],
+	[kill_litter_super], [
+		AC_DEFINE(HAVE_KILL_LITTER_SUPER, 1,
+			  [kill_litter_super() exists])
+	])
+]) # LC_HAVE_KILL_LITTER_SUPER
+
+#
+## LC_HAVE_D_MAKE_PERSISTENT
+#
+# Linux commit v6.18-rc5-9-gbacdf1d70bbe2
+#   primitives for maintaining persisitency
+#
+AC_DEFUN([LC_SRC_HAVE_D_MAKE_PERSISTENT],[
+	LB2_LINUX_TEST_SRC([d_make_persistent], [
+		#include <linux/dcache.h>
+	],[
+		struct dentry *dentry = NULL;
+		struct inode *inode = NULL;
+
+		dentry = d_make_persistent(dentry, inode);
+		d_make_discardable(dentry);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_D_MAKE_PERSISTENT],[
+	LB2_MSG_LINUX_TEST_RESULT([if d_make_persistent() exists],
+	[d_make_persistent], [
+		AC_DEFINE(HAVE_D_MAKE_PERSISTENT, 1,
+			  [d_make_persistent() exists])
+	])
+]) # LC_HAVE_D_MAKE_PERSISTENT
+
+#
 # LC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER
 #
 # Linux commit v6.19-rc1-31-g6cbfdf89470ef
@@ -3639,6 +3694,7 @@ AC_DEFUN([LC_HAVE_FILEMAP_ALLOC_FOLIO_NUMA],[
 #
 AC_DEFUN([LC_SRC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER],[
 	LB2_LINUX_TEST_SRC([posix_acl_to_xattr], [
+		#include <linux/fs.h>
 		#include <linux/posix_acl_xattr.h>
 	],[
 		struct posix_acl *acl = NULL;
@@ -3763,7 +3819,6 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	LC_SRC_HAVE_VFS_SETXATTR_NON_CONST_VALUE
 	LC_SRC_HAVE_IOV_ITER_GET_PAGES_ALLOC2
 	LC_SRC_HAVE_USER_BACKED_ITER
-	LC_SRC_HAVE_IOV_ITER_IS_ALIGNED
 
 	# 6.1
 	LC_SRC_HAVE_GET_RANDOM_U32_AND_U64
@@ -3780,6 +3835,7 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	# 6.3
 	LC_SRC_HAVE_MNT_IDMAP_ARG
 	LC_SRC_HAVE_U64_CAPABILITY
+	LC_SRC_IOV_ITER_EXTRACT_PAGES
 	LC_SRC_HAVE_FOLIO_BATCH_REINIT
 
 	# 6.4
@@ -3867,6 +3923,8 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	LC_SRC_HAVE_VFS_CREATE_DELEGATE
 	LC_SRC_HAVE_ILOOKUP5_NOWAIT_ISNEW
 	LC_SRC_HAVE_FILEMAP_ALLOC_FOLIO_NUMA
+	LC_SRC_HAVE_KILL_LITTER_SUPER
+	LC_SRC_HAVE_D_MAKE_PERSISTENT
 
 	# 7.0
 	LC_SRC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER
@@ -3983,7 +4041,6 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 	LC_HAVE_VFS_SETXATTR_NON_CONST_VALUE
 	LC_HAVE_IOV_ITER_GET_PAGES_ALLOC2
 	LC_HAVE_USER_BACKED_ITER
-	LC_HAVE_IOV_ITER_IS_ALIGNED
 
 	# 6.1
 	LC_HAVE_GET_RANDOM_U32_AND_U64
@@ -4000,6 +4057,7 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 	# 6.3
 	LC_HAVE_MNT_IDMAP_ARG
 	LC_HAVE_U64_CAPABILITY
+	LC_IOV_ITER_EXTRACT_PAGES
 	LC_HAVE_FOLIO_BATCH_REINIT
 
 	# 6.4
@@ -4088,6 +4146,8 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 	LC_HAVE_VFS_CREATE_DELEGATE
 	LC_HAVE_ILOOKUP5_NOWAIT_ISNEW
 	LC_HAVE_FILEMAP_ALLOC_FOLIO_NUMA
+	LC_HAVE_KILL_LITTER_SUPER
+	LC_HAVE_D_MAKE_PERSISTENT
 
 	# 7.0
 	LC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER
@@ -4456,8 +4516,10 @@ AC_DEFUN([LC_CONFIG_FILES],
 [AC_CONFIG_FILES([
 lustre/conf/Makefile
 lustre/conf/resource/Makefile
+lustre/kernel_patches/targets/6.12-rhel10.2.target
 lustre/kernel_patches/targets/6.12-rhel10.1.target
 lustre/kernel_patches/targets/6.12-rhel10.0.target
+lustre/kernel_patches/targets/5.14-rhel9.8.target
 lustre/kernel_patches/targets/5.14-rhel9.7.target
 lustre/kernel_patches/targets/5.14-rhel9.6.target
 lustre/kernel_patches/targets/5.14-rhel9.5.target

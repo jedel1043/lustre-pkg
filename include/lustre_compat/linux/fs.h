@@ -10,6 +10,35 @@
 #define __LIBCFS_LINUX_CFS_FS_H__
 
 #include <linux/fs.h>
+#include <linux/dcache.h>
+#include <lustre_compat/linux/time64.h>
+
+#ifndef HAVE_D_MAKE_PERSISTENT
+/*
+ * Linux commit v6.18-rc5-9-gbacdf1d70bbe2 introduced d_make_persistent() and
+ * d_make_discardable() so that filesystems can mark dentries as pinned without
+ * leaking unbalanced dget()s. On older kernels we fall back to the equivalent
+ * open-coded sequence: d_instantiate() (or d_add() for unhashed dentries) plus
+ * an extra dget() to pin, and a matching dput() to unpin. Older kernels still
+ * have kill_litter_super() available, which uses d_genocide() to drop these
+ * extra references at unmount.
+ */
+static inline struct dentry *d_make_persistent(struct dentry *dentry,
+					       struct inode *inode)
+{
+	if (d_unhashed(dentry))
+		d_add(dentry, inode);
+	else
+		d_instantiate(dentry, inode);
+	dget(dentry);
+	return dentry;
+}
+
+static inline void d_make_discardable(struct dentry *dentry)
+{
+	dput(dentry);
+}
+#endif /* !HAVE_D_MAKE_PERSISTENT */
 
 #ifndef S_DT_SHIFT
 #define S_DT_SHIFT		12
@@ -94,8 +123,91 @@ static inline int inode_generic_drop(struct inode *inode)
 #endif
 
 #ifndef HAVE_ILOOKUP5_NOWAIT_ISNEW
+static inline
+struct inode *compat_ilookup5_nowait(struct super_block *sb, u64 hashval,
+			      int (*fn)(struct inode *, void *),
+			      void *data, bool *isnew)
+{
+	return ilookup5_nowait(sb, hashval, fn, data);
+}
 #define ilookup5_nowait(sb, hash, fn, data, isnew) \
-	ilookup5_nowait((sb), (hash), (fn), (data))
+	compat_ilookup5_nowait((sb), (hash), (fn), (data), (isnew))
 #endif
+
+#ifndef F_GETLK64
+#define F_GETLK64	12	/*  using 'struct flock64' */
+#define F_SETLK64	13
+#define F_SETLKW64	14
+#endif
+
+#ifndef HAVE_INODE_GET_CTIME
+#define inode_get_ctime(i)		((i)->i_ctime)
+#define inode_set_ctime_to_ts(i, ts)	((i)->i_ctime = ts)
+#define inode_set_ctime_current(i) \
+	inode_set_ctime_to_ts((i), current_time((i)))
+
+static inline struct timespec64 inode_set_ctime(struct inode *inode,
+						time64_t sec, long nsec)
+{
+	struct timespec64 ts = { .tv_sec  = sec,
+				 .tv_nsec = nsec };
+
+	return inode_set_ctime_to_ts(inode, ts);
+}
+#endif /* !HAVE_INODE_GET_CTIME */
+
+#ifndef HAVE_INODE_GET_MTIME_SEC
+
+#define inode_get_ctime_sec(i)		(inode_get_ctime((i)).tv_sec)
+
+#define inode_get_atime(i)		((i)->i_atime)
+#define inode_get_atime_sec(i)		((i)->i_atime.tv_sec)
+#define inode_set_atime_to_ts(i, ts)	((i)->i_atime = ts)
+
+static inline struct timespec64 inode_set_atime(struct inode *inode,
+						time64_t sec, long nsec)
+{
+	struct timespec64 ts = { .tv_sec  = sec,
+				 .tv_nsec = nsec };
+	return inode_set_atime_to_ts(inode, ts);
+}
+
+#define inode_get_mtime(i)		((i)->i_mtime)
+#define inode_get_mtime_sec(i)		((i)->i_mtime.tv_sec)
+#define inode_set_mtime_to_ts(i, ts)	((i)->i_mtime = ts)
+
+static inline struct timespec64 inode_set_mtime(struct inode *inode,
+						time64_t sec, long nsec)
+{
+	struct timespec64 ts = { .tv_sec  = sec,
+				 .tv_nsec = nsec };
+	return inode_set_mtime_to_ts(inode, ts);
+}
+#endif  /* !HAVE_INODE_GET_MTIME_SEC */
+
+/* Inode timestamp helpers returning nanoseconds since epoch */
+static inline s64 inode_get_atime_ns(struct inode *inode)
+{
+	struct timespec64 ts;
+
+	ts = inode_get_atime(inode);
+	return timespec64_to_ns(&ts);
+}
+
+static inline s64 inode_get_mtime_ns(struct inode *inode)
+{
+	struct timespec64 ts;
+
+	ts = inode_get_mtime(inode);
+	return timespec64_to_ns(&ts);
+}
+
+static inline s64 inode_get_ctime_ns(struct inode *inode)
+{
+	struct timespec64 ts;
+
+	ts = inode_get_ctime(inode);
+	return timespec64_to_ns(&ts);
+}
 
 #endif /* __LIBCFS_LINUX_CFS_FS_H__ */

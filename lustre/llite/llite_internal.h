@@ -157,7 +157,10 @@ struct ll_inode_info {
 	s64				lli_ctime;
 	s64				lli_btime;
 	spinlock_t			lli_agl_lock;
-	bool				lli_synced_to_mds;
+	/* need to ll_mdsync() newly created inode to MDT */
+	unsigned int			lli_need_sync_to_mds:1;
+	/* need to ll_fsync() file writes for "sync_on_close" */
+	unsigned int			lli_need_sync_to_oss:1;
 
 	/* inode specific open lock caching threshold */
 	u32				lli_open_thrsh_count;
@@ -633,16 +636,6 @@ static inline void obd_connect_set_name_enc(struct obd_connect_data *data)
 #endif
 }
 
-static inline bool obd_connect_has_enc_fid2path(struct obd_connect_data *data)
-{
-#ifdef HAVE_LUSTRE_CRYPTO
-	return data->ocd_connect_flags & OBD_CONNECT_FLAGS2 &&
-		data->ocd_connect_flags2 & OBD_CONNECT2_ENCRYPT_FID2PATH;
-#else
-	return false;
-#endif
-}
-
 static inline void obd_connect_set_enc_fid2path(struct obd_connect_data *data)
 {
 #ifdef HAVE_LUSTRE_CRYPTO
@@ -816,6 +809,7 @@ enum ll_sbi_flags {
 	LL_SBI_LRU_RESIZE,		/* lru resize support */
 	LL_SBI_NOLCK,			/* DLM locking disabled directio-only */
 	LL_SBI_STATFS_PROJECT,		/* statfs returns project quota */
+	LL_SBI_SYNC_ON_CLOSE,		/* files sync data on close */
 	LL_SBI_TEST_DUMMY_ENCRYPTION,	/* test dummy encryption */
 	LL_SBI_USER_FID2PATH,		/* fid2path by unprivileged users */
 	LL_SBI_USER_PRINCIPAL,		/* user principal for IAM */
@@ -1002,6 +996,7 @@ struct ll_sb_info {
 	__u32 ll_secctx_name_size;
 
 	char			 *ll_user_principal;
+	uid_t			  ll_loginuid;
 
 	/* LU-14535: the list of "lfs quota -a" */
 	struct list_head	 ll_all_quota_list;
@@ -1248,6 +1243,7 @@ enum {
 	LPROC_LL_WRITE_BYTES,
 	LPROC_LL_HIO_READ,
 	LPROC_LL_HIO_WRITE,
+	LPROC_LL_CACHED_READ,
 	LPROC_LL_READ,
 	LPROC_LL_WRITE,
 	LPROC_LL_IOCTL,
@@ -1320,13 +1316,6 @@ extern const struct inode_operations ll_special_inode_operations;
 static inline bool ll_lov_delay_create_is_set(unsigned int kernel_open_flags)
 {
 	return (kernel_open_flags & O_LOV_DELAY_CREATE) == O_LOV_DELAY_CREATE;
-}
-
-/* Clear (file.f_flag) O_LOV_DELAY_CREATE(volatile) flag */
-static inline void ll_lov_delay_create_clear(unsigned int *kernel_open_flags)
-{
-	if (ll_lov_delay_create_is_set(*kernel_open_flags))
-		*kernel_open_flags &= ~O_LOV_DELAY_CREATE;
 }
 
 enum mds_open_flags ll_kernel_to_mds_open_flags(unsigned int kernel_open_flags);
@@ -1461,6 +1450,7 @@ int ll_dir_getstripe_default(struct inode *inode, void **lmmp,
 			     struct ptlrpc_request **root_request, u64 valid);
 int ll_dir_getstripe(struct inode *inode, void **plmm, int *plmm_size,
 		     struct ptlrpc_request **request, u64 valid);
+int ll_mdsync(struct inode *inode);
 int ll_fsync(struct file *file, loff_t start, loff_t end, int data);
 int ll_merge_attr(const struct lu_env *env, struct inode *inode);
 int ll_merge_attr_try(const struct lu_env *env, struct inode *inode);
@@ -1664,15 +1654,6 @@ static inline struct obd_export *ll_s2dtexp(struct super_block *sb)
 static inline struct obd_export *ll_s2mdexp(struct super_block *sb)
 {
 	return ll_s2sbi(sb)->ll_md_exp;
-}
-
-static inline struct client_obd *sbi2mdc(struct ll_sb_info *sbi)
-{
-	struct obd_device *obd = sbi->ll_md_exp->exp_obd;
-
-	if (obd == NULL)
-		LBUG();
-	return &obd->u.cli;
 }
 
 // FIXME: replace the name of this with LL_SB to conform to kernel stuff
