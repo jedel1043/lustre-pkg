@@ -17,7 +17,7 @@ Subject: Add compatibility patch for Linux 7.1
  11 files changed, 80 insertions(+), 8 deletions(-)
 
 diff --git a/config/lustre-core.m4 b/config/lustre-core.m4
-index 9ebaa5e..3dbd350 100644
+index d44ac35..f74e4f2 100644
 --- a/config/lustre-core.m4
 +++ b/config/lustre-core.m4
 @@ -1397,6 +1397,27 @@ AC_DEFUN([LC_HAVE_WB_STAT_MOD], [
@@ -60,7 +60,7 @@ index 9ebaa5e..3dbd350 100644
  	],[
  		struct folio_batch fbatch __attribute__ ((unused));
  
-@@ -2204,7 +2229,11 @@ AC_DEFUN([LC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK], [
+@@ -2209,7 +2234,11 @@ AC_DEFUN([LC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK], [
  #
  AC_DEFUN([LC_SRC_HAVE_FOLIO_BATCH_REINIT], [
  	LB2_LINUX_TEST_SRC([folio_batch_reinit_exists], [
@@ -72,7 +72,7 @@ index 9ebaa5e..3dbd350 100644
  	],[
  		struct folio_batch fbatch __attribute__ ((unused));
  
-@@ -2673,6 +2702,29 @@ AC_DEFUN([LC_HAVE_DENTRY_D_CHILDREN], [
+@@ -2678,6 +2707,29 @@ AC_DEFUN([LC_HAVE_DENTRY_D_CHILDREN], [
  	])
  ]) # LC_HAVE_DENTRY_D_CHILDREN
  
@@ -102,7 +102,7 @@ index 9ebaa5e..3dbd350 100644
  #
  # LC_HAVE_GENERIC_ERROR_REMOVE_FOLIO
  #
-@@ -3870,6 +3922,10 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
+@@ -3928,6 +3980,10 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
  
  	# 7.0
  	LC_SRC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER
@@ -113,7 +113,7 @@ index 9ebaa5e..3dbd350 100644
  ])
  
  AC_DEFUN([LC_PROG_LINUX_RESULTS], [
-@@ -4091,6 +4147,10 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
+@@ -4151,6 +4207,10 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
  
  	# 7.0
  	LC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER
@@ -125,7 +125,7 @@ index 9ebaa5e..3dbd350 100644
  
  #
 diff --git a/include/lustre_compat/linux/folio.h b/include/lustre_compat/linux/folio.h
-index cae5384..c838387 100644
+index bd2594e..0b45270 100644
 --- a/include/lustre_compat/linux/folio.h
 +++ b/include/lustre_compat/linux/folio.h
 @@ -22,7 +22,14 @@
@@ -144,12 +144,12 @@ index cae5384..c838387 100644
  
  #ifndef HAVE_GENERIC_ERROR_REMOVE_FOLIO
 diff --git a/include/lustre_compat/linux/fs.h b/include/lustre_compat/linux/fs.h
-index 139ae83..2a007b7 100644
+index d025a4c..9c09d4b 100644
 --- a/include/lustre_compat/linux/fs.h
 +++ b/include/lustre_compat/linux/fs.h
-@@ -98,4 +98,10 @@ static inline int inode_generic_drop(struct inode *inode)
- 	ilookup5_nowait((sb), (hash), (fn), (data))
- #endif
+@@ -210,4 +210,10 @@ static inline s64 inode_get_ctime_ns(struct inode *inode)
+ 	return timespec64_to_ns(&ts);
+ }
  
 +#ifdef HAVE_DENTRY_D_ALIAS
 +#define LL_D_ALIAS	d_alias
@@ -159,7 +159,7 @@ index 139ae83..2a007b7 100644
 +
  #endif /* __LIBCFS_LINUX_CFS_FS_H__ */
 diff --git a/lustre/include/cl_object.h b/lustre/include/cl_object.h
-index 2cf3589..e3fdf99 100644
+index 46a17cc..822926d 100644
 --- a/lustre/include/cl_object.h
 +++ b/lustre/include/cl_object.h
 @@ -78,7 +78,6 @@
@@ -171,7 +171,7 @@ index 2cf3589..e3fdf99 100644
  #include <lu_object.h>
  #include <lustre_dlm.h>
 diff --git a/lustre/include/lustre_compat.h b/lustre/include/lustre_compat.h
-index 2278454..889a2c5 100644
+index 70597f3..386d162 100644
 --- a/lustre/include/lustre_compat.h
 +++ b/lustre/include/lustre_compat.h
 @@ -26,7 +26,11 @@
@@ -187,7 +187,7 @@ index 2278454..889a2c5 100644
  #include <lustre_compat/linux/shrinker.h>
  #include <lustre_compat/linux/xarray.h>
 diff --git a/lustre/llite/dcache.c b/lustre/llite/dcache.c
-index e18f1a3..7ede8cf 100644
+index 7757bd2..ac84328 100644
 --- a/lustre/llite/dcache.c
 +++ b/lustre/llite/dcache.c
 @@ -200,7 +200,7 @@ void ll_prune_aliases(struct inode *inode)
@@ -212,7 +212,7 @@ index 2c9008f..4cb6f44 100644
  #define DEBUG_SUBSYSTEM S_LLITE
  
 diff --git a/lustre/llite/namei.c b/lustre/llite/namei.c
-index 717237a..1480ac3 100644
+index 8df0f58..87afb3d 100644
 --- a/lustre/llite/namei.c
 +++ b/lustre/llite/namei.c
 @@ -166,7 +166,7 @@ static void ll_prune_negative_children(struct inode *dir)
@@ -234,7 +234,7 @@ index 717237a..1480ac3 100644
  
  		spin_lock(&alias->d_lock);
 diff --git a/lustre/llite/vvp_io.c b/lustre/llite/vvp_io.c
-index a0e54d4..976744b 100644
+index ada9e47..4b345ec 100644
 --- a/lustre/llite/vvp_io.c
 +++ b/lustre/llite/vvp_io.c
 @@ -19,7 +19,6 @@
@@ -258,7 +258,7 @@ index 08e6d7b..0f4d6ad 100644
  
  #include "osc_internal.h"
 diff --git a/lustre/osd-ldiskfs/osd_io.c b/lustre/osd-ldiskfs/osd_io.c
-index 4d890da..9655dc0 100644
+index f252148..f292f2b 100644
 --- a/lustre/osd-ldiskfs/osd_io.c
 +++ b/lustre/osd-ldiskfs/osd_io.c
 @@ -24,7 +24,6 @@

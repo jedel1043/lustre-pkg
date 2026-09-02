@@ -4,27 +4,14 @@ Subject: Fix make utils target
 
 Forwarded: no
 ---
- autoMakefile.am        | 1 +
  config/lustre-build.m4 | 7 ++++++-
- 2 files changed, 7 insertions(+), 1 deletion(-)
+ 1 file changed, 6 insertions(+), 1 deletion(-)
 
-diff --git a/autoMakefile.am b/autoMakefile.am
-index facc1e2..9828d1a 100644
---- a/autoMakefile.am
-+++ b/autoMakefile.am
-@@ -133,6 +133,7 @@ checkpatch:
- 	@git diff HEAD~1 | ./contrib/scripts/checkpatch.pl
- 
- utils:
-+	$(MAKE) -C lib/libcfs
- 	$(MAKE) -C lnet/utils
- 	$(MAKE) -C lustre/utils
- 
 diff --git a/config/lustre-build.m4 b/config/lustre-build.m4
-index 8334312..6483067 100644
+index 8613f6e..31f8fd9 100644
 --- a/config/lustre-build.m4
 +++ b/config/lustre-build.m4
-@@ -263,6 +263,12 @@ AC_ARG_ENABLE([utils],
+@@ -270,6 +270,12 @@ AC_ARG_ENABLE([utils],
  		[disable building of Lustre utility programs]),
  	[], [enable_utils="yes"])
  AC_MSG_RESULT([$enable_utils])
@@ -37,7 +24,7 @@ index 8334312..6483067 100644
  ]) # LB_CONFIG_UTILS
  
  #
-@@ -472,7 +478,6 @@ AC_ARG_ENABLE([server],
+@@ -467,7 +473,6 @@ AC_ARG_ENABLE([server],
  # call it here.
  LB_CONFIG_MODULES
  LC_CONFIG_COVERAGE

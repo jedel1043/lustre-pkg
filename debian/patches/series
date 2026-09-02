@@ -1,8 +1,5 @@
-0001-Add-shebang-to-iokit-config-script.patch
 0002-fix-make-utils-target.patch
 0003-Switch-to-StandardOutput-journal-for-lsvcgss-service.patch
-0004-Fix-execute-permissions-on-lsvcgss-service.patch
 0005-Explicitly-link-against-libyaml-on-liblustreapi.patch
 0006-Check-if-zfs-nvlist-are-const-on-userland-builds.patch
-0008-LU-20162-lprocfs-revert-LU-20162-obdclass-pin-debugf.patch
 0009-Add-compatibility-patch-for-Linux-7.1.patch

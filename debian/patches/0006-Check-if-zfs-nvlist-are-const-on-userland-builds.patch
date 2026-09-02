@@ -8,10 +8,10 @@ Forwarded: no
  1 file changed, 22 insertions(+)
 
 diff --git a/config/lustre-build-zfs.m4 b/config/lustre-build-zfs.m4
-index 24f0690..3d3890d 100644
+index 52785bc..7a52f15 100644
 --- a/config/lustre-build-zfs.m4
 +++ b/config/lustre-build-zfs.m4
-@@ -366,6 +366,28 @@ AC_DEFUN([LB_ZFS_USER], [
+@@ -215,6 +215,28 @@ AC_DEFUN([LB_ZFS_USER], [
  	])
  	AC_MSG_RESULT([$zfsinc])
  
