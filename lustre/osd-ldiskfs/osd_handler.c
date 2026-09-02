@@ -2295,7 +2295,6 @@ static int osd_trans_stop(const struct lu_env *env, struct dt_device *dt,
 	struct osd_thandle *oh;
 	struct osd_iobuf *iobuf = &oti->oti_iobuf;
 	struct osd_device *osd = osd_dt_dev(th->th_dev);
-	struct qsd_instance *qsd = osd_def_qsd(osd);
 	struct lquota_trans *qtrans;
 	LIST_HEAD(truncates);
 	int rc = 0, remove_agents = 0;
@@ -2361,7 +2360,7 @@ static int osd_trans_stop(const struct lu_env *env, struct dt_device *dt,
 	osd_trunc_unlock_all(env, &truncates);
 
 	/* inform the quota slave device that the transaction is stopping */
-	qsd_op_end(env, qsd, qtrans);
+	qsd_op_end(env, qtrans);
 
 	/*
 	 * as we want IO to journal and data IO be concurrent, we don't block
@@ -2373,8 +2372,8 @@ static int osd_trans_stop(const struct lu_env *env, struct dt_device *dt,
 	 * IMPORTANT: we have to wait till any IO submited by the thread is
 	 * completed otherwise iobuf may be corrupted by different request
 	 */
-	wait_event(iobuf->dr_wait,
-		       atomic_read(&iobuf->dr_numreqs) == 0);
+	io_wait_event(iobuf->dr_wait,
+		      atomic_read(&iobuf->dr_numreqs) == 0);
 
 	if (!rc)
 		rc = iobuf->dr_error;
@@ -3886,7 +3885,7 @@ static int __osd_create(struct osd_thread_info *info, struct osd_object *obj,
 	result = osd_create_type_f(dof->dof_type)(info, obj, attr, hint, dof,
 						  th);
 	if (likely(obj->oo_inode != NULL)) {
-		LASSERT(inode_state_read(obj->oo_inode) & I_NEW);
+		LASSERT(inode_state_read_once(obj->oo_inode) & I_NEW);
 
 		/*
 		 * Unlock the inode before attr initialization to avoid
@@ -3969,6 +3968,9 @@ int osd_fld_lookup(const struct lu_env *env, struct osd_device *osd,
 		   u64 seq, struct lu_seq_range *range)
 {
 	struct seq_server_site *ss = osd_seq_site(osd);
+
+	/* Initialize range flags to avoid any garbage */
+	range->lsr_flags = 0;
 
 	if (fid_seq_is_idif(seq)) {
 		fld_range_set_ost(range);
@@ -8386,8 +8388,8 @@ static void osd_umount(const struct lu_env *env, struct osd_device *o)
 	if (o->od_mnt != NULL) {
 		shrink_dcache_sb(osd_sb(o));
 		osd_sync(env, &o->od_dt_dev);
-		wait_event(o->od_commit_cb_done,
-			  !atomic_read(&o->od_commit_cb_in_flight));
+		io_wait_event(o->od_commit_cb_done,
+			      !atomic_read(&o->od_commit_cb_in_flight));
 
 		mntput(o->od_mnt);
 		o->od_mnt = NULL;

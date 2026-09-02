@@ -728,15 +728,20 @@ static int kiblnd_setup_rd_kiov(struct lnet_ni *ni, struct kib_tx *tx,
 		fragnob = min((int)(kiov->bv_len - offset), nob);
 
 		/*
-		 * We're allowed to start at a non-aligned page offset in
-		 * the first fragment and end at a non-aligned page offset
-		 * in the last fragment.
+		 * We're allowed to start at a non-aligned page offset in the
+		 * first fragment and end at a non-aligned page offset in the
+		 * last fragment. Every interior fragment boundary, however,
+		 * must be page-aligned: otherwise ib_map_mr_sg() (see
+		 * ib_sg_to_pages()) detects a gap and short-maps the
+		 * scatterlist, which fails the FastReg with -EINVAL. A gap
+		 * therefore exists when a non-first fragment starts mid-page
+		 * or a non-last fragment ends mid-page.
 		 */
-		if ((fragnob < (int)(kiov->bv_len - offset)) &&
-		    nkiov < max_nkiov && nob > fragnob) {
-			CDEBUG(D_NET, "fragnob %d < available page %d: with remaining %d kiovs with %d nob left\n",
-			       fragnob, (int)(kiov->bv_len - offset), nkiov,
-			       nob);
+		if ((nkiov < max_nkiov && (kiov->bv_offset & ~PAGE_MASK)) ||
+		    (nob > fragnob &&
+		     ((kiov->bv_offset + offset + fragnob) & ~PAGE_MASK))) {
+			CDEBUG(D_NET, "tx_gaps: nkiov %d/%d offset %d fragnob %d nob %d\n",
+			       nkiov, max_nkiov, offset, fragnob, nob);
 			tx->tx_gaps = true;
 		}
 
@@ -1702,8 +1707,8 @@ kiblnd_send(struct lnet_ni *ni, void *private, struct lnet_msg *lntmsg)
 		rd = &ibmsg->ibm_u.get.ibgm_rd;
 		tx->tx_gpu = gpu;
 		rc = kiblnd_setup_rd_kiov(ni, tx, rd,
-					  payload_niov, payload_kiov,
-					  payload_offset, payload_nob);
+					  msg_md->md_niov, msg_md->md_kiov,
+					  0, msg_md->md_length);
 		if (rc != 0) {
 			CERROR("Can't setup GET sink %s: rc = %d\n",
 			       libcfs_nidstr(&target->nid), rc);
@@ -3364,10 +3369,13 @@ kiblnd_cm_callback(struct rdma_cm_id *cmid, struct rdma_cm_event *event)
 	case RDMA_CM_EVENT_UNREACHABLE:
 		conn = cmid->context;
 
-		/* In case we have a flapping network, we can get this event
-		 * before conn is created */
+		/* The DISCONNECTED handler clears the cm_id context, but the
+		 * cm_id stays ours until connd reaps the conn. A non-zero
+		 * return would have the CM destroy it now, and connd would
+		 * destroy it again. Nothing left to do, so ignore the event.
+		 */
 		if (conn == NULL)
-			return -ENETDOWN;
+			return 0;
 
 		CNETERR("%s: UNREACHABLE %d cm_id %p conn %p ibc_state: %d\n",
 			libcfs_nidstr(&conn->ibc_peer->ibp_nid),

@@ -141,11 +141,12 @@ enum lprocfs_counter_config {
 
 /* lc_name string displayed in debugfs output length is limited to 35 */
 #define LC_NAME_MAX_SIZE	32
+#define LC_UNITS_MAX_SIZE	16
 
 struct lprocfs_counter_header {
 	enum lprocfs_counter_config	lc_config;
-	const char			*lc_name;   /* must be static */
-	const char			*lc_units;  /* must be static */
+	char				lc_name[LC_NAME_MAX_SIZE];
+	char				lc_units[LC_UNITS_MAX_SIZE];
 	struct obd_histogram		*lc_hist;
 };
 
@@ -546,12 +547,21 @@ extern int obd_io_latency_stats_seq_show(struct seq_file *seq,
 				 struct obd_histogram *write_io_latency_by_size,
 				 int num_buckets, ktime_t stats_init,
 				 spinlock_t *list_lock);
-extern void lprocfs_counter_init(struct lprocfs_stats *stats, int index,
-				 enum lprocfs_counter_config config,
-				 const char *name);
-extern void lprocfs_counter_init_units(struct lprocfs_stats *stats, int index,
+extern void __lprocfs_counter_init_units(struct lprocfs_stats *stats, int index,
 				       enum lprocfs_counter_config config,
 				       const char *name, const char *units);
+#define lprocfs_counter_init_units(stats, index, config, name, units)	\
+do {									\
+	struct lprocfs_counter_header *__header;			\
+	if (__builtin_constant_p(name))					\
+		BUILD_BUG_ON(sizeof(name) > sizeof(__header->lc_name));	\
+	if (__builtin_constant_p(units))				\
+		BUILD_BUG_ON(sizeof(units) > sizeof(__header->lc_units));\
+	__lprocfs_counter_init_units(stats, index, config, name, units);\
+} while (0)
+#define lprocfs_counter_init(stats, index, config, name)		\
+	lprocfs_counter_init_units(stats, index, config, name, "")
+
 extern void ldebugfs_free_obd_stats(struct obd_device *obd);
 extern void lprocfs_free_md_stats(struct obd_device *obd);
 struct obd_export;
@@ -651,12 +661,6 @@ ssize_t ping_show(struct kobject *kobj, struct attribute *attr,
 extern ssize_t
 ldebugfs_import_seq_write(struct file *file, const char __user *buffer,
 			  size_t count, loff_t *off);
-static inline ssize_t
-lprocfs_import_seq_write(struct file *file, const char __user *buffer,
-			 size_t count, loff_t *off)
-{
-	return ldebugfs_import_seq_write(file, buffer, count, off);
-}
 ssize_t pinger_recov_show(struct kobject *kobj, struct attribute *attr,
 			  char *buf);
 ssize_t pinger_recov_store(struct kobject *kobj, struct attribute *attr,
@@ -777,20 +781,7 @@ ssize_t ir_factor_store(struct kobject *kobj, struct attribute *attr,
 #define __LDEBUGFS_SEQ_FOPS(name, custom_seq_write)			\
 static int name##_single_open(struct inode *inode, struct file *file)	\
 {									\
-	int rc;								\
-	/* pin this entry till close to prevent races with umount */	\
-	rc = debugfs_file_get(file->f_path.dentry);			\
-	if (rc)								\
-		return rc;						\
-	rc = single_open(file, name##_seq_show, inode->i_private);	\
-	if (rc)								\
-		debugfs_file_put(file->f_path.dentry);			\
-	return rc;							\
-}									\
-static int name##_single_release(struct inode *inode, struct file *file)\
-{									\
-	debugfs_file_put(file->f_path.dentry);				\
-	return single_release(inode, file);				\
+	return single_open(file, name##_seq_show, inode->i_private);	\
 }									\
 static const struct file_operations name##_fops = {			\
 	.owner	 = THIS_MODULE,						\
@@ -798,7 +789,7 @@ static const struct file_operations name##_fops = {			\
 	.read	 = seq_read,						\
 	.write	 = custom_seq_write,					\
 	.llseek	 = seq_lseek,						\
-	.release = name##_single_release,				\
+	.release = single_release,					\
 }
 
 #define LDEBUGFS_SEQ_FOPS_RO(name)	__LDEBUGFS_SEQ_FOPS(name, NULL)
@@ -845,25 +836,12 @@ static const struct file_operations name##_fops = {			\
 	static int name##_##type##_open(struct inode *inode,		\
 					struct file *file)		\
 	{								\
-		int rc;							\
-		rc = debugfs_file_get(file->f_path.dentry);		\
-		if (rc)							\
-			return rc;					\
-		rc = single_open(file, NULL, inode->i_private);		\
-		if (rc)							\
-			debugfs_file_put(file->f_path.dentry);		\
-		return rc;						\
-	}								\
-	static int name##_##type##_release(struct inode *inode,		\
-					struct file *file)		\
-	{								\
-		debugfs_file_put(file->f_path.dentry);			\
-  		return single_release(inode, file);		\
+		return single_open(file, NULL, inode->i_private);	\
 	}								\
 	static const struct file_operations name##_##type##_fops = {	\
 		.open	 = name##_##type##_open,			\
 		.write	 = name##_##type##_write,			\
-		.release = name##_##type##_release,			\
+		.release = single_release,				\
 	};
 
 /* write the name##_seq_show function, call LPROC_SEQ_FOPS_RO for read-only
@@ -1230,13 +1208,6 @@ lprocfs_ping_seq_write(struct file *file, const char __user *buffer,
 static inline ssize_t
 ldebugfs_import_seq_write(struct file *file, const char __user *buffer,
 			  size_t count, loff_t *off)
-{
-	return 0;
-}
-
-static inline ssize_t
-lprocfs_import_seq_write(struct file *file, const char __user *buffer,
-			 size_t count, loff_t *off)
 {
 	return 0;
 }

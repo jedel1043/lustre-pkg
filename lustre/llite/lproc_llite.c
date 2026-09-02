@@ -698,6 +698,37 @@ out_unlock:
 }
 LDEBUGFS_SEQ_FOPS(ll_max_cached_mb);
 
+static ssize_t sync_on_close_show(struct kobject *kobj, struct attribute *attr,
+				  char *buf)
+{
+	struct ll_sb_info *sbi = container_of(kobj, struct ll_sb_info,
+					      ll_kset.kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n",
+			 test_bit(LL_SBI_SYNC_ON_CLOSE, sbi->ll_flags));
+}
+
+static ssize_t sync_on_close_store(struct kobject *kobj, struct attribute *attr,
+				   const char *buffer, size_t count)
+{
+	struct ll_sb_info *sbi = container_of(kobj, struct ll_sb_info,
+					      ll_kset.kobj);
+	bool val;
+	int rc;
+
+	rc = kstrtobool(buffer, &val);
+	if (rc)
+		return rc;
+
+	if (val)
+		set_bit(LL_SBI_SYNC_ON_CLOSE, sbi->ll_flags);
+	else
+		clear_bit(LL_SBI_SYNC_ON_CLOSE, sbi->ll_flags);
+
+	return count;
+}
+LUSTRE_RW_ATTR(sync_on_close);
+
 static int ll_unevict_cached_mb_seq_show(struct seq_file *m, void *v)
 {
 	struct super_block *sb = m->private;
@@ -2554,6 +2585,29 @@ out_free_kernbuff:
 }
 LDEBUGFS_SEQ_FOPS(ll_pcc);
 
+static int ll_enable_compression_seq_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "%d\n", llite_enable_compression ? 1 : 0);
+	return 0;
+}
+
+static ssize_t ll_enable_compression_seq_write(struct file *file,
+					       const char __user *buffer,
+					       size_t count, loff_t *off)
+{
+	bool val;
+	int rc;
+
+	rc = kstrtobool_from_user(buffer, count, &val);
+	if (rc < 0)
+		return rc;
+
+	llite_enable_compression = val;
+
+	return count;
+}
+LDEBUGFS_SEQ_FOPS(ll_enable_compression);
+
 struct ldebugfs_vars lprocfs_llite_obd_vars[] = {
 	{ .name	=	"site",
 	  .fops	=	&ll_site_stats_fops			},
@@ -2561,6 +2615,8 @@ struct ldebugfs_vars lprocfs_llite_obd_vars[] = {
 	  .fops	=	&ll_max_cached_mb_fops			},
 	{ .name	=	"unevict_cached_mb",
 	  .fops	=	&ll_unevict_cached_mb_fops		},
+	{ .name =	"enable_compression",
+	  .fops =	&ll_enable_compression_fops,		},
 	{ .name	=	"enable_mlock_pages",
 	  .fops	=	&ll_enable_mlock_pages_fops		},
 	{ .name	=	"statahead_stats",
@@ -2587,7 +2643,11 @@ static struct attribute *llite_attrs[] = {
 	&lustre_attr_kbytestotal.attr,
 	&lustre_attr_kbytesfree.attr,
 	&lustre_attr_kbytesavail.attr,
+	&lustre_attr_checksums.attr,
+	&lustre_attr_checksum_pages.attr,
 	&lustre_attr_client_type.attr,
+	&lustre_attr_default_easize.attr,
+	&lustre_attr_fast_read.attr,
 	&lustre_attr_foreign_symlink_enable.attr,
 	&lustre_attr_foreign_symlink_prefix.attr,
 	&lustre_attr_foreign_symlink_upcall.attr,
@@ -2599,8 +2659,7 @@ static struct attribute *llite_attrs[] = {
 	&lustre_attr_hybrid_io_write_threshold_bytes.attr,
 	&lustre_attr_hybrid_io_read_threshold_bytes.attr,
 	&lustre_attr_inode_cache.attr,
-	&lustre_attr_checksums.attr,
-	&lustre_attr_checksum_pages.attr,
+	&lustre_attr_intent_mkdir.attr,
 	&lustre_attr_max_easize.attr,
 	&lustre_attr_max_read_ahead_mb.attr,
 	&lustre_attr_max_read_ahead_per_file_mb.attr,
@@ -2634,10 +2693,8 @@ static struct attribute *llite_attrs[] = {
 	&lustre_attr_statfs_max_age.attr,
 	&lustre_attr_statfs_project.attr,
 	&lustre_attr_statfs_state.attr,
-	&lustre_attr_default_easize.attr,
+	&lustre_attr_sync_on_close.attr,
 	&lustre_attr_xattr_cache.attr,
-	&lustre_attr_intent_mkdir.attr,
-	&lustre_attr_fast_read.attr,
 	&lustre_attr_tiny_write.attr,
 	&lustre_attr_enable_erasure_coding.attr,
 	&lustre_attr_unaligned_dio.attr,
@@ -2679,6 +2736,7 @@ static const struct llite_file_opcode {
 	{ LPROC_LL_WRITE_BYTES,	LPROCFS_TYPE_BYTES_FULL, "write_bytes" },
 	{ LPROC_LL_HIO_READ,	LPROCFS_TYPE_BYTES_FULL, "hybrid_read_bytes" },
 	{ LPROC_LL_HIO_WRITE,	LPROCFS_TYPE_BYTES_FULL, "hybrid_write_bytes" },
+	{ LPROC_LL_CACHED_READ,	LPROCFS_TYPE_BYTES_FULL, "cached_read_bytes" },
 	{ LPROC_LL_READ,	LPROCFS_TYPE_LATENCY,	"read" },
 	{ LPROC_LL_WRITE,	LPROCFS_TYPE_LATENCY,	"write" },
 	{ LPROC_LL_IOCTL,	LPROCFS_TYPE_REQS,	"ioctl" },

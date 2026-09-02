@@ -34,7 +34,7 @@
 #include "gss/gss_err.h"
 #include "gss/gss_internal.h"
 
-static int send_sepol;
+int send_sepol;
 module_param(send_sepol, int, 0644);
 MODULE_PARM_DESC(send_sepol, "Client sends SELinux policy status");
 
@@ -348,16 +348,6 @@ void sptlrpc_cli_ctx_wakeup(struct ptlrpc_cli_ctx *ctx)
 }
 EXPORT_SYMBOL(sptlrpc_cli_ctx_wakeup);
 
-int sptlrpc_cli_ctx_display(struct ptlrpc_cli_ctx *ctx, char *buf, int bufsize)
-{
-	LASSERT(ctx->cc_ops);
-
-	if (ctx->cc_ops->display == NULL)
-		return 0;
-
-	return ctx->cc_ops->display(ctx, buf, bufsize);
-}
-
 static int import_sec_check_expire(struct obd_import *imp)
 {
 	int adapt = 0;
@@ -511,10 +501,11 @@ int sptlrpc_req_ctx_switch(struct ptlrpc_request *req,
 	int rc = 0;
 
 	CDEBUG(D_SEC,
-	       "req %p: switch ctx %p(%u->%s) -> %p(%u->%s), switch sec %p(%s) -> %p(%s)\n",
+	       "req %p: switch ctx %p(%u->%s at %s) -> %p(%u->%s at %s), switch sec %p(%s) -> %p(%s)\n",
 	       req, oldctx, oldctx->cc_vcred.vc_uid,
-	       sec2target_str(oldctx->cc_sec), newctx, newctx->cc_vcred.vc_uid,
-	       sec2target_str(newctx->cc_sec), oldctx->cc_sec,
+	       sec2target_str(oldctx->cc_sec), sec2nid_str(oldctx->cc_sec),
+	       newctx, newctx->cc_vcred.vc_uid, sec2target_str(newctx->cc_sec),
+	       sec2nid_str(newctx->cc_sec), oldctx->cc_sec,
 	       oldctx->cc_sec->ps_policy->sp_name, newctx->cc_sec,
 	       newctx->cc_sec->ps_policy->sp_name);
 
@@ -1453,7 +1444,7 @@ struct ptlrpc_sec * sptlrpc_sec_create(struct obd_import *imp,
 	ENTRY;
 
 	if (svc_ctx) {
-		LASSERT(imp->imp_dlm_fake == 1);
+		LASSERT(test_bit(IMPF_DLM_FAKE, imp->imp_flags));
 
 		CDEBUG(D_SEC, "%s %s: reverse sec using flavor %s\n",
 		       imp->imp_obd->obd_type->typ_name,
@@ -1463,7 +1454,7 @@ struct ptlrpc_sec * sptlrpc_sec_create(struct obd_import *imp,
 		policy = sptlrpc_policy_get(svc_ctx->sc_policy);
 		sf->sf_flags |= PTLRPC_SEC_FL_REVERSE | PTLRPC_SEC_FL_ROOTONLY;
 	} else {
-		LASSERT(imp->imp_dlm_fake == 0);
+		LASSERT(!test_bit(IMPF_DLM_FAKE, imp->imp_flags));
 
 		CDEBUG(D_SEC, "%s %s: select security flavor %s\n",
 		       imp->imp_obd->obd_type->typ_name,
@@ -1680,15 +1671,6 @@ static void import_flush_ctx_common(struct obd_import *imp,
 
 	sec_cop_flush_ctx_cache(sec, uid, grace, force);
 	sptlrpc_sec_put(sec);
-}
-
-void sptlrpc_import_flush_root_ctx(struct obd_import *imp)
-{
-	/*
-	 * it's important to use grace mode, see explain in
-	 * sptlrpc_req_refresh_ctx()
-	 */
-	import_flush_ctx_common(imp, 0, 1, 1);
 }
 
 void sptlrpc_import_flush_my_ctx(struct obd_import *imp)
@@ -1909,19 +1891,11 @@ void sptlrpc_cli_free_repbuf(struct ptlrpc_request *req)
 	policy = ctx->cc_sec->ps_policy;
 	policy->sp_cops->free_repbuf(ctx->cc_sec, req);
 	req->rq_repmsg = NULL;
+	req->rq_repdata = NULL;
+	req->rq_repdata_len = 0;
 	EXIT;
 }
 EXPORT_SYMBOL(sptlrpc_cli_free_repbuf);
-
-int sptlrpc_cli_install_rvs_ctx(struct obd_import *imp,
-				struct ptlrpc_cli_ctx *ctx)
-{
-	struct ptlrpc_sec_policy *policy = ctx->cc_sec->ps_policy;
-
-	if (!policy->sp_cops->install_rctx)
-		return 0;
-	return policy->sp_cops->install_rctx(imp, ctx->cc_sec, ctx);
-}
 
 int sptlrpc_svc_install_rvs_ctx(struct obd_import *imp,
 				struct ptlrpc_svc_ctx *ctx)
@@ -2327,7 +2301,7 @@ int sptlrpc_target_export_check(struct obd_export *exp,
 	return -EACCES;
 
 nm_switch:
-#ifdef HAVE_SERVER_SUPPORT
+#ifdef CONFIG_LUSTRE_FS_SERVER
 	if (!rc && req->rq_svc_ctx && req->rq_svc_ctx->sc_nodemap) {
 		struct ptlrpc_sec *sec;
 
@@ -2999,6 +2973,14 @@ const char *sec2target_str(struct ptlrpc_sec *sec)
 	return obd_uuid2str(&sec->ps_import->imp_obd->u.cli.cl_target_uuid);
 }
 EXPORT_SYMBOL(sec2target_str);
+
+const char *sec2nid_str(struct ptlrpc_sec *sec)
+{
+	if (!sec || !sec->ps_import || !sec->ps_import->imp_connection)
+		return "*";
+	return libcfs_nidstr(&sec->ps_import->imp_connection->c_peer.nid);
+}
+EXPORT_SYMBOL(sec2nid_str);
 
 /*
  * return true if the bulk data is protected

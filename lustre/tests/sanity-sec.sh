@@ -6648,6 +6648,15 @@ setup_local_client_nodemap() {
 	wait_ssk
 }
 
+set_nodemap_rbac() {
+	local nm_name=$1
+	local rbac=$2
+
+	do_facet mgs $LCTL nodemap_modify --name $nm_name --property rbac \
+		--value $rbac || error "setting $nm_name rbac $rbac failed"
+	wait_nm_sync $nm_name rbac
+}
+
 cleanup_local_client_nodemap() {
 	local nm_name=${1:-"c0"}
 	local needremount2=false
@@ -8921,6 +8930,63 @@ test_64k() {
 }
 run_test 64k "Nodemap enforces foreign_ops RBAC roles"
 
+test_64l() {
+	local t_with=$DIR/$tdir/$tfile.with_immutable_flags
+	local t_without=$DIR/$tdir/$tfile.without_immutable_flags
+	local rbac
+	local flag
+
+	(( MDS1_VERSION >= $(version_code 2.17.53) )) ||
+		skip "Need MDS >= 2.17.53 for immutable_flags RBAC role"
+
+	# Probe default nodemap before setup: rbac property (LU-19975) and
+	# immutable_flags role support, to avoid costly nodemap configuration.
+	do_facet mgs $LCTL get_param -n nodemap.default.rbac ||
+		skip "server does not support rbac on default nodemap"
+	rbac=$(do_facet mgs $LCTL get_param -n nodemap.default.rbac)
+	[[ "$rbac" =~ "immutable_flags" ]] ||
+		skip "server does not support 'immutable_flags' rbac role"
+
+	stack_trap cleanup_local_client_nodemap EXIT
+	rm -rf "$DIR/$tdir"
+	stack_trap "chattr -i -a $t_with $t_without 2>/dev/null || true; \
+		rm -rf $DIR/$tdir" EXIT
+	mkdir -p $DIR/$tdir || error "mkdir $DIR/$tdir failed"
+	touch $t_with $t_without || error "touch $t_with $t_without failed"
+	setup_local_client_nodemap "c0" 1 1
+
+	# Verify c0 nodemap has immutable_flags (inherited from default).
+	rbac=$(do_facet mgs $LCTL get_param -n nodemap.c0.rbac)
+	[[ "$rbac" =~ "immutable_flags" ]] ||
+		error "c0 nodemap does not have 'immutable_flags' rbac role"
+
+	# +/-i/a should succeed with the role present. Re-apply each flag on
+	# t_with afterwards so both flags remain set for the deny test below
+	# (RBAC is only checked when the flag changes).
+	for flag in i a; do
+		chattr +$flag $t_with ||
+			error "(0) chattr +$flag failed with immutable_flags"
+		chattr -$flag $t_with ||
+			error "(1) chattr -$flag failed with immutable_flags"
+		chattr +$flag $t_with ||
+			error "(2) chattr +$flag failed with immutable_flags"
+	done
+
+	# immutable_flags absent: +flag on a clean file (t_without) and -flag on
+	# t_with (flags preloaded above) should both fail, even for root.
+	stack_trap 'set_nodemap_rbac c0 "file_perms,immutable_flags"' EXIT
+	set_nodemap_rbac c0 "file_perms"
+	for flag in i a; do
+		chattr +$flag $t_without &&
+			error "(3) chattr +$flag should fail w/o immutable_flags"
+		chattr -$flag $t_with &&
+			error "(4) chattr -$flag should fail w/o immutable_flags"
+	done
+
+	return 0
+}
+run_test 64l "Nodemap enforces immutable_flags RBAC role"
+
 look_for_files() {
 	local pattern=$1
 	local neg=$2
@@ -10434,11 +10500,15 @@ test_75() {
 	local testdir_projid=42
 	local testfile_projid=43
 	local have_ost_punch_ids=false
+	local have_ost_punch_id_fix=false # LU-20420
 
 	# prior to 2.16.53 OST_PUNCH did not set OST IDs
 	(( $OST1_VERSION >= $(version_code 2.16.53) &&
 		$CLIENT_VERSION >= $(version_code 2.16.53) )) &&
 		have_ost_punch_ids=true
+
+	(( $CLIENT_VERSION >= $(version_code 2.17.54) )) &&
+		have_ost_punch_id_fix=true
 
 	[[ "$ost1_FSTYPE" == ldiskfs ]] ||
 		skip "ldiskfs only test (using debugfs)"
@@ -10467,10 +10537,19 @@ test_75() {
 		error "dd for file $tfile_write2 failed"
 
 	if $have_ost_punch_ids; then
-		# OST_PUNCH RPC (truncate)
+		local truncate_user=$ID0
+
 		$RUNAS_CMD -u $ID0 $LFS setstripe -c 1 -i 0 $tfile_trunc ||
 			error "setstripe for file $tfile_trunc failed"
-		$RUNAS_CMD -u $ID0 $TRUNCATE $tfile_trunc 1048576 ||
+
+		# OST_PUNCH RPC (truncate)
+		if $have_ost_punch_id_fix; then
+			truncate_user=$ID1
+			$RUNAS_CMD -u $ID0 chmod 666 $tfile_trunc ||
+				error "chmod failed for $tfile_trunc"
+		fi
+
+		$RUNAS_CMD -u $truncate_user $TRUNCATE $tfile_trunc 1048576 ||
 			error "truncate for file $tfile_trunc failed"
 	fi
 
@@ -12253,7 +12332,7 @@ clear_client_keyring() {
 
 cleanup_100() {
 	local orig_sk_path="$1"
-	local test_key="$orig_sk_path/$FSNAME-test100.key"
+	local test_key="$orig_sk_path/$FSNAME-test100*.key"
 
 	# Restore original SK_PATH
 	export SK_PATH="$orig_sk_path"
@@ -12281,23 +12360,21 @@ cleanup_100() {
 	wait_ssk
 }
 
-test_100() {
-	local test_key="$SK_PATH/$FSNAME-test100.key"
-	local orig_sk_path=$SK_PATH
-
-	$SHARED_KEY || skip "Need shared key feature for this test"
-
-	local_mode && skip "in local mode."
-
-	stack_trap "cleanup_100 $orig_sk_path" EXIT
-
-	# Create test file at start to verify filesystem continuity throughout
-	test_mkdir $DIR/$tdir
-	touch $DIR/$tdir/$tfile || error "failed to create initial test file"
+do_test_100() {
+	local fmt="$1"
+	local orig_sk_path="$2"
+	local test_key="$orig_sk_path/$FSNAME-test100${fmt:+-ascii}.key"
 
 	# Generate key: Create a new server-type SSK key for testing
-	$LGSS_SK -t server -f $FSNAME -w $test_key -d /dev/urandom -p 512 ||
-		error "failed to create server key"
+	$LGSS_SK -t server -f $FSNAME $fmt -w $test_key \
+		-d /dev/urandom -p 512 ||
+		error "failed to create server key (fmt='$fmt')"
+
+	# An ASCII key must carry the 'Lustre SSK v1.0' format header
+	if [[ "$fmt" == "-a" ]]; then
+		head -n1 $test_key | grep -q "^Lustre SSK v1.0" ||
+			error "ASCII key missing 'Lustre SSK v1.0' header"
+	fi
 
 	# Verify key was created as server type (no client, no prime)
 	local key_type=$($LGSS_SK -r $test_key | awk '/Type:/ {print $0}')
@@ -12347,12 +12424,16 @@ test_100() {
 			"$LGSS_SK -l $orig_sk_path/$FSNAME.key >/dev/null 2>&1" ||
 				true
 		export SK_PATH="$orig_sk_path"
-		error "mount failed with server key: $mount_output"
+		error "mount failed with server key (fmt='$fmt'): $mount_output"
 	fi
 
 	# Verify the mount succeeded and prime generation occurred
 	echo "$mount_output" | grep -q "Generating DH parameters" ||
 		error "prime generation message not found in mount output"
+
+	# The on-the-fly rewrite must leave a complete client key on disk;
+	$LGSS_SK -r $test_key ||
+		error "rewritten key is incomplete after mount (fmt='$fmt')"
 
 	# Verify the key file was modified to client type with prime
 	local new_key_type=$($LGSS_SK -r $test_key | awk '/Type:/ {print $0}')
@@ -12370,7 +12451,28 @@ test_100() {
 	[[ -f $DIR/$tdir/$tfile ]] ||
 		error "file not found after remount with auto-generated prime"
 }
-run_test 100 "SSK automatic prime generation when mounting with server key"
+
+test_100() {
+	local orig_sk_path=$SK_PATH
+	local fmt
+
+	$SHARED_KEY || skip "Need shared key feature for this test"
+
+	local_mode && skip "in local mode."
+
+	stack_trap "cleanup_100 $orig_sk_path" EXIT
+
+	# Create test file at start to verify filesystem continuity throughout
+	test_mkdir $DIR/$tdir
+	touch $DIR/$tdir/$tfile || error "failed to create initial test file"
+
+	# Run the mount-time prime-generation + key-rewrite path for both a
+	# binary and an ASCII server key.
+	for fmt in "" "-a"; do
+		do_test_100 "$fmt" "$orig_sk_path"
+	done
+}
+run_test 100 "SSK automatic prime generation, binary/ASCII server keys"
 
 clear_keyring_101() {
 	# clear lustre keys from client keyring
@@ -12998,6 +13100,60 @@ test_106() {
 		error "no exports for $client_nid on $nm (2)"
 }
 run_test 106 "switch nodemap to gssonly"
+
+unlink_sktest_keys() {
+	# Unlink our test keys from @u directly. List @u with `keyctl list @u`
+	# (not `keyctl show`, which walks the session chain and only reaches @u
+	# when pam_keyinit linked it - the very thing this test avoids relying
+	# on) and unlink with an explicit @u argument.
+	keyctl list @u 2>/dev/null | awk -F: '/lustre:sktest:/ { print $1 }' |
+		xargs -r -I{} keyctl unlink {} @u 2>/dev/null || true
+}
+
+cleanup_200() {
+	unlink_sktest_keys
+	rm -f $1
+}
+
+test_200() {
+	local test_key=$TMP/sk_load_key_perms.key
+	local perm
+
+	$SHARED_KEY || skip "Need shared key feature for this test"
+
+	# Regression for sk_load_key()'s keyctl_setperm() silently failing when
+	# the caller does not possess @u (the sudo / systemd / cron case - no
+	# pam_keyinit). Load a key in a fresh session with no @u link and assert
+	# its perms end up broadened to 0x3f3f3f3f, not the default 0x3f010000.
+
+	stack_trap "cleanup_200 $test_key" EXIT
+
+	# Self-contained server key - metadata is baked into the file, no MGS
+	# needed. Loading it creates one keyring entry: lustre:sktest:default.
+	$LGSS_SK -t server -f sktest -g 127.0.0.1@tcp \
+		-w $test_key -d /dev/urandom -p 512 ||
+		error "failed to create test key"
+
+	# Drop any stale key so add_key() creates a fresh one - an
+	# update-in-place would keep old perms and mask a regression.
+	unlink_sktest_keys
+
+	# `keyctl session -` runs lgss_sk in a new anonymous session keyring
+	# with no @u link - the same starting point sudo / systemd give.
+	keyctl session - $LGSS_SK -l $test_key ||
+		error "lgss_sk -l failed in fresh session keyring"
+
+	# Read the perm mask (column 5) from /proc/keys; we parse it rather
+	# than `keyctl search` because a buggy USR_VIEW-only key has no SEARCH
+	# perm and a search would not find it.
+	perm=$(awk '$9 ~ /^lustre:sktest:default:/ {print $5}' /proc/keys)
+
+	[[ -n "$perm" ]] ||
+		error "key lustre:sktest:default not found in /proc/keys"
+	[[ "$perm" == "3f3f3f3f" ]] || error \
+		"key perm=$perm, expected 3f3f3f3f - sk_load_key did not broaden perms"
+}
+run_test 200 "sk_load_key broadens SSK key perms without @u linked"
 
 test_300() {
 	local principal="mock_iam_test"

@@ -953,6 +953,9 @@ load_module() {
 
 	if [[ -f $LUSTRE/$module$ext ]]; then
 		path=$LUSTRE/$module$ext
+	elif [[ "$base" == libcfs ]] &&
+	     [[ -f $LUSTRE/../lnet/libcfs/$base$ext ]]; then
+		path=$LUSTRE/../lnet/libcfs/$base$ext
 	elif [[ "$base" == lnet_selftest ]] &&
 	     [[ -f $LUSTRE/../lnet/selftest/$base$ext ]]; then
 		path=$LUSTRE/../lnet/selftest/$base$ext
@@ -1087,7 +1090,7 @@ load_lnet() {
 	# variable to remote nodes
 	unset MODOPTS_LIBCFS
 
-	set_default_debug "neterror net nettrace malloc"
+	set_default_debug
 	if [[ $1 == config_on_load=1 ]]; then
 		load_module ../lnet/lnet/lnet
 	else
@@ -1179,6 +1182,7 @@ load_modules_local() {
 			load_module quota/lquota $LQUOTAOPTS
 		if [[ $(node_fstypes $HOSTNAME) == *zfs* ]]; then
 			load_module osd-zfs/osd_zfs
+			set_spl_panic
 		elif [[ $(node_fstypes $HOSTNAME) == *ldiskfs* ]]; then
 			load_module ../ldiskfs/ldiskfs
 			load_module osd-ldiskfs/osd_ldiskfs
@@ -1381,17 +1385,21 @@ check_gss_daemon_nodes() {
 	local loop
 	local node
 	local ret
+	local num
+	local counts
 
-	do_nodesv $list "num=0;
-for proc in \\\$(pgrep $dname); do
-[ \\\$(ps -o ppid= -p \\\$proc) -ne 1 ] || ((num++))
-done;
-if [ \\\"\\\$num\\\" -ne 1 ]; then
-	echo \\\$num instance of $dname;
-	exit 1;
-fi; "
+	# lsvcgssd forks a short-lived child at startup for the Miller-Rabin
+	# speedtest (LU-17175). Only the main daemon is parented to init, so
+	# 'pgrep -P 1' counts the single daemon that should be running.  An
+	# unreachable node makes pdsh return non-zero, caught below in $ret.
+	counts=$(do_nodesv $list "pgrep -P 1 -c $dname")
 	ret=$?
-	(( $ret == 0 )) || return $ret
+	while read -r node num; do
+		(( num == 1 )) && continue
+		echo "$node $num instance of $dname"
+		ret=1
+	done <<< "$counts"
+	(( ret == 0 )) || return 1
 
 	for node in ${list//,/ }; do
 		loop=0
@@ -1978,6 +1986,22 @@ zfs_local_fsname() {
 }
 
 #
+# Panic the node on SPL assertion failure, so ZFS bugs crash the
+# node and leave a dump.
+#
+set_spl_panic() {
+	local facet=$1
+	local param=/sys/module/spl/parameters/spl_panic_halt
+	local cmd="[[ ! -w $param ]] || echo 1 > $param"
+
+	if [[ -n "$facet" ]]; then
+		do_facet $facet "$cmd"
+	else
+		eval "$cmd"
+	fi
+}
+
+#
 # Create ZFS storage pool.
 #
 create_zpool() {
@@ -1989,7 +2013,8 @@ create_zpool() {
 
 	do_facet $facet "lsmod | grep zfs >&/dev/null || modprobe zfs;
 		$ZPOOL list -H $poolname >/dev/null 2>&1 ||
-		$ZPOOL create -f $opts $poolname $vdev"
+		$ZPOOL create -f $opts $poolname $vdev" || return $?
+	set_spl_panic $facet
 }
 
 #
@@ -2056,7 +2081,8 @@ import_zpool() {
 		opts+=" -d $(dirname $(facet_vdevice $facet))"
 		do_facet $facet "lsmod | grep zfs >&/dev/null || modprobe zfs;
 			$ZPOOL list -H $poolname >/dev/null 2>&1 ||
-			$ZPOOL import -f $opts $poolname"
+			$ZPOOL import -f $opts $poolname" || return $?
+		set_spl_panic $facet
 	fi
 }
 
@@ -3207,11 +3233,27 @@ done;
 fi"
 }
 
+# Print a node's uptime for diagnostic logging, bounded to ~10s.
+node_uptime() {
+	local node=$1
+	local out=$(mktemp)
+
+	timeout 10 $PDSH $node "uptime" > $out 2>/dev/null
+	local uptime_info=$(< $out)
+	rm -f $out
+
+	echo "${uptime_info:-no response from $node (already down or unreachable)}"
+}
+
 shutdown_node () {
 	local node=$1
-	local uptime_info=$(do_node $node "uptime" 2>/dev/null || echo "uptime unavailable")
+	local uptime_info=$(node_uptime $node)
 
-	log "shutdown_node: $node uptime: $uptime_info"
+	if ! power_management_available; then
+		skip "Node shutdown requires power management tools"
+	fi
+
+	echo "shutdown_node: $node uptime: $uptime_info"
 	echo + $POWER_DOWN $node
 	$POWER_DOWN $node
 }
@@ -3219,6 +3261,10 @@ shutdown_node () {
 shutdown_node_hard () {
 	local host=$1
 	local attempts=$SHUTDOWN_ATTEMPTS
+
+	if ! power_management_available; then
+		skip "HARD shutdown requires power management tools"
+	fi
 
 	for i in $(seq $attempts) ; do
 		sleep 1
@@ -3236,10 +3282,14 @@ shutdown_client() {
 	local client=$1
 	local mnt=${2:-$MOUNT}
 	local attempts=3
-	local uptime_info=$(do_node $client "uptime" 2>/dev/null || echo "uptime unavailable")
+	local uptime_info=$(node_uptime $client)
 
-	log "shutdown_client: $client uptime: $uptime_info"
+	echo "shutdown_client: $client uptime: $uptime_info"
 	if [ "$FAILURE_MODE" = HARD ]; then
+		if ! power_management_available; then
+			skip "HARD shutdown requires power management tools"
+		fi
+
 		shutdown_node_hard $client
 	else
 		zconf_umount_clients $client $mnt -f
@@ -3290,6 +3340,10 @@ shutdown_facet() {
 	local affected_facets
 
 	if [[ "$FAILURE_MODE" = HARD ]]; then
+		if ! power_management_available; then
+			skip "HARD failover requires power management tools"
+		fi
+
 		if [[ $(facet_fstype $facet) = ldiskfs ]] &&
 			dm_flakey_supported $facet; then
 			affected_facets=$(affected_facets $facet)
@@ -3298,7 +3352,8 @@ shutdown_facet() {
 			done
 		fi
 
-		shutdown_node_hard $(facet_active_host $facet)
+		shutdown_node_hard $(facet_active_host $facet) ||
+			error "shutdown_node_hard failed"
 	else
 		stop $facet
 	fi
@@ -3306,9 +3361,15 @@ shutdown_facet() {
 
 reboot_node() {
 	local node=$1
-	local uptime_info=$(do_node $node "uptime" 2>/dev/null || echo "uptime unavailable")
 
-	log "reboot_node: $node uptime before reboot: $uptime_info"
+	if ! power_management_available; then
+		skip "Node reboot requires power management tools"
+	fi
+
+	echo "=== reboot_node $node start: $(date)"
+	local uptime_info=$(node_uptime $node)
+
+	echo "reboot_node: $node uptime before reboot: $uptime_info"
 	echo + $POWER_UP $node
 	$POWER_UP $node
 }
@@ -3326,6 +3387,10 @@ reboot_facet() {
 	local sleep_time=${2:-10}
 
 	if [ "$FAILURE_MODE" = HARD ]; then
+		if ! power_management_available; then
+			skip "HARD facet reboot requires power management tools"
+		fi
+
 		boot_node $node
 	else
 		sleep $sleep_time
@@ -3336,6 +3401,10 @@ boot_node() {
 	local node=$1
 
 	if [ "$FAILURE_MODE" = HARD ]; then
+		if ! power_management_available; then
+			skip "HARD boot requires power management tools"
+		fi
+
 		reboot_node $node
 		wait_for_host $node
 		if $LOAD_MODULES_REMOTE; then
@@ -4118,7 +4187,8 @@ fstrim_inram_devs() {
 wait_delete_completed() {
 	wait_delete_completed_mds $1 || return $?
 	wait_destroy_complete $1 || return $?
-	fstrim_inram_devs
+	# ignore fstrim errors - this is an optimization to save space
+	fstrim_inram_devs || true
 }
 
 wait_exit_ST () {
@@ -4578,9 +4648,27 @@ h2name_or_ip() {
 		echo "$1@$2"
 	else
 		local addr nidlist large_nidlist
-		local iplist=$(do_node $1 hostname -I | sed "s/$1://")
+		local iplist=$(do_node $1 hostname -I | sed "s/^$1://")
+		local wantedtype=""
+		local linktype
+		local ip_addr
+		local ip_link
+		local link
 
+		[[ $2 == tcp* ]] && wantedtype=link/ether
+		[[ $2 == o2ib* ]] && wantedtype=link/infiniband
+		ip_addr=$(do_node $1 ip -o addr show)
+		ip_link=$(do_node $1 ip -o link show)
 		for addr in ${iplist}; do
+			if [[ -n $wantedtype ]]; then
+				linktype=""
+				link=$(echo "$ip_addr" | awk -v ip=$addr \
+				 'split($4,a,"/") && a[1]==ip {print $2; exit}')
+				[[ -z $link ]] ||
+				  linktype=$(echo "$ip_link" | grep "${link}:" |
+					     grep -o 'link/[^ ]*')
+				[[ $linktype == $wantedtype ]] || continue
+			fi
 			nid="${addr}@$2"
 			ip_is_v4 "$addr" &&
 				nidlist="${nidlist:+$nidlist,}${nid}" ||
@@ -7755,6 +7843,7 @@ check_dmesg_for_errors() {
 	errors="VFS: Busy inodes after unmount of"
 	errors+="\|ldiskfs_check_descriptors: Checksum for group 0 failed"
 	errors+="\|group descriptors corrupted"
+	errors+="\|JBD2: Spotted dirty metadata buffer"
 	errors+="\|UBSAN\|KASAN"
 
 	res=$(do_nodes -q $(comma_list $(nodes_list)) "dmesg" |
@@ -8181,6 +8270,30 @@ local_mode ()
 {
 	remote_mds_nodsh || remote_ost_nodsh ||
 		$(single_local_node $(comma_list $(nodes_list)))
+}
+
+# Check if power management is available for HARD failover
+power_management_available ()
+{
+	# Extract the command name from POWER_DOWN
+	# (e.g., "powerman" from "powerman --off")
+	local power_cmd=${POWER_DOWN%% *}
+
+	# Check if the command exists
+	command -v "$power_cmd" > /dev/null 2>&1 || return 1
+
+	# Additional checks for specific power management tools
+	case "$power_cmd" in
+	*powerman*)
+		[[ -f /etc/powerman/powerman.conf ]] || return 1
+		grep -q "^device" /etc/powerman/powerman.conf 2>/dev/null ||
+			return 1
+		;;
+	*)
+		;;
+	esac
+
+	return 0
 }
 
 remote_servers () {
@@ -8787,8 +8900,7 @@ run_mdtest () {
 	num_inodes=$(mdsrate_inodes_available)
 
 	if (( num_inodes < num_files )); then
-		log "change the number of files $num_files to the" \
-			"number of available inodes $num_inodes"
+		log "reduce files $num_files to available inodes $num_inodes"
 		num_files=$num_inodes
 	fi
 
@@ -9163,6 +9275,7 @@ wait_clients_import_state () {
 	local list="$1"
 	local facet="$2"
 	local expected="$3"
+	local maxtime=${4:-$(max_recovery_time)}
 	local facets="$facet"
 
 	if [ "$FAILURE_MODE" = HARD ]; then
@@ -9186,7 +9299,7 @@ wait_clients_import_state () {
 		local params=$(expand_list $params $proc_path)
 	done
 
-	if ! do_rpc_nodes "$list" wait_import_state_mount "$expected" $params;
+	if ! do_rpc_nodes "$list" wait_import_state_mount "$expected" $params $maxtime 0;
 	then
 		error "import is not in ${expected} state"
 		return 1
@@ -12323,6 +12436,11 @@ is_rmentry_supported() {
 	$LFS rm_entry $DIR/dir/not/exists > /dev/null
 	# is return code ENOENT?
 	(( $? == 2 ))
+}
+
+# version gate until the server advertises the OBD_CONNECT2_COMPRESS connect flag
+compression_supported() {
+	(( MDS1_VERSION >= $(version_code 2.17.53) ))
 }
 
 #

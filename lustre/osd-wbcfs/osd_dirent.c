@@ -158,17 +158,17 @@ static int osd_index_dir_insert(const struct lu_env *env, struct dt_object *dt,
 	inode_inc_iversion(dir);
 	if (nedir_rename) {
 		d_move(dchild, dentry);
-		/* Put the refcount obtained by @d_find_any_alias() */
-		dput(dchild);
-		/* Finally release the @dentry. */
-		dput(dentry);
 	} else {
-		/* Add dentry into dentry hashtable for VFS lookup. */
-		d_add(dentry, inode);
+		/*
+		 * Pin the dentry in dcache; the matching unpin happens in
+		 * osd_index_dir_delete() via d_make_discardable().
+		 */
+		d_make_persistent(dentry, inode);
 		ihold(inode);
 	}
-	/* Extra count (already obtain in @d_alloc) - pin the dentry in core */
-	/* dget(dentry); */
+
+	dput(dentry);
+	dput(dchild);
 
 	CDEBUG(D_CACHE,
 	       "%s: Insert dirent "DFID"/%pd@%pK inode@%pK nlink=%d\n",
@@ -262,14 +262,11 @@ static int osd_index_dir_delete(const struct lu_env *env, struct dt_object *dt,
 		/* MDD layer drops @nlink later via @dt_ref_del(). */
 		/* drop_nlink(inode); */
 		/*
-		 * Undo the count from "create".
-		 * Unhash the dentry from the parent dentry hashtable which is
-		 * add by @d_add(), so that it would not be found through a VFS
-		 * lookup anymore.
-		 * Unpin/drop the dentry from dcache.
+		 * Undo the pin from osd_index_dir_insert(): clear persistence
+		 * and drop the held reference so the dentry can be evicted.
 		 */
 		if (!nedir_rename)
-			dput(dentry);
+			d_make_discardable(dentry);
 		break;
 	default:
 		LBUG();

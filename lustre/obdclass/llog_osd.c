@@ -1138,7 +1138,8 @@ static int llog_osd_next_block(const struct lu_env *env,
 		GOTO(out, rc = -ESTALE); //object was destroyed
 
 	dt = lu2dt_dev(o->do_lu.lo_dev);
-	LASSERT(dt);
+	if (IS_ERR(dt))
+		GOTO(out, rc = PTR_ERR(dt));
 
 	rc = dt_attr_get(env, o, &lgi->lgi_attr);
 	if (rc)
@@ -1551,9 +1552,10 @@ static struct dt_object *llog_osd_get_regular_fid_dir(const struct lu_env *env,
 	struct lu_seq_range	*range = &lgi->lgi_range;
 	struct lu_fid		*dir_fid = &lgi->lgi_fid;
 	struct dt_object	*dir;
-	int			rc;
-	ENTRY;
+	struct dt_device *dt;
+	int rc;
 
+	ENTRY;
 	fld_range_set_any(range);
 	LASSERT(ss != NULL);
 	rc = ss->ss_server_fld->lsf_seq_lookup(env, ss->ss_server_fld,
@@ -1562,7 +1564,12 @@ static struct dt_object *llog_osd_get_regular_fid_dir(const struct lu_env *env,
 		RETURN(ERR_PTR(rc));
 
 	lu_update_log_dir_fid(dir_fid, range->lsr_index);
-	dir = dt_locate(env, lu2dt_dev(dto->do_lu.lo_dev), dir_fid);
+
+	dt = lu2dt_dev(dto->do_lu.lo_dev);
+	if (IS_ERR(dt))
+		RETURN((struct dt_object *)dt);
+
+	dir = dt_locate(env, dt, dir_fid);
 	if (IS_ERR(dir))
 		RETURN(dir);
 
@@ -1746,8 +1753,10 @@ static int llog_osd_create(const struct lu_env *env, struct llog_handle *res,
 		struct llog_thread_info *lgi = llog_info(env);
 
 		lgi->lgi_attr.la_valid = LA_MODE | LA_SIZE | LA_TYPE |
-			LA_CTIME | LA_MTIME | LA_ATIME;
+			LA_CTIME | LA_MTIME | LA_ATIME | LA_UID | LA_GID;
 		lgi->lgi_attr.la_size = 0;
+		lgi->lgi_attr.la_uid = 0;
+		lgi->lgi_attr.la_gid = 0;
 		lgi->lgi_attr.la_mode = S_IFREG | S_IRUGO | S_IWUSR;
 		lgi->lgi_attr.la_ctime = lgi->lgi_attr.la_mtime =
 			lgi->lgi_attr.la_atime = ktime_get_real_seconds();
@@ -1981,7 +1990,7 @@ static int llog_osd_destroy(const struct lu_env *env,
 	o = loghandle->lgh_obj;
 	LASSERT(o != NULL);
 
-	dt_write_lock(env, o, 0);
+	dt_write_lock(env, o, DT_TGT_CHILD);
 	if (!llog_osd_exist(loghandle))
 		GOTO(out_unlock, rc = 0);
 
@@ -1990,7 +1999,7 @@ static int llog_osd_destroy(const struct lu_env *env,
 		if (IS_ERR(llog_dir))
 			GOTO(out_unlock, rc = PTR_ERR(llog_dir));
 
-		dt_read_lock(env, llog_dir, 0);
+		dt_read_lock(env, llog_dir, DT_TGT_PARENT);
 		rc = dt_delete(env, llog_dir,
 			       (struct dt_key *)loghandle->lgh_name,
 			       th);

@@ -250,7 +250,7 @@ static int lov_disconnect_obd(struct obd_device *obd, struct lov_tgt_desc *tgt)
 	if (tgt->ltd_active) {
 		tgt->ltd_active = 0;
 		ltd->ltd_lov_desc.ld_active_tgt_count--;
-		tgt->ltd_exp->exp_obd->obd_inactive = 1;
+		set_bit(OBDF_INACTIVE, tgt->ltd_exp->exp_obd->obd_flags);
 	}
 
 	if (osc_obd) {
@@ -400,10 +400,12 @@ static int lov_set_osc_active(struct obd_device *obd, struct obd_uuid *uuid,
 		tgt->ltd_active = active;
 		if (active) {
 			ltd->ltd_lov_desc.ld_active_tgt_count++;
-			tgt->ltd_exp->exp_obd->obd_inactive = 0;
+			clear_bit(OBDF_INACTIVE,
+				  tgt->ltd_exp->exp_obd->obd_flags);
 		} else {
 			ltd->ltd_lov_desc.ld_active_tgt_count--;
-			tgt->ltd_exp->exp_obd->obd_inactive = 1;
+			set_bit(OBDF_INACTIVE,
+				tgt->ltd_exp->exp_obd->obd_flags);
 		}
 	} else {
 		CERROR("%s: unknown event %d for uuid %s\n", obd->obd_name,
@@ -424,6 +426,7 @@ static int lov_notify(struct obd_device *obd, struct obd_device *watched,
 {
 	int rc = 0;
 	struct lov_obd *lov = &obd->u.lov;
+
 	ENTRY;
 
 	down_read(&lov->lov_notify_lock);
@@ -636,14 +639,12 @@ void lov_fix_desc_stripe_size(__u64 *val)
 {
 	if (*val < LOV_MIN_STRIPE_SIZE) {
 		if (*val != 0)
-			LCONSOLE_INFO("Increasing default stripe size to "
-				      "minimum %u\n",
+			LCONSOLE_INFO("Increasing default stripe size to minimum %u\n",
 				      LOV_DESC_STRIPE_SIZE_DEFAULT);
 		*val = LOV_DESC_STRIPE_SIZE_DEFAULT;
 	} else if (*val & (LOV_MIN_STRIPE_SIZE - 1)) {
 		*val &= ~(LOV_MIN_STRIPE_SIZE - 1);
-		LCONSOLE_WARN("Changing default stripe size to %llu (a "
-			      "multiple of %u)\n",
+		LCONSOLE_WARN("Changing default stripe size to %llu (a multiple of %u)\n",
 			      *val, LOV_MIN_STRIPE_SIZE);
 	}
 }
@@ -683,6 +684,7 @@ int lov_setup(struct obd_device *obd, struct lustre_cfg *lcfg)
 	struct lov_desc *desc;
 	struct lov_obd *lov = &obd->u.lov;
 	int rc;
+
 	ENTRY;
 
 	if (LUSTRE_CFG_BUFLEN(lcfg, 1) < 1) {
@@ -1396,6 +1398,7 @@ struct kmem_cache *lov_oinfo_slab;
 static int __init lov_init(void)
 {
 	int rc;
+
 	ENTRY;
 
 	/* print an address of _any_ initialized kernel symbol from this

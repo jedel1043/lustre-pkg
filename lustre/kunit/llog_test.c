@@ -43,7 +43,7 @@ static struct llog_logid cat_logid;
 struct llog_mini_rec {
 	struct llog_rec_hdr lmr_hdr;
 	struct llog_rec_tail lmr_tail;
-} __attribute__((packed));
+} __packed;
 
 static int verify_handle(char *test, struct llog_handle *llh, int num_recs)
 {
@@ -274,7 +274,7 @@ static int test3_check_n_add_cb(const struct lu_env *env,
 {
 	struct llog_gen_rec *lgr = (struct llog_gen_rec *)rec;
 	int *last_rec = data;
-	unsigned cur_idx = test_3_start_idx + test_3_rec_num;
+	unsigned int cur_idx = test_3_start_idx + test_3_rec_num;
 	int rc;
 
 	if (lgh->lgh_hdr->llh_flags & LLOG_F_IS_FIXSIZE) {
@@ -305,8 +305,7 @@ static int test3_check_n_add_cb(const struct lu_env *env,
 				test_3_rec_off = lgh->lgh_cur_offset;
 				test_3_paddings++;
 			} else {
-				CERROR("Wrong record offset in cur_off: %llu"
-				       ", should be %lld (rec len %u)\n",
+				CERROR("Wrong record offset in cur_off: %llu, should be %lld (rec len %u)\n",
 				       lgh->lgh_cur_offset,
 				       (long long)test_3_rec_off,
 				       rec->lrh_len);
@@ -333,8 +332,7 @@ static int test3_check_n_add_cb(const struct lu_env *env,
 	if (cur_idx == *last_rec || cur_idx == (*last_rec + 1)) {
 		rc = llog_write(env, lgh, rec, LLOG_NEXT_IDX);
 		if (rc < 0)
-			CERROR("cb_test_3: cannot add new record while "
-			       "processing\n");
+			CERROR("cb_test_3: cannot add new record while processing\n");
 	}
 	test_3_rec_num++;
 
@@ -528,8 +526,7 @@ static int llog_test_3(const struct lu_env *env, struct obd_device *obd,
 		RETURN(-ERANGE);
 	}
 
-	CWARN("3c: write records with variable size until BITMAP_SIZE, "
-	      "return -ENOSPC\n");
+	CWARN("3c: write records with variable size until BITMAP_SIZE, return -ENOSPC\n");
 	while (num_recs <= llog_max_idx(llh)) {
 		if ((num_recs % 2) == 0)
 			hdr->lrh_len = 80;
@@ -586,7 +583,7 @@ static int llog_test_4(const struct lu_env *env, struct obd_device *obd)
 	if (rc) {
 		CERROR("4a: llog_create with name %s failed: %d\n", name, rc);
 		GOTO(ctxt_release, rc);
-        }
+	}
 	rc = llog_init_handle(env, cath, LLOG_F_IS_CAT, &uuid);
 	if (rc) {
 		CERROR("4a: can't init llog handle: %d\n", rc);
@@ -818,8 +815,7 @@ static int llog_test_5(const struct lu_env *env, struct obd_device *obd)
 	CWARN("5d: add 1 record to the log with many canceled empty pages\n");
 	rc = llog_cat_add(env, llh, &lmr.lmr_hdr, NULL);
 	if (rc) {
-		CERROR("5d: add record to the log with many canceled empty "
-		       "pages failed\n");
+		CERROR("5d: add record to the log with many canceled empty pages failed\n");
 		GOTO(out, rc);
 	}
 
@@ -839,8 +835,8 @@ static int llog_test_5(const struct lu_env *env, struct obd_device *obd)
 	plain_counter = 0;
 	rc = llog_cat_reverse_process(env, llh, plain_print_cb, "foobar");
 	if (rc) {
-		CERROR("5f: reversely process with plain_print_cb failed: "
-		       "%d\n", rc);
+		CERROR("5f: reversely process with plain_print_cb failed: %d\n",
+		       rc);
 		GOTO(out, rc);
 	}
 	if (plain_counter != 6) {
@@ -890,8 +886,8 @@ static int llog_test_6(const struct lu_env *env, struct obd_device *obd,
 	rc = obd_connect(NULL, &exp, mgc_obd, &uuid,
 			 NULL /* obd_connect_data */, NULL);
 	if (rc != -EALREADY) {
-		CERROR("6a: connect on connected MGC (%s) failed to return"
-		       " -EALREADY\n", mgc_obd->obd_name);
+		CERROR("6a: connect on connected MGC (%s) failed to return -EALREADY\n",
+		       mgc_obd->obd_name);
 		if (rc == 0)
 			obd_disconnect(exp);
 		GOTO(ctxt_release, rc = -EINVAL);
@@ -1195,7 +1191,8 @@ static int llog_fill_bytes(const struct lu_env *env, struct dt_object *o,
 
 	LASSERT(o);
 	d = lu2dt_dev(o->do_lu.lo_dev);
-	LASSERT(d);
+	if (IS_ERR(d))
+		GOTO(free, rc = PTR_ERR(d));
 
 	rc = dt_attr_get(env, o, &la);
 	if (rc)
@@ -1238,7 +1235,7 @@ struct llog_test8_rec {
 	struct llog_rec_hdr ltr_hdr;
 	__u64 padding[29];
 	struct llog_rec_tail ltr_tail;
-} __attribute__((packed));
+} __packed;
 
 static int llog_test_8(const struct lu_env *env, struct obd_device *obd)
 {
@@ -1590,6 +1587,8 @@ static int llog_test_10(const struct lu_env *env, struct obd_device *obd)
 
 	cat_logid = cath->lgh_id;
 	dt = lu2dt_dev(cath->lgh_obj->do_lu.lo_dev);
+	if (IS_ERR(dt))
+		GOTO(out, rc = PTR_ERR(dt));
 
 	/*
 	 * sync device to commit all recent LLOG changes to disk and avoid
@@ -1685,8 +1684,7 @@ static int llog_test_10(const struct lu_env *env, struct obd_device *obd)
 	}
 
 	if ((enospc == 0) && (enospc+eok != llog_test_recnum)) {
-		CERROR("10c: all last records adds should have failed with"
-		       " -ENOSPC\n");
+		CERROR("10c: all last records adds should have failed with -ENOSPC\n");
 		GOTO(out, rc = -EINVAL);
 	}
 
@@ -1775,8 +1773,7 @@ static int llog_test_10(const struct lu_env *env, struct obd_device *obd)
 	}
 
 	if ((enospc == 0) && (enospc+eok != llog_test_recnum)) {
-		CERROR("10e: all last records adds should have failed with"
-		       " -ENOSPC\n");
+		CERROR("10e: all last records adds should have failed with -ENOSPC\n");
 		GOTO(out, rc = -EINVAL);
 	}
 
@@ -1814,8 +1811,7 @@ static int llog_test_10(const struct lu_env *env, struct obd_device *obd)
 	}
 
 	if (la.la_size != cat_max_size) {
-		CERROR("10e: catalog size has changed after it has wrap around,"
-		       " current size = %llu, expected size = %llu\n",
+		CERROR("10e: catalog size has changed after it has wrap around, current size = %llu, expected size = %llu\n",
 		       la.la_size, cat_max_size);
 		GOTO(out, rc = -EINVAL);
 	}
@@ -1903,8 +1899,7 @@ static int llog_test_10(const struct lu_env *env, struct obd_device *obd)
 	}
 
 	if ((enospc == 0) && (enospc+eok != llog_test_recnum)) {
-		CERROR("10f: all last records adds should have failed with"
-		       " -ENOSPC\n");
+		CERROR("10f: all last records adds should have failed with -ENOSPC\n");
 		GOTO(out, rc = -EINVAL);
 	}
 
@@ -1931,8 +1926,7 @@ static int llog_test_10(const struct lu_env *env, struct obd_device *obd)
 	}
 
 	if (la.la_size != cat_max_size) {
-		CERROR("10f: catalog size has changed after it has wrap around,"
-		       " current size = %llu, expected size = %llu\n",
+		CERROR("10f: catalog size has changed after it has wrap around, current size = %llu, expected size = %llu\n",
 		       la.la_size, cat_max_size);
 		GOTO(out, rc = -EINVAL);
 	}
@@ -2135,8 +2129,7 @@ static int llog_test_10(const struct lu_env *env, struct obd_device *obd)
 	}
 
 	if ((enospc == 0) && (enospc+eok != llog_test_recnum)) {
-		CERROR("10h: all last records adds should have failed with"
-		       " -ENOSPC\n");
+		CERROR("10h: all last records adds should have failed with -ENOSPC\n");
 		GOTO(out, rc = -EINVAL);
 	}
 
@@ -2171,10 +2164,9 @@ static int llog_test_11(const struct lu_env *env, struct obd_device *obd)
 {
 	struct llog_process_data data = { .lpd_data = "test 7" };
 	struct llog_handle *llh;
-	int rc = 0, i, process_count;
+	int rc = 0, i;
 	struct llog_ctxt *ctxt;
 	struct llog_mini_rec lmr;
-	int num_recs = 0;
 	struct lu_attr la;
 	struct llog_logid  logid;
 	unsigned long old_size;
@@ -2222,7 +2214,6 @@ static int llog_test_11(const struct lu_env *env, struct obd_device *obd)
 			       i + 1, rc);
 			GOTO(out_close, rc);
 		}
-		num_recs++;
 	}
 
 	rc = dt_attr_get(env, llh->lgh_obj, &la);
@@ -2237,7 +2228,6 @@ static int llog_test_11(const struct lu_env *env, struct obd_device *obd)
 		CERROR("11: llog process failed: %d\n", rc);
 		GOTO(out_close, rc);
 	}
-	process_count = plain_counter;
 
 	set_bit(LU_OBJECT_HEARD_BANSHEE, &llh->lgh_obj->do_lu.lo_header->loh_flags);
 	llog_close(env, llh);
@@ -2245,6 +2235,7 @@ static int llog_test_11(const struct lu_env *env, struct obd_device *obd)
 	{
 		struct file *filp;
 		char buf[16];
+
 		filp = filp_open("/proc/sys/vm/drop_caches", O_WRONLY, 0);
 		LASSERT(!IS_ERR(filp));
 		snprintf(buf, sizeof(buf), "3\n");
@@ -2299,8 +2290,8 @@ static int llog_obj_truncate(const struct lu_env *env,
 
 	LASSERT(obj);
 	dd = lu2dt_dev(obj->do_lu.lo_dev);
-	if (IS_ERR_OR_NULL(dd))
-		GOTO(attr_free, rc = -EINVAL);
+	if (IS_ERR(dd))
+		GOTO(attr_free, rc = PTR_ERR(dd));
 
 	attr->la_size = size;
 	attr->la_valid = LA_SIZE;
@@ -2793,6 +2784,7 @@ static int llog_test_device_init(const struct lu_env *env, struct lu_device *lu,
 	struct obd_device *obd = lu->ld_obd;
 	struct obd_device *tgt;
 	struct llog_ctxt *ctxt;
+	struct dt_device *dt;
 	struct dt_object *o;
 	struct lu_env _env;
 	int rc;
@@ -2814,7 +2806,10 @@ static int llog_test_device_init(const struct lu_env *env, struct lu_device *lu,
 	      lldev->llog_target_name);
 
 	OBD_SET_CTXT_MAGIC(&obd->obd_lvfs_ctxt);
-	obd->obd_lvfs_ctxt.dt = lu2dt_dev(tgt->obd_lu_dev);
+	dt = lu2dt_dev(tgt->obd_lu_dev);
+	if (IS_ERR(dt))
+		GOTO(cleanup_env, rc = PTR_ERR(dt));
+	obd->obd_lvfs_ctxt.dt = dt;
 
 	rc = llog_setup(&_env, tgt, &tgt->obd_olg, LLOG_TEST_ORIG_CTXT, tgt,
 			&llog_osd_ops);

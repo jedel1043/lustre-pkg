@@ -146,8 +146,15 @@ AC_DEFUN([LB_CONFIG_MODULES], [
 AC_MSG_CHECKING([whether to build Linux kernel modules])
 AC_ARG_ENABLE([modules],
 	AS_HELP_STRING([--disable-modules],
-		[disable building of Lustre kernel modules]),
-	[ AC_DEFINE(HAVE_NATIVE_LINUX_CLIENT, 1, [support native Linux client])], [
+		[disable building of Lustre kernel modules (defaults to --enable-modules)]),
+	[
+		enable_modules="$enableval"
+
+		AS_IF([test "x$enable_modules" = xno], [
+			AC_DEFINE(HAVE_NATIVE_LINUX_CLIENT, 1,
+				[support native Linux client])
+		])
+	], [
 		LC_TARGET_SUPPORTED([enable_modules="yes"],
 				    [enable_modules="no"])
 	])
@@ -340,20 +347,10 @@ AC_MSG_RESULT([$enable_manpages])
 #
 AC_DEFUN([LB_CONFIG_HEADERS], [
 AC_CONFIG_HEADERS([config.h])
-CPPFLAGS="-include $PWD/undef.h -include $PWD/config.h $CPPFLAGS"
-EXTRA_KCFLAGS="-include $PWD/undef.h -include $PWD/config.h $EXTRA_KCFLAGS"
+CPPFLAGS="-include $PWD/config.h $CPPFLAGS"
+EXTRA_KCFLAGS="-include $PWD/config.h $EXTRA_KCFLAGS"
 AC_SUBST(EXTRA_KCFLAGS)
 ]) # LB_CONFIG_HEADERS
-
-#
-# LB_INCLUDE_RULES
-#
-# defines for including the toplevel Rules
-#
-AC_DEFUN([LB_INCLUDE_RULES], [
-INCLUDE_RULES="include $PWD/Rules"
-AC_SUBST(INCLUDE_RULES)
-]) # LB_INCLUDE_RULES
 
 #
 # LB_PATH_DEFAULTS
@@ -394,7 +391,6 @@ AM_CONDITIONAL([USE_QUILT], [test x$use_quilt = xyes])
 AM_CONDITIONAL([RHEL], [test -f /etc/redhat-release -o -f /etc/openEuler-release])
 AM_CONDITIONAL([SUSE], [test -f /etc/SUSE-brand -o -f /etc/SuSE-release])
 AM_CONDITIONAL([UBUNTU], [test x$UBUNTU_KERNEL = xyes])
-AM_CONDITIONAL([DEQUOTE_CC_VERSION_TEXT], [test x$lb_cv_dequote_CC_VERSION_TEXT = xyes])
 
 LN_CONDITIONALS
 LC_CONDITIONALS
@@ -406,11 +402,10 @@ LC_CONDITIONALS
 # build-specific config files
 #
 AC_DEFUN([LB_CONFIG_FILES], [
-	AC_CONFIG_FILES([
-		Makefile
-		autoMakefile]
+	AC_CONFIG_FILES(
+		[config/Makefile.exports]
+		autoMakefile
 		config/Makefile
-		[Rules:config/Rules.in]
 		AC_PACKAGE_TARNAME[.spec]
 		AC_PACKAGE_TARNAME[-dkms.spec]
 		ldiskfs/Makefile
@@ -660,8 +655,6 @@ LB_CONFIG_DIST
 LB_DOWNSTREAM_RELEASE
 LB_USES_DPKG
 
-LB_INCLUDE_RULES
-
 LB_PATH_DEFAULTS
 
 LB_CONFIG_DOCS
@@ -706,12 +699,10 @@ LC_CONFIGURE
 LB_CONDITIONALS
 LB_CONFIG_HEADERS
 
-LPLUG_CONFIGURE
 LB_CONFIG_FILES
 EC_CONFIG_FILES
 LN_CONFIG_FILES
 LC_CONFIG_FILES
-LPLUG_CONFIG_FILES
 LB_LUSTRE_LIBS_CONFIG_FILES
 
 AC_SUBST(ac_configure_args)

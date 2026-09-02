@@ -616,13 +616,6 @@ static inline int user_is_root(struct ptlrpc_sec *sec, struct vfs_cred *vcred)
                 return 0;
 }
 
-/*
- * When lookup_user_key is available use the kernel API rather than directly
- * accessing the uid_keyring and session_keyring via the current process
- * credentials.
- */
-#ifdef HAVE_LOOKUP_USER_KEY
-
 #ifdef HAVE_KEY_NEED_UNLINK
 /* from Linux security/keys/internal.h: */
 #  ifndef KEY_LOOKUP_PARTIAL
@@ -661,22 +654,6 @@ static inline struct key *get_session_keyring(const struct cred *cred)
 {
 	return _user_key(KEY_SPEC_SESSION_KEYRING);
 }
-#else
-static inline struct key *get_user_session_keyring(const struct cred *cred)
-{
-	return key_get(cred->user->session_keyring);
-}
-
-static inline struct key *get_user_keyring(const struct cred *cred)
-{
-	return key_get(cred->user->uid_keyring);
-}
-
-static inline struct key *get_session_keyring(const struct cred *cred)
-{
-	return key_get(cred->session_keyring);
-}
-#endif
 
 /*
  * Get the appropriate destination keyring for the request.
@@ -1352,9 +1329,10 @@ void flush_spec_ctx_cache_kr(struct ptlrpc_sec *sec, uid_t uid, int grace,
 		if (atomic_read(&ctx->cc_refcount) > 2) {
 			if (!force)
 				continue;
-			CWARN("flush busy ctx %p(%u->%s, extra ref %d)\n",
+			CWARN("flush busy ctx %p(%u->%s at %s, extra ref %d)\n",
 			      ctx, ctx->cc_vcred.vc_uid,
 			      sec2target_str(ctx->cc_sec),
+			      sec2nid_str(ctx->cc_sec),
 			      atomic_read(&ctx->cc_refcount) - 2);
 		}
 
@@ -1727,9 +1705,8 @@ int gss_kt_instantiate(struct key *key, struct key_preparsed_payload *prep)
 
 	/* At this point we are dealing with keys for root */
 	keyring = get_session_keyring(current_cred());
-	lockdep_off();
+
 	rc = key_link(keyring, key);
-	lockdep_on();
 	if (unlikely(rc))
 		CERROR("failed to link key %08x to keyring %08x: %d\n",
 		       key->serial, keyring->serial, rc);
@@ -1819,7 +1796,8 @@ int gss_kt_update(struct key *key, struct key_preparsed_payload *prep)
 			goto out;
 		}
 
-		CERROR("negotiation: rpc err %d, gss err %x\n",
+		CERROR("%s at %s: negotiation: rpc err %d, gss err %x\n",
+		       sec2target_str(ctx->cc_sec), sec2nid_str(ctx->cc_sec),
 		       nego_rpc_err, nego_gss_err);
 
 		gctx->gc_gss_err = nego_gss_err;

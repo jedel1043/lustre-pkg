@@ -196,9 +196,7 @@ int lod_add_device(const struct lu_env *env, struct lod_device *lod,
 					   OBD_CONNECT_FULL20 |
 					   OBD_CONNECT_LFSCK |
 					   OBD_CONNECT_BULK_MBITS;
-		spin_lock(&imp->imp_lock);
-		imp->imp_server_timeout = 1;
-		spin_unlock(&imp->imp_lock);
+		set_bit(IMPF_SERVER_TIMEOUT, imp->imp_flags);
 		imp->imp_client->cli_request_portal = OUT_PORTAL;
 		CDEBUG(D_OTHER, "%s: Set 'mds' portal and timeout\n",
 		      obd->obd_name);
@@ -980,8 +978,15 @@ int lod_generate_lovea(const struct lu_env *env, struct lod_object *lo,
 		lcme->lcme_id = cpu_to_le32(lod_comp->llc_id);
 
 		/* component could be un-inistantiated */
-		lcme->lcme_flags = cpu_to_le32(lod_comp->llc_flags &
-					       ~LCME_FL_IS_LINK_ID);
+		lcme->lcme_flags = cpu_to_le32(lod_comp->llc_flags);
+		/*
+		 * LCME_FL_IS_LINK_ID is transient for an instantiated file
+		 * layout (resolved by lod_bind_data_parity() later at create).
+		 * A directory default is a template that persists the unbound
+		 * EC link, so keep it here for directories.
+		 */
+		if (!is_dir)
+			lcme->lcme_flags &= ~cpu_to_le32(LCME_FL_IS_LINK_ID);
 		lcme->lcme_time_and_id = cpu_to_le64(
 				lcme_timestamp_and_id_pack(lod_comp->llc_timestamp,
 					lod_comp->llc_mirror_link_id));
@@ -996,6 +1001,13 @@ int lod_generate_lovea(const struct lu_env *env, struct lod_object *lo,
 		lcme->lcme_extent.e_end =
 			cpu_to_le64(lod_comp->llc_extent.e_end);
 		lcme->lcme_offset = cpu_to_le32(offset);
+
+		if (lod_comp->llc_pattern & LOV_PATTERN_COMPRESS) {
+			lcme->lcme_compr_type = lod_comp->llc_compr_type;
+			lcme->lcme_compr_lvl = lod_comp->llc_compr_lvl;
+			lcme->lcme_compr_chunk_lum_bits =
+				lod_comp->llc_compr_chunk_lum_bits;
+		}
 
 		sub_md = (struct lov_mds_md *)((char *)lcm + offset);
 		if (lod_comp->llc_magic == LOV_MAGIC_FOREIGN) {

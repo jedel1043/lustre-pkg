@@ -13,6 +13,7 @@ LUSTRE=${LUSTRE:-$(cd $(dirname $0)/..; echo $PWD)}
 . $LUSTRE/tests/test-framework.sh
 CLEANUP=${CLEANUP:-:}
 SETUP=${SETUP:-:}
+PTLDEBUG="$PTLDEBUG neterror net nettrace malloc"
 init_test_env "$@"
 . ${CONFIG:=$LUSTRE/tests/cfg/$NAME.sh}
 init_logging
@@ -1125,6 +1126,67 @@ test_28() {
 }
 run_test 28 "Test peer_list"
 
+add_net() {
+	local net="$1"
+	local if="$2"
+
+	do_lnetctl net add --net ${net} --if ${if} ||
+		error "Failed to add net ${net} on if ${if}"
+}
+
+test_40() {
+	reinit_dlc || return $?
+
+	local lock_prim
+	lock_prim=$(cat /sys/module/lnet/parameters/lock_prim_nid 2>/dev/null)
+	[[ "$lock_prim" == "1" ]] || skip "Need lock_prim_nid=1"
+
+	add_net "${NETTYPE}" "${INTERFACES[0]}" || return $?
+
+	# A reachable NID. A health monitor pings it before the filesystem
+	# is mounted, so a peer record for it already exists, and is up to
+	# date, by the time the config llog calls LNetAddPeer().
+	local secondary=$($LCTL list_nids | head -n 1)
+
+	# The primary NID from the config. It lives on a network with no
+	# local interface, so it never appears in the secondary's ping
+	# reply, the same as a primary NID whose interface is down.
+	local primary="${secondary%@*}@${NETTYPE}99"
+	local uuid="lnet_add_peer_uuid"
+
+	# Health monitor discovers the reachable NID first.
+	do_lnetctl discover ${secondary} ||
+		error "Failed to discover $secondary"
+
+	(($($LNETCTL peer show --nid ${secondary} |
+	    grep -cFw ${primary}) == 0)) ||
+		error "$primary present before LNetAddPeer"
+
+	# Need Lustre modules for add_uuid
+	load_modules_local ||
+		error "Failed to load modules rc=$?"
+
+	# The config llog associates both NIDs with one peer via
+	# LNetAddPeer(). The primary NID is added first and locked.
+	$LCTL add_uuid ${uuid} ${primary} ||
+		error "add_uuid $primary failed $?"
+	$LCTL add_uuid ${uuid} ${secondary} ||
+		error "add_uuid $secondary failed $?"
+
+	# The pre-existing, up to date peer for the secondary NID must
+	# still be merged into the primary peer.
+	local show="$LNETCTL peer show --nid ${primary} 2>/dev/null"
+	wait_update $HOSTNAME "$show | grep -cFw ${secondary}" "1" "20"
+	local rc=$?
+
+	$LCTL del_uuid ${uuid} || error "del_uuid failed $?"
+
+	((rc == 0)) || error "$secondary was not merged into peer $primary"
+
+	unload_modules_local
+}
+run_test 40 "LNetAddPeer merges a pre-existing non-primary peer NID"
+
 test_50() {
 	reinit_dlc || return $?
 
@@ -1316,14 +1378,6 @@ EOF
 	compare_yaml_files
 }
 run_test 99b "Invalid value for Multi-Rail in yaml import"
-
-add_net() {
-	local net="$1"
-	local if="$2"
-
-	do_lnetctl net add --net ${net} --if ${if} ||
-		error "Failed to add net ${net} on if ${if}"
-}
 
 del_net() {
 	local net="$1"
@@ -2647,6 +2701,31 @@ EOF
 	cleanup_lnet
 }
 run_test 170 "Check CPTs and tunables parsing when importing"
+
+test_180() {
+	[[ $NETTYPE == o2ib* ]] || skip "Need o2ib NETTYPE"
+
+	setupall || error "setupall failed"
+
+	mkdir -p $DIR/$tdir || error "mkdir failed"
+
+#define CFS_FAIL_O2IBLND_FMR_MAP_SHORT          0xf201
+	$LCTL set_param -n fail_loc=0x1000f201 fail_val=10
+
+	local i
+
+	for i in $(seq 1 64); do
+		dd if=/dev/zero of="$DIR/$tdir/$tfile.$((i % 4))" bs=1M \
+			count=1 oflag=direct conv=fsync &>/dev/null
+	done
+
+	$LCTL set_param -n fail_loc=0
+
+	rm -rf "$DIR/$tdir"
+
+	cleanupall || error "Failed to clean up"
+}
+run_test 180 "FastReg map error should not leak descriptors"
 
 test_199() {
 	[[ ${NETTYPE} == tcp* || ${NETTYPE} == o2ib* ]] ||
@@ -4031,6 +4110,7 @@ run_test 219 "Consolidate peer entries"
 check_route_aliveness() {
 	local node="$1"
 	local expect="$2"
+	local noerror="${3:-false}"
 
 	local lctl_status
 	local lnetctl_status
@@ -4075,13 +4155,17 @@ check_route_aliveness() {
 		waited=$((SECONDS - begin))
 	done
 
-	if ! got_expected; then
+	if ! $got_expected; then
 		echo "lctl shows:"
 		$lctl_cmd
 		echo "lnetctl shows:"
 		$lnetctl_cmd
 		echo "debugfs shows:"
 		$debugfs_cmd
+
+		if ${noerror}; then
+			return 1
+		fi
 
 		[[ $lctl_status == $expect ]] ||
 			error "Wanted '$expect' lctl found '$lctl_status'"
@@ -4143,8 +4227,7 @@ check_router_ni_status() {
 	return 0
 }
 
-
-do_basic_rtr_test() {
+config_routes() {
 	for router in ${!ROUTER_INTERFACES[@]}; do
 		do_node $router "$LNETCTL set routing 1" ||
 			error "Unable to enable routing on $router"
@@ -4173,6 +4256,10 @@ do_basic_rtr_test() {
 		check_route_aliveness "$rpeer" "up" ||
 			return $?
 	done
+}
+
+do_basic_rtr_test() {
+	config_routes || return $?
 
 	for rpeer in ${!RPEER_NIDS[@]}; do
 		local rpeer_nids=( ${RPEER_NIDS[$rpeer]} )
@@ -4549,6 +4636,45 @@ test_230() {
 		error "should have succeeded $?"
 	$LNETCTL net show -v 1 | grep -q "conns_per_peer: ${default}" ||
 		error "Did not stay at default"
+
+	reinit_dlc || return $?
+	echo "Add > 127; Should fail and not configure NI"
+	! do_lnetctl net add --net "tcp" --if ${INTERFACES[0]} \
+		--conns-per-peer 128 ||
+		error "should have failed $?"
+	! $LNETCTL net show --net tcp 2>/dev/null | grep -qE "nid: .*@tcp$" ||
+		error "tcp NI should not be configured"
+
+	reinit_dlc || return $?
+	echo "Add overflow value; Should fail and not configure NI"
+	! do_lnetctl net add --net "tcp" --if ${INTERFACES[0]} \
+		--conns-per-peer 1000000000000000000000000 ||
+		error "should have failed $?"
+	! $LNETCTL net show --net tcp 2>/dev/null | grep -qE "nid: .*@tcp$" ||
+		error "tcp NI should not be configured"
+
+	reinit_dlc || return $?
+	echo "Add non-numeric value; Should fail and not configure NI"
+	! do_lnetctl net add --net "tcp" --if ${INTERFACES[0]} \
+		--conns-per-peer foo ||
+		error "should have failed $?"
+	! $LNETCTL net show --net tcp 2>/dev/null | grep -qE "nid: .*@tcp$" ||
+		error "tcp NI should not be configured"
+
+	reinit_dlc || return $?
+	echo "Import > 127 conns-per-peer; Should fail and not configure NI"
+	local yfile=$TMP/sanity-lnet-$testnum-import.yaml
+	do_lnetctl net add --net "tcp" --if ${INTERFACES[0]} \
+		--conns-per-peer 8 ||
+		error "should have succeeded $?"
+	$LNETCTL export --backup > $yfile || error "export failed $?"
+	reinit_dlc || return $?
+	# Corrupt the exported value to one outside the valid 0-127 range
+	sed -i 's/conns_per_peer: 8/conns_per_peer: 200/' $yfile
+	! do_lnetctl import < $yfile ||
+		error "import of out-of-range conns-per-peer should have failed"
+	! $LNETCTL net show --net tcp 2>/dev/null | grep -qE "nid: .*@tcp$" ||
+		error "tcp NI should not be configured"
 }
 run_test 230 "Test setting conns-per-peer"
 
@@ -6398,6 +6524,58 @@ EOF
 }
 run_test 450 "Check import of multiple interfaces"
 
+# Sum a latency statistics field across every NI in a show output.
+sum_lat_field() {
+	local output="$1"
+	awk -v key="$2:" '$1 == key { sum += $2 } END { print sum + 0 }' \
+		<<< "$output"
+}
+
+test_475() {
+	local nid out samples max i
+
+	reinit_dlc || return $?
+	add_net "${NETTYPE}" "${INTERFACES[0]}" || return $?
+
+	nid=$($LCTL list_nids | head -n 1)
+	[[ -n $nid ]] || error "No local NID"
+
+	# Latency stats are on by default. Start from a known-zero baseline.
+	do_lnetctl stats reset || error "stats reset failed"
+
+	# Pinging ourselves drives a GET round trip on the local NI and the
+	# self peer NI, so get_rtt should accumulate samples on both.
+	for i in $(seq 1 10); do
+		do_lnetctl ping $nid > /dev/null || error "ping $nid failed"
+	done
+
+	out=$($LNETCTL peer show -v 4 --nid $nid)
+	samples=$(sum_lat_field "$out" get_rtt_samples)
+	max=$(sum_lat_field "$out" get_rtt_max_nsec)
+	((samples > 0)) ||
+		error "peer NI get_rtt_samples is $samples, expected > 0"
+	((max > 0)) ||
+		error "peer NI get_rtt_max_nsec is $max, expected > 0"
+
+	out=$($LNETCTL net show -v 4)
+	samples=$(sum_lat_field "$out" get_rtt_samples)
+	((samples > 0)) ||
+		error "local NI get_rtt_samples is $samples, expected > 0"
+
+	do_lnetctl stats reset || error "stats reset failed"
+
+	out=$($LNETCTL peer show -v 4 --nid $nid)
+	samples=$(sum_lat_field "$out" get_rtt_samples)
+	((samples == 0)) ||
+		error "peer NI get_rtt_samples is $samples after reset"
+
+	out=$($LNETCTL net show -v 4)
+	samples=$(sum_lat_field "$out" get_rtt_samples)
+	((samples == 0)) ||
+		error "local NI get_rtt_samples is $samples after reset"
+}
+run_test 475 "per-operation latency stats populate and reset"
+
 test_500() {
 	reinit_dlc || return $?
 
@@ -6511,6 +6689,107 @@ test_502() {
 	cleanup_health_test
 }
 run_test 502 "Verify lnetctl peer set --health (MR)"
+
+test_525() {
+	reinit_dlc || return $?
+
+	add_net ${NETTYPE} ${INTERFACES[0]} || return $?
+	add_net ${NETTYPE}2 ${INTERFACES[0]} || return $?
+
+	local nid1=$($LCTL list_nids | head -1)
+	local nid2=$($LCTL list_nids | tail -1)
+
+	do_lnetctl discover ${nid1} ||
+		error "discover $nid1 failed rc=$?"
+
+	$LNETCTL peer show --nid $nid1 | grep -q $nid1 ||
+		error "peer missing $nid1"
+	$LNETCTL peer show --nid $nid1 | grep -q $nid2 ||
+		error "peer missing $nid2"
+
+	do_lnetctl net del --net ${NETTYPE} ||
+		error "Failed to delete ${NETTYPE} rc=$?"
+
+	$LNETCTL peer show --nid $nid2 ||
+		error "$nid2 peer missing rc=$?"
+}
+run_test 525 "keep reachable peer on local net delete"
+
+test_550() {
+	[[ ${NETTYPE} == tcp* ]] ||
+		skip "Need tcp NETTYPE to fail a single local rail"
+
+	(( ${#INTERFACES[@]} >= 2 )) ||
+		skip "Need at least 2 local interfaces for multi-rail"
+
+	setup_router_test lnet_peer_discovery_disabled=1 || return $?
+
+	# Add a second local NI on the local net so the gateway is reachable
+	# via two local rails (multi-rail).
+	add_net $LOCAL_NET ${INTERFACES[1]} || return $?
+	LNIDS[1]=$($LCTL list_nids | tail -1)
+
+	# Configure this peer as MR, all others stay non-MR
+	local all_nodes=$(comma_list ${ROUTERS[@]} ${RPEERS[@]} $HOSTNAME)
+	do_nodes $all_nodes "$LNETCTL peer add --prim ${LNIDS[0]} --nid ${LNIDS[1]}" ||
+		error "Failed to add peer rc=$?"
+
+	config_routes || error "Failed to configure routes rc=$?"
+
+	local rpeer=${RPEERS[0]}
+	local rpeer_nids=( ${RPEER_NIDS[$rpeer]} )
+	local i
+
+	# Ping via the secondary NI so path selection favors it for rpeer
+	local snid=$($LCTL list_nids | tail -1)
+	do_lnetctl ping --source $snid ${rpeer_nids[0]} ||
+		error "Failed to ping from $snid to ${rpeer_nids[0]}"
+
+	check_route_aliveness "$HOSTNAME" "up" || return $?
+
+	# Drop a marker on the console so we can scope the search for a route
+	# up->down transition to events that happen after we fail the rail.
+	# lnet_set_route_aliveness() logs such transitions via CERROR, which
+	# reaches the console
+	local marker="DDN-6845-${testnum}-${RANDOM}"
+	log "$marker"
+
+	echo "Fail a send via ${INTERFACES[1]}"
+	$LCTL net_drop_add -s ${LNIDS[1]} -d "*@$REMOTE_NET" -e local_error -r 1 ||
+		error "Failed to add $REMOTE_NET drop rule rc=$?"
+	$LCTL net_drop_add -s ${LNIDS[1]} -d "*@$LOCAL_NET" -e local_error -r 1 ||
+		error "Failed to add $LOCAL_NET drop rule rc=$?"
+
+	echo "Set fail_loc to allow disconnect on simulated error"
+
+	#define CFS_FAIL_SOCK_CONN              0xe020
+	$LCTL set_param fail_loc=0x8000e020
+	! do_lnetctl ping ${rpeer_nids[0]} ||
+		error "Ping should have failed"
+
+	check_route_aliveness "$HOSTNAME" "down" true &&
+		error "Route went down after single local-rail failure"
+
+	local downtrans
+	downtrans=$( dmesg | sed -n "/$marker/,\$p" |
+		     grep -c "has gone from up to down")
+	((downtrans == 0)) ||
+		error "route marked down on single local-rail failure $downtrans up->down transition(s)"
+
+	check_route_aliveness "$HOSTNAME" "up" ||
+		error "route down after single local-rail failure"
+
+	# Regression guard: confirm the route goes down when the gateway is
+	# unreachable from all local NIs, not just the failed one.
+	do_node ${ROUTERS[0]} "$LNETCTL lnet unconfigure" ||
+		error "Failed to unconfigure lnet on ${ROUTERS[0]}"
+
+	check_route_aliveness "$HOSTNAME" "down" ||
+		error "route didn't go down"
+
+	cleanup_router_test
+}
+run_test 550 "DD-off: keep route up when gw reachable via another local NI"
 
 test_600() {
 	local actual="$TMP/sanity-lnet-$testnum-actual.yaml"
@@ -6931,7 +7210,7 @@ EOF
 	compare_yaml_files ||
 		error "Round-trip YAML comparison failed"
 
-	rm -f "$modprobe_file" "$yaml_file" "$export_file" "$new_export"
+	rm -f "$modprobe_file" "$yaml_file" "$export_file" "$actual_file"
 }
 run_test 617 \
 	"lnet_legacy2yaml: round-trip tunables from LNet to modprobe to YAML"

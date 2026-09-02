@@ -691,7 +691,7 @@ static inline int obd_process_config(struct obd_device *obd, int datalen,
 	LASSERT(ldt);
 	LASSERT(d);
 
-	obd->obd_process_conf = 1;
+	set_bit(OBDF_PROCESS_CONF, obd->obd_flags);
 
 	rc = lu_env_init(&env, ldt->ldt_ctx_tags);
 	if (rc == 0) {
@@ -699,7 +699,7 @@ static inline int obd_process_config(struct obd_device *obd, int datalen,
 		lu_env_fini(&env);
 	}
 
-	obd->obd_process_conf = 0;
+	clear_bit(OBDF_PROCESS_CONF, obd->obd_flags);
 
 	RETURN(rc);
 }
@@ -2032,6 +2032,8 @@ int lustre_check_exclusion(struct super_block *sb, char *svname);
 /* lustre_peer.c    */
 int lustre_uuid_to_peer(const char *uuid, struct lnet_nid *peer_nid,
 			int index);
+int class_nidstr2uuid(const char *nidstr, char *uuid, size_t uuidlen);
+int class_nid2uuid(const struct lnet_nid *nid, char *uuid, size_t uuidlen);
 int class_add_uuid(const char *uuid, struct lnet_nid *nid);
 int class_del_uuid (const char *uuid);
 int class_add_nids_to_uuid(struct obd_uuid *uuid, struct lnet_nid *nidlist,
@@ -2109,6 +2111,11 @@ extern __u64 obd_heat_get(struct obd_heat_instance *instance,
 			  unsigned int time_second, unsigned int weight,
 			  unsigned int period_second);
 extern void obd_heat_clear(struct obd_heat_instance *instance, int count);
+
+void obd_counter_add(struct obd_counter_instance *instance, time64_t time,
+		     u32 count, u32 winsz);
+bool obd_counter_add_test(struct obd_counter_instance *instance, time64_t time,
+			  u32 count, u32 winsz, u32 max, u32 hold_time_sec);
 
 /* struct kobj_type */
 static inline

@@ -86,13 +86,25 @@ static int osd_object_init(const struct lu_env *env, struct lu_object *l,
 			 (void *)fid);
 	obj->oo_dt.do_body_ops = &osd_wbcfs_body_ops;
 	if (inode) {
-		obj->oo_inode = inode;
-		__osd_object_init(obj);
-
 		/*
-		 * TODO: check LMA EA and convert LMAI flags to lustre
-		 * LMA flags and cache it in object.
+		 * The inode may still be in the icache after its last link
+		 * was dropped because a persistent dentry pins it. Treat such
+		 * a stale inode as non-existent: returning it as a live object
+		 * would later trip the nlink==0 && !oo_destroyed assertion in
+		 * osd_object_release().
 		 */
+		if (inode->i_nlink == 0) {
+			iput(inode);
+			inode = NULL;
+		} else {
+			obj->oo_inode = inode;
+			__osd_object_init(obj);
+
+			/*
+			 * TODO: check LMA EA and convert LMAI flags to lustre
+			 * LMA flags and cache it in object.
+			 */
+		}
 	}
 
 	CDEBUG(D_INODE, "%s: object init for fid="DFID" inode@%pK nlink=%d\n",
@@ -392,7 +404,7 @@ static int osd_mkdir(const struct lu_env *env, struct osd_object *obj,
 		     struct dt_object_format *dof,
 		     struct thandle *th)
 {
-	__u32 mode = (attr->la_mode & (S_IFMT | S_IRWXUGO | S_ISVTX | S_ISGID));
+	__u32 mode = (attr->la_mode & (S_IFMT | 0777 | S_ISVTX | S_ISGID));
 
 	LASSERT(S_ISDIR(attr->la_mode));
 
@@ -579,7 +591,7 @@ static int __osd_create(const struct lu_env *env, struct osd_object *obj,
 	result = osd_create_type_f(dof->dof_type)(env, obj, attr, hint, dof,
 						  th);
 	if (likely(obj->oo_inode && result == 0)) {
-		LASSERT(inode_state_read(obj->oo_inode) & I_NEW);
+		LASSERT(inode_state_read_once(obj->oo_inode) & I_NEW);
 
 		/*
 		 * Unlock the inode before attr initialization to avoid

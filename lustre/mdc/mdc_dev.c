@@ -25,7 +25,7 @@ static void mdc_lock_build_policy(const struct lu_env *env,
 				  const struct cl_lock *lock,
 				  union ldlm_policy_data *policy)
 {
-	memset(policy, 0, sizeof *policy);
+	memset(policy, 0, sizeof(*policy));
 	policy->l_inodebits.bits = MDS_INODELOCK_DOM;
 	if (lock) {
 		policy->l_inodebits.li_gid = lock->cll_descr.cld_gid;
@@ -339,6 +339,8 @@ static int mdc_dlm_canceling(const struct lu_env *env,
 		cl_object_attr_lock(obj);
 		attr->cat_kms = 0;
 		cl_object_attr_update(env, obj, attr, CAT_KMS);
+		/* Also hit the top object so CAT_KMS updates i_version */
+		cl_object_attr_update(env, cl_object_top(obj), attr, CAT_KMS);
 		cl_object_attr_unlock(obj);
 		unlock_res_and_lock(dlmlock);
 		cl_object_put(env, obj);
@@ -447,8 +449,8 @@ void mdc_lock_lvb_update(const struct lu_env *env, struct osc_object *osc,
 	if (attr->cat_size < oinfo->loi_kms)
 		attr->cat_size = oinfo->loi_kms;
 
-	LDLM_DEBUG(dlmlock, "acquired size %llu, setting rss=%llu;%s "
-		   "kms=%llu, end=%llu", lvb->lvb_size, attr->cat_size,
+	LDLM_DEBUG(dlmlock, "acquired size %llu, setting rss=%llu;%s kms=%llu, end=%llu",
+		   lvb->lvb_size, attr->cat_size,
 		   setkms ? "" : " leaving",
 		   setkms ? attr->cat_kms : oinfo->loi_kms,
 		   dlmlock ? dlmlock->l_policy_data.l_extent.end : -1ull);
@@ -1478,6 +1480,7 @@ static int mdc_object_ast_clear(struct ldlm_lock *lock, void *data)
 	struct osc_object *osc = (struct osc_object *)data;
 	struct ost_lvb *lvb = &lock->l_ost_lvb;
 	struct lov_oinfo *oinfo;
+
 	ENTRY;
 
 	if (lock->l_ast_data != data)
@@ -1701,12 +1704,14 @@ static struct lu_device *mdc_device_free(const struct lu_env *env,
 					 struct lu_device *lu)
 {
 	struct obd_device *obd = lu->ld_obd;
-	struct client_obd *cli = &obd->u.cli;
 	struct osc_device *osc = lu2osc_dev(lu);
 
-	LASSERT(cli->cl_mod_rpcs_in_flight == 0);
 	cl_device_fini(lu2cl_dev(lu));
-	osc_cleanup_common(obd);
+	if (obd) {
+		struct client_obd *cli = &obd->u.cli;
+		LASSERT(cli->cl_mod_rpcs_in_flight == 0);
+		osc_cleanup_common(obd);
+	}
 	OBD_FREE_PTR(osc);
 
 	return NULL;
@@ -1731,8 +1736,11 @@ static struct lu_device *mdc_device_alloc(const struct lu_env *env,
 
 	/* Setup MDC OBD */
 	obd = class_name2obd(lustre_cfg_string(cfg, 0));
-	if (obd == NULL)
+	if (obd == NULL) {
+		cl_device_fini(lu2cl_dev(d));
+		OBD_FREE_PTR(osc);
 		RETURN(ERR_PTR(-ENODEV));
+	}
 	obd->obd_lu_dev = d;
 	d->ld_obd = obd;
 

@@ -783,7 +783,7 @@ struct ptlrpc_body_v2 {
 #define OBD_CONNECT_EINPROGRESS	      0x80000000000ULL
 /* extra grant params for space reservation */
 #define OBD_CONNECT_GRANT_PARAM	     0x100000000000ULL
-#define OBD_CONNECT_FLOCK_OWNER	     0x200000000000ULL /* unused since 2.0 */
+#define OBD_CONNECT_HPREQ_CHECK1     0x200000000000ULL /* hpreq checks 1 lock */
 #define OBD_CONNECT_LVB_TYPE	     0x400000000000ULL /* variable LVB type */
 #define OBD_CONNECT_NANOSEC_TIME     0x800000000000ULL /* nanosec timestamp */
 #define OBD_CONNECT_LIGHTWEIGHT	    0x1000000000000ULL /* lightweight connect */
@@ -872,7 +872,6 @@ struct ptlrpc_body_v2 {
 #define OCD_HAS_FLAG2(ocd, flag2) (OCD_HAS_FLAG(ocd, FLAGS2) && \
 	 !!((ocd)->ocd_connect_flags2 & OBD_CONNECT2_##flag2))
 
-
 #ifdef HAVE_LRU_RESIZE_SUPPORT
 #define LRU_RESIZE_CONNECT_FLAG OBD_CONNECT_LRU_RESIZE
 #else
@@ -902,7 +901,8 @@ struct ptlrpc_body_v2 {
 				OBD_CONNECT_SUBTREE | OBD_CONNECT_LARGE_ACL |\
 				OBD_CONNECT_GRANT_PARAM | \
 				OBD_CONNECT_GRANT_SHRINK | \
-				OBD_CONNECT_SHORTIO | OBD_CONNECT_FLAGS2)
+				OBD_CONNECT_SHORTIO | OBD_CONNECT_FLAGS2 | \
+				OBD_CONNECT_HPREQ_CHECK1)
 
 #define MDT_CONNECT_SUPPORTED2 (OBD_CONNECT2_FILE_SECCTX | \
 				OBD_CONNECT2_DIR_MIGRATE | \
@@ -947,13 +947,15 @@ struct ptlrpc_body_v2 {
 				OBD_CONNECT_PINGLESS | OBD_CONNECT_LFSCK | \
 				OBD_CONNECT_BULK_MBITS | \
 				OBD_CONNECT_GRANT_PARAM | \
-				OBD_CONNECT_SHORTIO | OBD_CONNECT_FLAGS2)
+				OBD_CONNECT_SHORTIO | OBD_CONNECT_FLAGS2 | \
+				OBD_CONNECT_HPREQ_CHECK1)
 
 #define OST_CONNECT_SUPPORTED2 (OBD_CONNECT2_LOCKAHEAD | OBD_CONNECT2_INC_XID |\
 				OBD_CONNECT2_ENCRYPT | OBD_CONNECT2_LSEEK |\
 				OBD_CONNECT2_REP_MBITS |\
 				OBD_CONNECT2_REPLAY_CREATE |\
-				OBD_CONNECT2_UNALIGNED_DIO)
+				OBD_CONNECT2_UNALIGNED_DIO |\
+				OBD_CONNECT2_LOCK_CONTENTION)
 
 #define ECHO_CONNECT_SUPPORTED (OBD_CONNECT_FID | OBD_CONNECT_FLAGS2)
 #define ECHO_CONNECT_SUPPORTED2 OBD_CONNECT2_REP_MBITS
@@ -1837,20 +1839,24 @@ enum mds_reint_op {
 	REINT_MAX
 };
 
-/* the disposition of the intent outlines what was executed */
-#define DISP_IT_EXECD        0x00000001
-#define DISP_LOOKUP_EXECD    0x00000002
-#define DISP_LOOKUP_NEG      0x00000004
-#define DISP_LOOKUP_POS      0x00000008
-#define DISP_OPEN_CREATE     0x00000010
-#define DISP_OPEN_OPEN       0x00000020
-#define DISP_ENQ_COMPLETE    0x00400000		/* obsolete and unused */
-#define DISP_ENQ_OPEN_REF    0x00800000
-#define DISP_ENQ_CREATE_REF  0x01000000
-#define DISP_OPEN_LOCK       0x02000000
-#define DISP_OPEN_LEASE      0x04000000
-#define DISP_OPEN_STRIPE     0x08000000
-#define DISP_OPEN_DENY	     0x10000000
+/* the intent disposition indicates what was executed on the server */
+enum lustre_disposition {
+	DISP_NONE            = 0x00000000,
+	DISP_IT_EXECD        = 0x00000001,
+	DISP_LOOKUP_EXECD    = 0x00000002,
+	DISP_LOOKUP_NEG      = 0x00000004,
+	DISP_LOOKUP_POS      = 0x00000008,
+	DISP_OPEN_CREATE     = 0x00000010,
+	DISP_OPEN_OPEN       = 0x00000020,
+/*	DISP_ENQ_COMPLETE    = 0x00400000,   unused v2_11_55_0-23-g976b609abc */
+	DISP_ENQ_OPEN_REF    = 0x00800000,
+	DISP_ENQ_CREATE_REF  = 0x01000000,
+	DISP_OPEN_LOCK       = 0x02000000,
+	DISP_OPEN_LEASE      = 0x04000000,
+	DISP_OPEN_STRIPE     = 0x08000000,
+	DISP_OPEN_DENY       = 0x10000000,
+	DISP_ALL             = 0xffffffff
+};
 
 /* NOTE: until Lustre 1.8.7/2.1.1 the fid_ver() was packed into name[2],
  * but was moved into name[1] along with the OID to avoid consuming the
@@ -3630,7 +3636,8 @@ enum update_flag {
 	UPDATE_FL_OST		= 0x00000001,	/* op from OST (not MDT) */
 	UPDATE_FL_SYNC		= 0x00000002,	/* commit before replying */
 	UPDATE_FL_COMMITTED	= 0x00000004,	/* op committed globally */
-	UPDATE_FL_NOLOG		= 0x00000008	/* for idempotent updates */
+	UPDATE_FL_NOLOG		= 0x00000008,	/* for idempotent updates */
+	UPDATE_FL_IGNORE_QUOTA  = 0x00000010, 	/* ignore quota error */
 };
 
 struct object_update_param {
@@ -3935,6 +3942,7 @@ enum nodemap_rbac_roles {
 	NODEMAP_RBAC_LQA_QUOTA_OPS	= 0x00000800,
 	NODEMAP_RBAC_PROJID_SET		= 0x00001000,
 	NODEMAP_RBAC_FOREIGN_OPS	= 0x00002000,
+	NODEMAP_RBAC_IMMUTABLE_FLAGS	= 0x00004000,
 	NODEMAP_RBAC_NONE	= (__u32)~(NODEMAP_RBAC_FILE_PERMS	|
 					   NODEMAP_RBAC_DNE_OPS		|
 					   NODEMAP_RBAC_QUOTA_OPS	|
@@ -3949,6 +3957,7 @@ enum nodemap_rbac_roles {
 					   NODEMAP_RBAC_LQA_QUOTA_OPS	|
 					   NODEMAP_RBAC_PROJID_SET	|
 					   NODEMAP_RBAC_FOREIGN_OPS	|
+					   NODEMAP_RBAC_IMMUTABLE_FLAGS	|
 					   0),
 	NODEMAP_RBAC_ALL	= 0xFFFFFFFF, /* future caps ON by default */
 };

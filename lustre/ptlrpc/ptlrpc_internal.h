@@ -28,6 +28,7 @@ struct obd_import;
 struct ldlm_res_id;
 struct ptlrpc_request_set;
 extern int test_req_buffer_pressure;
+extern int send_sepol;
 extern struct list_head ptlrpc_all_services;
 extern struct mutex ptlrpc_all_services_mutex;
 extern struct ptlrpc_nrs_pol_conf nrs_conf_fifo;
@@ -196,12 +197,6 @@ static inline
 struct ptlrpc_service *nrs_pol2svc(struct ptlrpc_nrs_policy *policy)
 {
 	return policy->pol_nrs->nrs_svcpt->scp_service;
-}
-
-static inline
-struct ptlrpc_service_part *nrs_pol2svcpt(struct ptlrpc_nrs_policy *policy)
-{
-	return policy->pol_nrs->nrs_svcpt;
 }
 
 static inline

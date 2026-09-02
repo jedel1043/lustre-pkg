@@ -2667,6 +2667,13 @@ static int ldlm_cancel_hpreq_check(struct ptlrpc_request *req)
 	for (i = 0; i < dlm_req->lock_count; i++) {
 		struct ldlm_lock *lock;
 
+		/*
+		 * 1st locks is enough. Others are guaranteed to get a separate
+		 * cancel RPC or EINVAL on BLAST RPC.
+		 */
+		if (exp_connect_hpreq_check1(req->rq_export) && i > 0)
+			break;
+
 		lock = ldlm_handle2lock(&dlm_req->lock_handle[i]);
 		if (lock == NULL)
 			continue;
@@ -2698,10 +2705,10 @@ static int ldlm_hpreq_handler(struct ptlrpc_request *req)
 	if (req->rq_export == NULL)
 		RETURN(0);
 
-	if (LDLM_CANCEL == lustre_msg_get_opc(req->rq_reqmsg)) {
+	if (lustre_msg_get_opc(req->rq_reqmsg) == LDLM_CANCEL) {
 		req_capsule_set(&req->rq_pill, &RQF_LDLM_CANCEL);
 		req->rq_ops = &ldlm_cancel_hpreq_ops;
-	} else if (LDLM_CONVERT == lustre_msg_get_opc(req->rq_reqmsg)) {
+	} else if (lustre_msg_get_opc(req->rq_reqmsg) == LDLM_CONVERT) {
 		req_capsule_set(&req->rq_pill, &RQF_LDLM_CONVERT);
 		req->rq_ops = &ldlm_cancel_hpreq_ops;
 	}
@@ -2891,8 +2898,7 @@ static int ldlm_bl_thread_blwi(struct ldlm_bl_pool *blp,
 		 * canceled locally yet.
 		 */
 		count = ldlm_cli_cancel_list_local(&blwi->blwi_head,
-						   blwi->blwi_count,
-						   LCF_BL_AST);
+						   blwi->blwi_count, 0);
 		ldlm_cli_cancel_list(&blwi->blwi_head, count, NULL, NULL,
 				     blwi->blwi_flags);
 	} else if (blwi->blwi_lock) {
@@ -3253,7 +3259,7 @@ static ssize_t lock_reclaim_threshold_mb_store(struct kobject *kobj,
 	ldlm_reclaim_threshold_mb = watermark;
 	if (watermark != 0) {
 		watermark <<= 20;
-		do_div(watermark, sizeof(struct ldlm_lock));
+		do_div(watermark, LDLM_LOCK_MEM_OVERHEAD);
 	}
 	ldlm_reclaim_threshold = watermark;
 
@@ -3295,7 +3301,7 @@ static ssize_t lock_limit_mb_store(struct kobject *kobj,
 	ldlm_lock_limit_mb = watermark;
 	if (watermark != 0) {
 		watermark <<= 20;
-		do_div(watermark, sizeof(struct ldlm_lock));
+		do_div(watermark, LDLM_LOCK_MEM_OVERHEAD);
 	}
 	ldlm_lock_limit = watermark;
 
@@ -3312,6 +3318,22 @@ static ssize_t lock_granted_count_show(struct kobject *kobj,
 	return scnprintf(buf, PAGE_SIZE, "%llu\n", sum);
 }
 LUSTRE_RO_ATTR(lock_granted_count);
+
+static ssize_t lock_limit_count_show(struct kobject *kobj,
+				     struct attribute *attr,
+				     char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%llu\n", ldlm_lock_limit);
+}
+LUSTRE_RO_ATTR(lock_limit_count);
+
+static ssize_t lock_reclaim_threshold_count_show(struct kobject *kobj,
+						 struct attribute *attr,
+						 char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%llu\n", ldlm_reclaim_threshold);
+}
+LUSTRE_RO_ATTR(lock_reclaim_threshold_count);
 #endif
 
 static ssize_t ldlm_enqueue_min_show(struct kobject *kobj,
@@ -3327,7 +3349,9 @@ static struct attribute *ldlm_attrs[] = {
 	&lustre_attr_cancel_unused_locks_before_replay.attr,
 #ifdef CONFIG_LUSTRE_FS_SERVER
 	&lustre_attr_lock_reclaim_threshold_mb.attr,
+	&lustre_attr_lock_reclaim_threshold_count.attr,
 	&lustre_attr_lock_limit_mb.attr,
+	&lustre_attr_lock_limit_count.attr,
 	&lustre_attr_lock_granted_count.attr,
 #endif
 	&lustre_attr_ldlm_enqueue_min.attr,

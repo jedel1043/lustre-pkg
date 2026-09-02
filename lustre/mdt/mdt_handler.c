@@ -2955,6 +2955,8 @@ static int mdt_readpage(struct tgt_session_info *tsi)
 	struct mdt_object	*object = mdt_obj(tsi->tsi_corpus);
 	struct lu_rdpg		*rdpg = &info->mti_u.rdpg.mti_rdpg;
 	const struct mdt_body	*reqbody = tsi->tsi_mdt_body;
+	struct ptlrpc_request	*req = tgt_ses_req(tsi);
+	ktime_t			 kstart = ktime_get();
 	struct mdt_body		*repbody;
 	int			 rc;
 	int			 i;
@@ -3018,6 +3020,9 @@ free_rdpg:
 	if (CFS_FAIL_CHECK(OBD_FAIL_MDS_SENDPAGE))
 		RETURN(0);
 
+	if (rc == 0)
+		mdt_counter_incr(req, LPROC_MDT_READPAGE,
+				 ktime_us_delta(ktime_get(), kstart));
 	return rc;
 }
 
@@ -3099,13 +3104,14 @@ static int mdt_dir_read_on_open(struct mdt_thread_info	*info,
 	const struct lu_env *env = info->mti_env;
 	struct lu_rdpg		*rdpg = &info->mti_u.rdpg.mti_rdpg;
 	struct req_capsule	*pill = info->mti_pill;
-	int			 rc;
-	struct mdt_body         *mbo;
+	ktime_t			 kstart = ktime_get();
 	struct mdt_device	*mdt = info->mti_mdt;
-	struct mdt_object	*o;
 	struct ptlrpc_request	*req = pill->rc_req;
-	bool have_lock = false;
 	struct lu_fid *fid; // dir fid
+	struct mdt_body         *mbo;
+	int			 rc;
+	struct mdt_object	*o;
+	bool have_lock = false;
 
 	ENTRY;
 
@@ -3170,8 +3176,13 @@ out_rnb:
 	else
 		req_capsule_shrink(pill, &RMF_NIOBUF_INLINE, rc, RCL_SERVER);
 out_err:
-	if (rc)
+	if (rc < 0)
 		CDEBUG(D_INFO, "read dir on open failed with rc = %d\n", rc);
+
+	if (rc > 0)
+		mdt_counter_incr(req, LPROC_MDT_READPAGE,
+				 ktime_us_delta(ktime_get(), kstart));
+
 	RETURN(0);
 }
 
@@ -6627,7 +6638,7 @@ static int mdt_init0(const struct lu_env *env, struct mdt_device *m,
 	 */
 	set_bit(OBDF_REPLAYABLE, obd->obd_flags);
 	/* No connection accepted until configurations will finish */
-	obd->obd_no_conn = 1;
+	set_bit(OBDF_NO_CONN, obd->obd_flags);
 
 	if (cfg->lcfg_bufcount > 4 && LUSTRE_CFG_BUFLEN(cfg, 4) > 0) {
 		char *str = lustre_cfg_string(cfg, 4);
@@ -7062,9 +7073,9 @@ static int mdt_prepare(const struct lu_env *env,
 
 	target_recovery_init(&mdt->mdt_lut, tgt_request_handle);
 	set_bit(MDT_FL_CFGLOG, &mdt->mdt_state);
-	LASSERT(obd->obd_no_conn);
+	LASSERT(test_bit(OBDF_NO_CONN, obd->obd_flags));
 	spin_lock(&obd->obd_dev_lock);
-	obd->obd_no_conn = 0;
+	clear_bit(OBDF_NO_CONN, obd->obd_flags);
 	spin_unlock(&obd->obd_dev_lock);
 
 	if (!test_bit(OBDF_RECOVERING, obd->obd_flags))
@@ -7336,6 +7347,7 @@ static int mdt_ctxt_add_dirty_flag(struct lu_env *env,
 	mdt_ucred(info)->uc_rbac_lqa_quota_ops = 1;
 	mdt_ucred(info)->uc_rbac_projid_set = 1;
 	mdt_ucred(info)->uc_rbac_foreign_ops = 1;
+	mdt_ucred(info)->uc_rbac_immutable_flags = 1;
 	rc = mdt_add_dirty_flag(info, mfd->mfd_object, &info->mti_attr);
 
 	lu_context_exit(&ses);

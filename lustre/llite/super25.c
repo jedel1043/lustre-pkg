@@ -21,6 +21,7 @@
 #include <lustre_quota.h>
 #include <linux/init.h>
 #include <lustre_compat/linux/fs.h>
+#include <lustre_compat/linux/slab.h>
 #include <linux/random.h>
 #include <lprocfs_status.h>
 #include "llite_internal.h"
@@ -135,12 +136,6 @@ static int lustre_fill_super(struct super_block *sb, struct fs_context *fc)
 	lmd = lsi->lsi_lmd;
 
 	/*
-	 * Disable lockdep during mount, because mount locking patterns are
-	 * 'special'.
-	 */
-	lockdep_off();
-
-	/*
 	 * LU-639: the OBD cleanup of last mount may not finish yet, wait here.
 	 */
 	obd_zombie_barrier();
@@ -186,7 +181,7 @@ out:
 		CDEBUG(D_SUPER, "%s: Mount complete\n",
 		       lmd->lmd_dev);
 	}
-	lockdep_on();
+
 	return rc;
 }
 
@@ -300,8 +295,7 @@ static int __init lustre_init(void)
 					    sizeof(struct ll_inode_info), 0,
 					    SLAB_HWCACHE_ALIGN |
 					    SLAB_RECLAIM_ACCOUNT |
-					    SLAB_MEM_SPREAD |
-					    SLAB_ACCOUNT,
+					    SLAB_MEM_SPREAD | SLAB_ACCOUNT,
 					    NULL);
 	if (ll_inode_cachep == NULL)
 		GOTO(out_cache, rc = -ENOMEM);

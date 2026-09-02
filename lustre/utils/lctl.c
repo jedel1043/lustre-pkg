@@ -73,14 +73,11 @@ command_t changelog_cmdlist[] = {
 	{.pc_name = "register", .pc_func = jt_changelog_register,
 	 .pc_help = "register a new persistent changelog user, returns id\n"
 	 "usage: {--device MDTNAME} changelog register [--help|-h]\n"
-	 "					       [--mask|-m MASK]\n"
-	 "					       [--nameonly|-n]\n"
-	 "					       [--user|-u USERNAME]"},
+	 "       [--mask|-m MASK] [--nameonly|-n] [--user|-u USERNAME]"},
 	{.pc_name = "deregister", .pc_func = jt_changelog_deregister,
 	 .pc_help = "deregister an existing changelog user\n"
 	 "usage: {--device MDTNAME} changelog deregister [ID|clID]\n"
-	 "						 [--help|-h]\n"
-	 "						 [--user|-u USERNAME]"},
+	 "       [--help|-h] [--user|-u USERNAME]"},
 	{.pc_help = NULL }
 };
 JT_SUBCMD(changelog);
@@ -91,16 +88,15 @@ JT_SUBCMD(changelog);
 command_t net_drop_cmdlist[] = {
 	{.pc_name = "add", .pc_func = jt_ptl_drop_add,
 	 .pc_help = "Add LNet drop rule\n"
-	 "usage: net_drop add {-s | --source NID}\n"
-	 "		      {-d | --dest NID}\n"
-	 "		      {{-r | --rate DROP_RATE} | {-i | --interval SECONDS}}\n"
-	 "		      [-p | --portal PORTAL...]\n"
-	 "		      [-m | --message {PUT|ACK|GET|REPLY...}]\n"
-	 "		      [-e | --health_error]"},
+	 "usage: net_drop add {-s | --source NID} {-d | --dest NID}\n"
+	 "                    {{-r | --rate DROP_RATE} | {-i | --interval SECONDS}}\n"
+	 "                    [-e | --health_error]\n"
+	 "                    [-m | --message {PUT|ACK|GET|REPLY...}]\n"
+	 "                    [-p | --portal PORTAL...]"},
 	{.pc_name = "del", .pc_func = jt_ptl_drop_del,
 	 .pc_help = "remove LNet drop rule\n"
 	 "usage: net_drop del {-a | --all} |\n"
-	 "		      {{-s | --source NID} {-d | --dest NID}}"},
+	 "                    {{-s | --source NID} {-d | --dest NID}}"},
 	{.pc_name = "reset", .pc_func = jt_ptl_drop_reset,
 	 .pc_help = "reset drop rule stats\n"
 	 "usage: net_drop reset"},
@@ -117,16 +113,15 @@ JT_SUBCMD(net_drop);
 command_t net_delay_cmdlist[] = {
 	{.pc_name = "add", .pc_func = jt_ptl_delay_add,
 	 .pc_help = "Add LNet delay rule\n"
-	 "usage: net_delay add {-s | --source NID}\n"
-	 "		       {-d | --dest NID}\n"
-	 "		       {{-r | --rate DELAY_RATE} | {-i | --interval SECONDS}}\n"
-	 "		       {-l | --latency SECONDS>\n"
-	 "		       [-p | --portal PORTAL...]\n"
-	 "		       [-m | --message {PUT|ACK|GET|REPLY...}]"},
+	 "usage: net_delay add {-s | --source NID} {-d | --dest NID}\n"
+	 "                     {{-r | --rate DELAY_RATE} | {-i | --interval SECONDS}}\n"
+	 "                     {-l | --latency SECONDS>\n"
+	 "                     [-m | --message {PUT|ACK|GET|REPLY...}]\n"
+	 "                     [-p | --portal PORTAL...]"},
 	{.pc_name = "del", .pc_func = jt_ptl_delay_del,
 	 .pc_help = "remove LNet delay rule\n"
 	 "usage: net_delay del {-a | --all} |\n"
-	 "		       {{-s | --source NID} {-d | --dest NID}}"},
+	 "                     {{-s | --source NID} {-d | --dest NID}}"},
 	{.pc_name = "reset", .pc_func = jt_ptl_delay_reset,
 	 .pc_help = "reset delay rule stats\n"
 	 "usage: net_delay reset"},
@@ -402,14 +397,14 @@ command_t cmdlist[] = {
 
 	{"net_drop_add", jt_ptl_drop_add, 0, "Add LNet drop rule\n"
 	 "usage: net_drop_add {-s | --source NID}\n"
-	 "		      {-d | --dest NID}\n"
-	 "		      {{-r | --rate DROP_RATE} | {-i | --interval SECONDS}}\n"
-	 "		      [-p | --portal PORTAL...]\n"
-	 "		      [-m | --message {PUT|ACK|GET|REPLY...}]\n"
-	 "		      [-e | --health_error]"},
+	 "                    {-d | --dest NID}\n"
+	 "                    {{-r | --rate DROP_RATE} | {-i | --interval SECONDS}}\n"
+	 "                    [-p | --portal PORTAL...]\n"
+	 "                    [-m | --message {PUT|ACK|GET|REPLY...}]\n"
+	 "                    [-e | --health_error]"},
 	{"net_drop_del", jt_ptl_drop_del, 0, "remove LNet drop rule\n"
 	 "usage: net_drop_del {-a | --all} |\n"
-	 "		      {{-s | --source NID} {-d | --dest NID}}"},
+	 "                    {{-s | --source NID} {-d | --dest NID}}"},
 	{"net_drop_reset", jt_ptl_drop_reset, 0, "reset drop rule stats\n"
 	 "usage: net_drop_reset"},
 	{"net_drop_list", jt_ptl_drop_list, 0, "list LNet drop rules\n"
@@ -418,14 +413,14 @@ command_t cmdlist[] = {
 
 	{"net_delay_add", jt_ptl_delay_add, 0, "Add LNet delay rule\n"
 	 "usage: net_delay_add {-s | --source NID}\n"
-	 "		       {-d | --dest NID}\n"
-	 "		       {{-r | --rate DELAY_RATE} | {-i | --interval SECONDS}}\n"
-	 "		       {-l | --latency SECONDS>\n"
-	 "		       [-p | --portal PORTAL...]\n"
-	 "		       [-m | --message {PUT|ACK|GET|REPLY...}]"},
+	 "                     {-d | --dest NID}\n"
+	 "                     {{-r | --rate DELAY_RATE} | {-i | --interval SECONDS}}\n"
+	 "                     {-l | --latency SECONDS>\n"
+	 "                     [-p | --portal PORTAL...]\n"
+	 "                     [-m | --message {PUT|ACK|GET|REPLY...}]"},
 	{"net_delay_del", jt_ptl_delay_del, 0, "remove LNet delay rule\n"
 	 "usage: net_delay_del {-a | --all} |\n"
-	 "		       {{-s | --source NID} {-d | --dest NID}}"},
+	 "                     {{-s | --source NID} {-d | --dest NID}}"},
 	{"net_delay_reset", jt_ptl_delay_reset, 0, "reset delay rule stats\n"
 	 "usage: net_delay_reset"},
 	{"net_delay_list", jt_ptl_delay_list, 0, "list LNet delay rules\n"
@@ -702,15 +697,12 @@ command_t cmdlist[] = {
 	{"===  Changelogs ==", NULL, 0, "changelog user management"},
 	{"changelog_register", jt_changelog_register, 0,
 	 "register a new persistent changelog user, returns id\n"
-	 "usage: {--device MDTNAME} changelog_register [--help|-h]\n"
-	 "					       [--mask|-m MASK]\n"
-	 "					       [--nameonly|-n]\n"
-	 "					       [--user|-u USERNAME]"},
+	 "usage: {--device MDTNAME} changelog_register [--help|-h] [--mask|-m MASK]\n"
+	 "       [--nameonly|-n] [--user|-u USERNAME]"},
 	{"changelog_deregister", jt_changelog_deregister, 0,
 	 "deregister an existing changelog user\n"
-	 "usage: {--device MDTNAME} changelog_deregister [ID|clID]\n"
-	 "						 [--help|-h]\n"
-	 "						 [--user|-u USERNAME]"},
+	 "usage: {--device MDTNAME} changelog_deregister [ID|clID] [--help|-h]\n"
+	 "       [--user|-u USERNAME]"},
 	{"changelog", jt_changelog, changelog_cmdlist, ""},
 
 	/* Persistent Client Cache (PCC) commands */

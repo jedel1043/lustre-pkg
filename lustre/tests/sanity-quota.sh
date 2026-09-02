@@ -2536,7 +2536,7 @@ run_test 7b "Quota reintegration (slave index)"
 test_7c() {
 	local limit=20 # MB
 	local testfile=$DIR/$tdir/$tfile
- 
+
 	[[ "$SLOW" == "yes" ]] || limit=5
 
 	setup_quota_test || error "setup quota failed with $?"
@@ -7908,6 +7908,34 @@ test_97d() {
 }
 run_test 97d "LQA disk persistence using standard commands"
 
+test_97e()
+{
+	local lqa="lqa1"
+
+	(( $MDS1_VERSION >= $(version_code 2.17.56) )) ||
+		skip "need MDS >= 2.17.56 to reject invalid lqa ranges"
+
+	$LQA_NEW --name $lqa || error "cannot create $lqa"
+	stack_trap "$LQA_DESTROY --name $lqa || true"
+
+	$LQA_ADD --name $lqa --range 10a &&
+		error "lqa add succeeded with invalid range 10a"
+	$LQA_ADD --name $lqa --range 10-11b &&
+		error "lqa add succeeded with invalid range 10-11b"
+	$LQA_ADD --name $lqa --range 10- &&
+		error "lqa add succeeded with invalid range 10-"
+
+	$LQA_REMOVE --name $lqa --range 10a &&
+		error "lqa remove succeeded with invalid range 10a"
+	$LQA_REMOVE --name $lqa --range 10-11b &&
+		error "lqa remove succeeded with invalid range 10-11b"
+	$LQA_REMOVE --name $lqa --range 10- &&
+		error "lqa remove succeeded with invalid range 10-"
+
+	$LQA_DESTROY --name $lqa || error "cannot destroy $lqa"
+}
+run_test 97e "LQA add/remove should reject invalid ranges"
+
 test_98() {
 	(( $MDSCOUNT >= 2 )) || skip "needs >= 2 MDTs"
 
@@ -7922,21 +7950,35 @@ test_98() {
 	wait_clients_import_state $HOSTNAME mds$((idx+1)) FULL
 	wait_clients_import_state $HOSTNAME mds$((expected_mdt+1)) FULL
 
-	local idx_hex
-	printf -v idx_hex "%04x" "$idx"
-
 	local old_rr=$($LCTL get_param -n lmv.*.qos_threshold_rr | head -1)
 	stack_trap "$LCTL set_param lmv.*.qos_threshold_rr=$old_rr"
 
 	#define OBD_FAIL_QUOTA_EDQUOT            0xA02
-	stack_trap "do_facet mds$((idx+1)) $LCTL set_param fail_loc=0"
-	do_facet mds$((idx+1)) $LCTL set_param fail_loc=0x80000A02
+	# fail_val selects which MDTs to fail:
+	#   0            - fail all MDTs
+	#   1..0xffff    - fail single MDT at index (fail_val - 1)
+	#   0x10000+     - bitmask mode: bits 0-15 are MDT indices to fail
+	# We use mode 2 (single MDT) with fail_val = idx+1 to target specific MDT
+	stack_trap "do_facet mds$((idx+1)) $LCTL set_param fail_loc=0 fail_val=0"
+	do_facet mds$((idx+1)) $LCTL set_param \
+		fail_val=$((idx+1)) fail_loc=0xA02 ||
+		error "Failed to set fail_loc on mds$((idx+1))"
 
-	$LCTL set_param lmv.*.qos_threshold_rr=100
+	$LCTL set_param lmv.*.qos_threshold_rr=100 ||
+		error "Failed to set qos_threshold_rr"
+
+	local set_qos_rr=$($LCTL get_param -n lmv.*.qos_threshold_rr | head -1)
+	[[ "$set_qos_rr" == "100%" ]] ||
+		error "qos_threshold_rr expected 100%, got $set_qos_rr"
 
 	local old_qos_maxage=$($LCTL get_param -n lmv.*.qos_maxage)
-	$LCTL set_param lmv.*.qos_maxage=10
+	$LCTL set_param lmv.*.qos_maxage=10 ||
+		error "Failed to set qos_maxage"
 	stack_trap "$LCTL set_param -n lmv.*.qos_maxage=$old_qos_maxage"
+
+	local set_qos_maxage=$($LCTL get_param -n lmv.*.qos_maxage | head -1)
+	(( set_qos_maxage == 10 )) ||
+		error "qos_maxage not set correctly: expected 10, got $set_qos_maxage"
 	# import can be used only after (qos_maxage >> 1)s after setup
 	sleep 5
 
@@ -7949,11 +7991,92 @@ test_98() {
 	local stripe_index=$($LFS getdirstripe -i $testdir)
 
 	(( stripe_index != idx )) ||
-		error "Failed to create directory on another MDT"
+		error "Created on MDT$stripe_index, should not be MDT$idx"
 
 	echo "Directory successfully created on MDT$stripe_index after retry"
 }
 run_test 98 "Verify MDT retry on -EDQUOT during mkdir"
+
+# test inode quota with MDT directory migration
+test_300() {
+	(( $MDS1_VERSION >= $(version_code 2.17.53) )) ||
+		skip "Need MDS version at least 2.17.53"
+	(( $MDSCOUNT >= 2 )) || skip_env "needs >= 2 MDTs"
+	[[ $PARALLEL != "yes" ]] || skip "skip parallel run"
+
+	local least_qunit
+	least_qunit=$(do_facet mds1 $LCTL get_param -n \
+		qmt.$FSNAME-QMT0000.md-0x0.info |
+		awk '/least.qunit/ { print $NF }')
+
+	# 500 inodes quota, fill 80% = 400 files
+	local quota_limit=$least_qunit
+	local fill_target=$((least_qunit * 80 / 100))
+
+	setup_quota_test || error "setup quota failed with $?"
+
+	# Enable MDT user quota
+	set_mdt_qtype u || error "enable mdt user quota failed"
+
+	# Set inode quota for test user
+	$LFS setquota -u $TSTUSR -b 0 -B 0 -i 0 -I $quota_limit $DIR ||
+		error "set user inode quota failed"
+
+	# Verify quota is set
+	local set_limit
+	set_limit=$($LFS quota -u $TSTUSR --ihardlimit -q $DIR)
+	(( $set_limit == $quota_limit )) ||
+		error "quota limit mismatch: expected $quota_limit, got $set_limit"
+
+	# Verify clean state
+	local used
+	sync_all_data
+	used=$($LFS quota -u $TSTUSR --inodes -q $DIR)
+	(( $used == 0 )) ||
+		error "Used inodes($used) for user $TSTUSR isn't 0 before test"
+
+	# Create files as test user, 80% of quota (400 files)
+	log "Creating $fill_target files as $TSTUSR ..."
+	$RUNAS createmany -m $DIR/$tdir/$tfile-92_ $fill_target ||
+		error "create failure at ~80% of inode quota"
+
+	# Verify we reached ~80% of quota
+	sync_all_data
+	used=$($LFS quota -u $TSTUSR --inodes -q $DIR)
+	echo "Current inode usage: $used / $quota_limit"
+	(( $used >= $(( fill_target * 90 / 100 )) )) ||
+		error "Expected at least $((fill_target * 90 / 100)) inodes, got $used"
+	(( $used <= $quota_limit )) ||
+		error "Exceeded quota: $used > $quota_limit"
+
+	# Migrate directory from MDT0 to MDT1 as root
+	log "Migrating directory from MDT0 to MDT1 ..."
+	$LFS migrate -m 1 $DIR/$tdir || error "migrate fails"
+
+	# Verify migration completed successfully
+	local tgt_mdt
+	tgt_mdt=$($LFS getdirstripe -m $DIR/$tdir)
+	echo "Target directory is on MDT: $tgt_mdt"
+	(( $tgt_mdt == 1 )) ||
+		error "Migration failed: directory still on MDT $tgt_mdt, expected MDT1"
+
+	# Verify files still exist and are accessible
+	local file_count
+	file_count=$($LFS find -type f $DIR/$tdir 2>/dev/null | wc -l)
+	echo "Files after migration: $file_count"
+	(( $file_count >= $fill_target )) ||
+		error "File count mismatch after migration: $file_count < $fill_target"
+
+	# Verify quota is updated on new MDT
+	sync_all_data
+	used=$($LFS quota -u $TSTUSR --inodes -q $DIR)
+	echo "Inode usage after migration: $used / $quota_limit"
+	(( $used == $fill_target )) ||
+		error "Quota usage mismatch after migration: $used != $fill_target"
+
+	log "Migration completed successfully"
+}
+run_test 300 "inode quota with MDT directory migration at 80% limit"
 
 quota_fini()
 {

@@ -273,8 +273,8 @@ copy2archive() {
 
 get_hsm_param() {
 	local param=$1
-	local val=$(do_facet $SINGLEMDS $LCTL get_param -n $HSM_PARAM.$param)
-	echo $val
+
+	do_facet $SINGLEMDS $LCTL get_param -n $HSM_PARAM.$param
 }
 
 set_test_state() {
@@ -4902,32 +4902,31 @@ run_test 254a "Request counters are initialized to zero"
 
 test_254b()
 {
-	[ $MDS1_VERSION -lt $(version_code 2.10.56) ] &&
-		skip "need MDS version at least 2.10.56"
+	(( $MDS1_VERSION >= $(version_code v2_10_56_0-68-g42e40555f2) )) ||
+		skip "need MDS >= 2.10.56 for HSM stats counters"
 
 	# The number of request to launch (at least 32)
-	local request_count=$((RANDOM % 32 + 32))
-	printf "Will launch %i requests of each type\n" "$request_count"
+	local count=$((RANDOM % 32 + 32))
+	echo "Will launch $count requests of each type"
 
 	# Launch a copytool to process requests
 	copytool setup
 
 	# Set hsm.max_requests to allow starting all requests at the same time
-	stack_trap \
-		"set_hsm_param max_requests $(get_hsm_param max_requests)" EXIT
-	set_hsm_param max_requests "$request_count"
+	stack_trap "set_hsm_param max_requests $(get_hsm_param max_requests)"
+	set_hsm_param max_requests $((count * 2))
 
 	mkdir_on_mdt0 $DIR/$tdir
 
 	local timeout
 	local count
-	for request_type in archive restore remove; do
-		printf "Checking %s requests\n" "${request_type}"
+	for act in archive restore remove; do
+		echo "Checking $act requests"
 		# Suspend the copytool to give us time to read the proc files
 		copytool_suspend
 
-		for ((i = 0; i < $request_count; i++)); do
-			case $request_type in
+		for ((i = 0; i < $count; i++)); do
+			case $act in
 			archive)
 				create_empty_file "$DIR/$tdir/$tfile-$i" \
 					>/dev/null 2>&1
@@ -4936,40 +4935,22 @@ test_254b()
 				lfs hsm_release "$DIR/$tdir/$tfile-$i"
 				;;
 			esac
-			$LFS hsm_${request_type} "$DIR/$tdir/$tfile-$i"
+			$LFS hsm_$act "$DIR/$tdir/$tfile-$i"
 		done
 
-		# Give the coordinator 10 seconds to start every request
-		timeout=10
-		while get_hsm_param actions | grep -q WAITING; do
-			sleep 1
-			let timeout-=1
-			[ $timeout -gt 0 ] ||
-				error "${request_type^} requests took too " \
-				      "long to start"
-		done
-
-		count="$(get_hsm_param ${request_type}_count)"
-		[ "$count" -eq "$request_count" ] ||
-			error "Expected '$request_count' (!= '$count') " \
-			      "active $request_type requests"
+		local rtc=$HSM_PARAM.${act}_count
+		# Give the coordinator enough time to start every request
+		wait_update_facet mds1 "$LCTL get_param -n $rtc" $count || {
+			local got="$(get_hsm_param ${act}_count)"
+			error "Expected $count (!= $got) active $act requests"
+		}
 
 		# Let the copytool process the requests
 		copytool_continue
-		# Give it 10 seconds maximum
-		timeout=10
-		while get_hsm_param actions | grep -q STARTED; do
-			sleep 1
-			let timeout-=1
-			[ $timeout -gt 0 ] ||
-				error "${request_type^} requests took too " \
-				      "long to complete"
-		done
-
-		count="$(get_hsm_param ${request_type}_count)"
-		[ "$count" -eq 0 ] ||
-			error "Expected 0 (!= '$count') " \
-			      "active $request_type requests"
+		wait_update_facet mds1 "$LCTL get_param -n $rtc" 0 || {
+			got="$(get_hsm_param ${act}_count)"
+			error "Expected 0 (!= $got) active $act requests"
+		}
 	done
 }
 run_test 254b "Request counters are correctly incremented and decremented"
@@ -5027,6 +5008,60 @@ test_255()
 	wait_request_state $(path2fid "$file") ARCHIVE SUCCEED
 }
 run_test 255 "Copytool registration wakes the coordinator up"
+
+test_256() {
+	(( MDSCOUNT >= 2 )) || skip "needs DNE (>= 2 MDTs)"
+
+	# Pick a victim client other than the test runner. The bug crashes the
+	# kernel on whichever node runs the copytool register; running it on a
+	# separate node lets us detect the panic from the runner.
+	local victim=${CLIENT2:-}
+	[[ -n "$victim" ]] || skip "needs a second client to safely panic-test"
+
+	do_node $victim "command -v lhsmtool_posix >/dev/null" ||
+		skip "lhsmtool_posix not on $victim"
+
+	# Drive ENXIO on MDT0001 by shutting down its coordinator while
+	# MDT0000 stays enabled. On a buggy build, lmv_hsm_ct_register's error
+	# path double-fputs the kuc pipe and the victim panics on the next
+	# close().  hsm_control=disabled is *not* sufficient to trigger the
+	# bug — shutdown (no coordinator service running) is what makes the
+	# per-MDT register ioctl return -ENXIO.
+	local saved
+	saved=$(do_facet mds2 "$LCTL get_param -n \
+		mdt.$FSNAME-MDT0001.hsm_control")
+	stack_trap "do_facet mds2 $LCTL set_param \
+		mdt.$FSNAME-MDT0001.hsm_control=$saved" EXIT
+
+	do_facet mds1 "$LCTL set_param \
+		mdt.$FSNAME-MDT0000.hsm_control=enabled"
+	do_facet mds2 "$LCTL set_param \
+		mdt.$FSNAME-MDT0001.hsm_control=shutdown"
+
+	# PID 1's birth time resets on reboot, so we can detect a panic+reboot
+	# from the runner without needing kdump.
+	local boot_before
+	boot_before=$(do_node $victim "stat -c %Y /proc/1")
+
+	local archive=/tmp/sanity-hsm-256-$$
+	do_node $victim "mkdir -p $archive; \
+		timeout 5 lhsmtool_posix --archive=1 --hsm-root $archive \
+			$MOUNT >/dev/null 2>&1 ; \
+		rm -rf $archive" || true
+
+	# Give any panic+reboot time to take effect (panic=10 on the kernel
+	# command line means the panic itself takes 10s before init reboot).
+	sleep 20
+
+	local boot_after
+	boot_after=$(do_node $victim "stat -c %Y /proc/1" 2>/dev/null ||
+		echo "unreachable")
+
+	[[ "$boot_before" == "$boot_after" ]] ||
+		error "$victim rebooted ($boot_before -> $boot_after) — \
+lmv_hsm_ct_register kuc pipe double-fput (LU-20311)"
+}
+run_test 256 "HSM copytool register on DNE with stopped MDT must not panic"
 
 # tests 260[a-c] rely on the parsing of the copytool's log file, they might
 # break in the future because of that.

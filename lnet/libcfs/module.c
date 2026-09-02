@@ -511,10 +511,10 @@ static const struct file_operations lnet_debugfs_file_operations_wo = {
 static const struct file_operations *lnet_debugfs_fops_select(
 	umode_t mode, const struct file_operations state[3])
 {
-	if (!(mode & S_IWUGO))
+	if (!(mode & 0222))
 		return &state[0];
 
-	if (!(mode & S_IRUGO))
+	if (!(mode & 0444))
 		return &state[1];
 
 	return &state[2];
@@ -524,6 +524,7 @@ void lnet_insert_debugfs(const struct ctl_table *table,
 			 struct module *mod, void **statep)
 {
 	struct file_operations *state = *statep;
+
 	if (!lnet_debugfs_root)
 		lnet_debugfs_root = debugfs_create_dir("lnet", NULL);
 
@@ -562,7 +563,7 @@ void lnet_debugfs_fini(void **state)
 }
 EXPORT_SYMBOL_GPL(lnet_debugfs_fini);
 
-static void lnet_insert_debugfs_links(
+static void __init lnet_insert_debugfs_links(
 		const struct lnet_debugfs_symlink_def *symlinks)
 {
 	for (; symlinks && symlinks->name; symlinks++)
@@ -610,7 +611,7 @@ cleanup_lock:
 }
 EXPORT_SYMBOL(libcfs_setup);
 
-int debug_module_init(void)
+static int __init debug_module_init(void)
 {
 	int rc;
 
@@ -629,7 +630,7 @@ int debug_module_init(void)
 	return 0;
 }
 
-void debug_module_exit(void)
+static void __exit debug_module_exit(void)
 {
 	int rc;
 

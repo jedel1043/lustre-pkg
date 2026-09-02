@@ -533,8 +533,8 @@ out:
 	 * see osd_trans_stop() for more details -bzzz
 	 */
 	if (iobuf->dr_rw == 0 || CFS_FAIL_CHECK(OBD_FAIL_OST_INTEGRITY_FAULT)) {
-		wait_event(iobuf->dr_wait,
-			   atomic_read(&iobuf->dr_numreqs) == 0);
+		io_wait_event(iobuf->dr_wait,
+			      atomic_read(&iobuf->dr_numreqs) == 0);
 	}
 
 	if (rc == 0)
@@ -2147,6 +2147,8 @@ static int osd_ldiskfs_write_fast(struct osd_object *o,  void *buf, int bufsize,
 	/* only the first flag-set matters */
 	dirty_inode = !test_and_set_bit(LDISKFS_INODE_JOURNAL_DATA,
 					&ei->i_flags);
+	if (dirty_inode)
+		ldiskfs_set_aops(inode);
 
 	rc = osd_attach_jinode(inode);
 	if (rc)
@@ -2242,6 +2244,8 @@ int osd_ldiskfs_write(struct osd_device *osd, struct inode *inode, void *buf,
 	/* only the first flag-set matters */
 	dirty_inode = !test_and_set_bit(LDISKFS_INODE_JOURNAL_DATA,
 				       &ei->i_flags);
+	if (dirty_inode)
+		ldiskfs_set_aops(inode);
 
 	/* sparse checking is racy, but sparse is very rare case, leave as is */
 	sparse = (new_size > 0 && (inode->i_blocks >> (inode->i_blkbits - 9)) <
@@ -3133,17 +3137,29 @@ static int osd_execute_fallocate(const struct lu_env *env,
 	struct osd_device *d = osd_obj2dev(obj);
 	struct inode *inode = obj->oo_inode;
 	struct file *file;
+	loff_t old_size;
 	int rc;
 
 	file = osd_get_filp_for_inode(osd_oti_get(env), inode);
 	if (IS_ERR(file))
 		return PTR_ERR(file);
 
+	old_size = i_size_read(inode);
 	file->f_mode |= FMODE_64BITHASH;
 	rc = file->f_op->fallocate(file, mode, start, end - start);
 	compat_security_file_free(file);
-	if (rc == 0)
-		osd_partial_page_flush_punch(d, inode, start, end - 1);
+	/* simulate ldiskfs failing after it already zeroed part of the range */
+	if (rc == 0 && CFS_FAIL_CHECK(OBD_FAIL_OSD_FALLOCATE_ERR))
+		rc = -EIO;
+	/* a failed fallocate may still have dirtied part of the range */
+	osd_partial_page_flush_punch(d, inode, start, end - 1);
+	/*
+	 * When the fallocate grows the file, ldiskfs also zeroes the
+	 * partial block at the old EOF, which lies outside the
+	 * [start, end) range flushed above.
+	 */
+	if (i_size_read(inode) > old_size)
+		osd_partial_page_flush(d, inode, old_size);
 	return rc;
 }
 

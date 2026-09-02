@@ -429,12 +429,6 @@ static inline void osp_objseq_buf_prep(struct lu_buf *buf, loff_t *off,
 	*off = sizeof(u64) * index;
 }
 
-static inline void osp_buf_prep(struct lu_buf *lb, void *buf, int buf_len)
-{
-	lb->lb_buf = buf;
-	lb->lb_len = buf_len;
-}
-
 extern struct lu_context_key osp_thread_key;
 
 static inline struct osp_thread_info *osp_env_info(const struct lu_env *env)
@@ -486,17 +480,6 @@ static inline struct osp_object *osp_obj(const struct lu_object *o)
 static inline struct osp_object *dt2osp_obj(const struct dt_object *d)
 {
 	return osp_obj(&d->do_lu);
-}
-
-static inline struct dt_object *osp_object_child(struct osp_object *o)
-{
-	return container_of(lu_object_next(osp2lu_obj(o)),
-			    struct dt_object, do_lu);
-}
-
-static inline struct seq_server_site *osp_seq_site(struct osp_device *osp)
-{
-	return osp->opd_dt_dev.dd_lu_dev.ld_site->ld_seq_site;
 }
 
 static inline int osp_fid_diff(const struct lu_fid *fid1,
@@ -846,7 +829,8 @@ static inline void osp_set_req_replay(const struct osp_device *osp,
 	 * 2. sent before the recovery thread target_recovery_thread() start,
 	 *    such as triggered by lod_sub_recovery_thread(). */
 	if (test_bit(OBDF_RECOVERING, obd->obd_flags) ||
-	    (test_bit(OBDF_REPLAYABLE, obd->obd_flags) && obd->obd_no_conn))
+	    (test_bit(OBDF_REPLAYABLE, obd->obd_flags) &&
+	     test_bit(OBDF_NO_CONN, obd->obd_flags)))
 		req->rq_allow_replay = 1;
 }
 

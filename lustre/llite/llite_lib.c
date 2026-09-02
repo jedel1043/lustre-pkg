@@ -15,6 +15,7 @@
 
 #define DEBUG_SUBSYSTEM S_LLITE
 
+#include <linux/audit.h>
 #include <linux/cpu.h>
 #include <linux/delay.h>
 #include <linux/file.h>
@@ -325,6 +326,98 @@ static void ll_force_readonly(struct super_block *sb, struct obd_export *exp,
 	obd_disconnect(exp);
 }
 
+static int ll_upcall_notify_gssiam(struct obd_device *watched,
+				   struct super_block *sb)
+{
+	struct client_obd *cli = &watched->u.cli;
+	struct ll_sb_info *sbi = ll_s2sbi(sb);
+	struct lustre_mount_data *lmd = sbi->lsi->lsi_lmd;
+	struct lustre_gssiam_mount_info *gssiam = NULL;
+	const char *fs_subdir = lmd->lmd_fileset ?
+				lmd->lmd_fileset : "/";
+	int subdir_sz = strlen(fs_subdir) + 1;
+	int principal_sz = sbi->ll_user_principal ?
+			    strlen(sbi->ll_user_principal) + 1 : 0;
+	int rc = 0;
+
+	if (cli->cl_import->imp_sec->ps_gssiam)
+		return 0;
+
+	OBD_ALLOC_PTR(gssiam);
+	if (!gssiam)
+		RETURN(-ENOMEM);
+
+	gssiam->lgmi_loginuid = sbi->ll_loginuid;
+
+	OBD_ALLOC(gssiam->lgmi_subdir, subdir_sz);
+	if (!gssiam->lgmi_subdir)
+		GOTO(out_gssiam, rc = -ENOMEM);
+	strscpy(gssiam->lgmi_subdir, fs_subdir, subdir_sz);
+
+	if (principal_sz > 0) {
+		OBD_ALLOC(gssiam->lgmi_principal, principal_sz);
+		if (!gssiam->lgmi_principal)
+			GOTO(out_subdir, rc = -ENOMEM);
+		strscpy(gssiam->lgmi_principal, sbi->ll_user_principal,
+			principal_sz);
+	}
+
+	if (test_bit(LMD_FLG_DEV_RDONLY, lmd->lmd_flags) ||
+	    sb->s_flags & SB_RDONLY)
+		gssiam->lgmi_options |= OBD_CONNECT_RDONLY;
+
+	CDEBUG(D_SUPER, "copy IAM subdir:%s options:%u login:%u principal:%s\n",
+	       gssiam->lgmi_subdir, gssiam->lgmi_options, gssiam->lgmi_loginuid,
+	       gssiam->lgmi_principal ? gssiam->lgmi_principal : "");
+
+	cli->cl_import->imp_sec->ps_gssiam = gssiam;
+
+out_subdir:
+	if (rc)
+		OBD_FREE(gssiam->lgmi_subdir, subdir_sz);
+out_gssiam:
+	if (rc)
+		OBD_FREE_PTR(gssiam);
+
+	return rc;
+}
+
+static int
+ll_upcall_notify(struct obd_device *host, struct obd_device *watched,
+		 enum obd_notify_event ev, void *owner)
+{
+	struct super_block *sb = owner;
+	struct ll_sb_info *sbi;
+	int result = 0;
+
+	ENTRY;
+
+	if (!sb || !s2lsi(sb))
+		RETURN(-EINVAL);
+
+	sbi = ll_s2sbi(sb);
+	if (!sbi)
+		RETURN(-EINVAL);
+
+	if ((strcmp(watched->obd_type->typ_name, LUSTRE_OSC_NAME) != 0 &&
+	    strcmp(watched->obd_type->typ_name, LUSTRE_MDC_NAME) != 0)) {
+		result = -EINVAL;
+		CWARN("%s: unexpected notification from %s %s: rc = %d\n",
+		      host->obd_name, watched->obd_type->typ_name,
+		      watched->obd_name, result);
+		RETURN(result);
+	}
+
+	if (ev == OBD_NOTIFY_GSSIAM)
+		RETURN(ll_upcall_notify_gssiam(watched, sb));
+
+	if (ev == OBD_NOTIFY_ACTIVE &&
+	    strcmp(watched->obd_type->typ_name, LUSTRE_OSC_NAME) == 0)
+		result = cl_ocd_update(host, watched, ev, &sbi->ll_lco);
+
+	RETURN(result);
+}
+
 static int client_common_fill_super(struct super_block *sb, char *md, char *dt)
 {
 	struct inode *root = NULL;
@@ -342,6 +435,7 @@ static int client_common_fill_super(struct super_block *sb, char *md, char *dt)
 	int encctxlen;
 
 	ENTRY;
+
 	sbi->ll_md_obd = class_name2obd(md);
 	if (!sbi->ll_md_obd) {
 		CERROR("%s: not setup or attached: rc = %d\n", md, -EINVAL);
@@ -386,7 +480,9 @@ static int client_common_fill_super(struct super_block *sb, char *md, char *dt)
 				  OBD_CONNECT_MULTIMODRPCS |
 				  OBD_CONNECT_GRANT_PARAM |
 				  OBD_CONNECT_GRANT_SHRINK |
-				  OBD_CONNECT_SHORTIO | OBD_CONNECT_FLAGS2;
+				  OBD_CONNECT_SHORTIO |
+				  OBD_CONNECT_FLAGS2 |
+				  OBD_CONNECT_HPREQ_CHECK1;
 
 	data->ocd_connect_flags2 = OBD_CONNECT2_DIR_MIGRATE |
 				   OBD_CONNECT2_SUM_STATFS |
@@ -440,6 +536,18 @@ static int client_common_fill_super(struct super_block *sb, char *md, char *dt)
 	if (test_bit(LL_SBI_ALWAYS_PING, sbi->ll_flags))
 		data->ocd_connect_flags &= ~OBD_CONNECT_PINGLESS;
 
+	/* Cache the login UID of the mount process. This is specifically
+	 * needed for GSSIAM authentication (passed down via upcalls).
+	 * It cannot be dynamically retrieved inside ll_upcall_notify_gssiam()
+	 * because when the security context is re-established asynchronously
+	 * during server failover or reconnect recovery, the upcall
+	 * notification runs in the context of background ptlrpcd kernel
+	 * threads where the active login UID cannot be resolved (resulting
+	 * in -1). Caching it here ensures the original mount-time login UID
+	 * is preserved for recovery.
+	 */
+	sbi->ll_loginuid = from_kuid(&init_user_ns,
+				     audit_get_loginuid(current));
 	obd_connect_set_secctx(data);
 	if (ll_sbi_has_encrypt(sbi)) {
 		obd_connect_set_enc_fid2path(data);
@@ -456,6 +564,9 @@ static int client_common_fill_super(struct super_block *sb, char *md, char *dt)
 retry_connect:
 	if (sb->s_flags & SB_RDONLY)
 		data->ocd_connect_flags |= OBD_CONNECT_RDONLY;
+
+	sbi->ll_md_obd->obd_upcall.onu_owner = sb;
+	sbi->ll_md_obd->obd_upcall.onu_upcall = ll_upcall_notify;
 	err = obd_connect(NULL, &sbi->ll_md_exp, sbi->ll_md_obd,
 			  &sbi->ll_sb_uuid, data, sbi->ll_cache);
 	if (err == -EBUSY) {
@@ -635,7 +746,9 @@ retry_connect:
 				  OBD_CONNECT_LAYOUTLOCK |
 				  OBD_CONNECT_PINGLESS | OBD_CONNECT_LFSCK |
 				  OBD_CONNECT_BULK_MBITS | OBD_CONNECT_SHORTIO |
-				  OBD_CONNECT_FLAGS2 | OBD_CONNECT_GRANT_SHRINK;
+				  OBD_CONNECT_FLAGS2 |
+				  OBD_CONNECT_GRANT_SHRINK |
+				  OBD_CONNECT_HPREQ_CHECK1;
 	data->ocd_connect_flags2 = OBD_CONNECT2_LOCKAHEAD |
 				   OBD_CONNECT2_INC_XID | OBD_CONNECT2_LSEEK |
 				   OBD_CONNECT2_REP_MBITS |
@@ -670,8 +783,8 @@ retry_connect:
 	       data->ocd_connect_flags,
 	       data->ocd_version, data->ocd_grant);
 
-	sbi->ll_dt_obd->obd_upcall.onu_owner = &sbi->ll_lco;
-	sbi->ll_dt_obd->obd_upcall.onu_upcall = cl_ocd_update;
+	sbi->ll_dt_obd->obd_upcall.onu_owner = sb;
+	sbi->ll_dt_obd->obd_upcall.onu_upcall = ll_upcall_notify;
 
 	data->ocd_brw_size = DT_MAX_BRW_SIZE;
 
@@ -882,10 +995,18 @@ out_root:
 	cl_sb_fini(sb);
 out_lock_cn_cb:
 	obd_disconnect(sbi->ll_dt_exp);
+	if (sbi->ll_dt_obd) {
+		sbi->ll_dt_obd->obd_upcall.onu_owner = NULL;
+		sbi->ll_dt_obd->obd_upcall.onu_upcall = NULL;
+	}
 	sbi->ll_dt_exp = NULL;
 	sbi->ll_dt_obd = NULL;
 out_md:
 	obd_disconnect(sbi->ll_md_exp);
+	if (sbi->ll_md_obd) {
+		sbi->ll_md_obd->obd_upcall.onu_owner = NULL;
+		sbi->ll_md_obd->obd_upcall.onu_upcall = NULL;
+	}
 	sbi->ll_md_exp = NULL;
 	sbi->ll_md_obd = NULL;
 out:
@@ -978,9 +1099,17 @@ static void client_common_put_super(struct super_block *sb)
 
 	cl_sb_fini(sb);
 
+	if (sbi->ll_dt_obd) {
+		sbi->ll_dt_obd->obd_upcall.onu_owner = NULL;
+		sbi->ll_dt_obd->obd_upcall.onu_upcall = NULL;
+	}
 	obd_disconnect(sbi->ll_dt_exp);
 	sbi->ll_dt_exp = NULL;
 
+	if (sbi->ll_md_obd) {
+		sbi->ll_md_obd->obd_upcall.onu_owner = NULL;
+		sbi->ll_md_obd->obd_upcall.onu_upcall = NULL;
+	}
 	obd_disconnect(sbi->ll_md_exp);
 	sbi->ll_md_exp = NULL;
 
@@ -1038,6 +1167,8 @@ static const match_table_t ll_sbi_flags_name = {
 	{LL_SBI_NOLCK,			"nolock"},
 	{LL_SBI_STATFS_PROJECT,		"statfs_project"},
 	{LL_SBI_STATFS_PROJECT,		"nostatfs_project"},
+	{LL_SBI_SYNC_ON_CLOSE,		"sync_on_close"},
+	{LL_SBI_SYNC_ON_CLOSE,		"nosync_on_close"},
 	{LL_SBI_TEST_DUMMY_ENCRYPTION,	"test_dummy_encryption=%s"},
 	{LL_SBI_TEST_DUMMY_ENCRYPTION,	"test_dummy_encryption"},
 	{LL_SBI_USER_FID2PATH,		"user_fid2path"},
@@ -1169,12 +1300,13 @@ static int ll_options(char *options, struct super_block *sb)
 		case LL_SBI_CHECKSUM:
 			sbi->ll_checksum_set = 1;
 			fallthrough;
-		case LL_SBI_USER_XATTR:
-		case LL_SBI_USER_FID2PATH:
 		case LL_SBI_LRU_RESIZE:
 		case LL_SBI_LAZYSTATFS:
-		case LL_SBI_VERBOSE:
 		case LL_SBI_STATFS_PROJECT:
+		case LL_SBI_SYNC_ON_CLOSE:
+		case LL_SBI_USER_XATTR:
+		case LL_SBI_USER_FID2PATH:
+		case LL_SBI_VERBOSE:
 			if (turn_off)
 				clear_bit(token, sbi->ll_flags);
 			else
@@ -1525,8 +1657,9 @@ out_free_cfg:
 	if (err)
 		ll_put_super(sb);
 	else if (test_bit(LL_SBI_VERBOSE, sbi->ll_flags))
-		LCONSOLE_WARN("Mounted %s%s\n", profilenm,
-			      sb->s_flags & SB_RDONLY ? " read-only" : "");
+		LCONSOLE_WARN("Mounted %s%s - version %s\n", profilenm,
+			      sb->s_flags & SB_RDONLY ? " read-only" : "",
+			      LUSTRE_VERSION_STRING);
 	RETURN(err);
 } /* ll_fill_super */
 
@@ -1651,7 +1784,7 @@ struct inode *ll_inode_from_resource_lock(struct ldlm_lock *lock)
 			}
 		} else {
 			inode = lock->l_resource->lr_lvb_inode;
-			LDLM_DEBUG_LIMIT(inode_state_read(inode) &
+			LDLM_DEBUG_LIMIT(inode_state_read_once(inode) &
 					 I_FREEING ?  D_INFO : D_WARNING, lock,
 					 "lr_lvb_inode %p is bogus: magic %08x",
 					 lock->l_resource->lr_lvb_inode,
@@ -1696,7 +1829,7 @@ static struct inode *ll_iget_anon_dir(struct super_block *sb,
 	}
 
 	lli = ll_i2info(inode);
-	if (inode_state_read(inode) & I_NEW) {
+	if (inode_state_read_once(inode) & I_NEW) {
 		inode->i_mode = (inode->i_mode & ~S_IFMT) |
 				(body->mbo_mode & S_IFMT);
 		LASSERTF(S_ISDIR(inode->i_mode), "Not slave inode "DFID"\n",
@@ -2320,6 +2453,9 @@ int ll_setattr_raw(struct dentry *dentry, struct iattr *attr,
 		}
 
 		attr->ia_valid |= ATTR_MTIME | ATTR_CTIME;
+		CDEBUG(D_INODE, "inode %p attr need_sync_to_oss "DFID"\n",
+		       inode, PFID(&ll_i2info(inode)->lli_fid));
+		lli->lli_need_sync_to_oss = true;
 	}
 
 	/* POSIX: check before ATTR_*TIME_SET set (from inode_change_ok) */
@@ -2354,6 +2490,12 @@ int ll_setattr_raw(struct dentry *dentry, struct iattr *attr,
 	if (S_ISREG(inode->i_mode))
 		inode_unlock(inode);
 
+	if (attr->ia_valid & ~(ATTR_ATIME | ATTR_CTIME | ATTR_MTIME)) {
+		CDEBUG(D_INODE, "inode %p attr %#x need_sync_to_mds "DFID"\n",
+		       inode, attr->ia_valid, PFID(&ll_i2info(inode)->lli_fid));
+		lli->lli_need_sync_to_mds = true;
+	}
+
 	/* We always do an MDS RPC, even if we're only changing the size;
 	 * only the MDS knows whether truncate() should fail with -ETXTBUSY
 	 */
@@ -2382,14 +2524,14 @@ int ll_setattr_raw(struct dentry *dentry, struct iattr *attr,
 	rc = ll_md_setattr(dentry, op_data);
 	if (rc)
 		GOTO(out, rc);
-	lli->lli_synced_to_mds = false;
 
 	if (!S_ISREG(inode->i_mode) || hsm_import)
 		GOTO(out, rc = 0);
 
 	if (attr->ia_valid & (ATTR_SIZE | ATTR_ATIME | ATTR_ATIME_SET |
 			      ATTR_MTIME | ATTR_MTIME_SET |
-			      ATTR_CTIME | ATTR_CTIME_SET)) {
+			      ATTR_CTIME | ATTR_CTIME_SET |
+			      ATTR_UID | ATTR_GID)) {
 		bool cached = false;
 
 		rc = pcc_inode_setattr(inode, attr, &cached);
@@ -3186,7 +3328,7 @@ void ll_truncate_inode_pages_final(struct inode *inode)
 		CWARN("%s: inode="DFID"(%p) nrpages=%lu state %#lx, lli_flags %#lx, see https://jira.whamcloud.com/browse/LU-118\n",
 		      ll_i2sbi(inode)->ll_fsname, PFID(ll_inode2fid(inode)),
 		      inode, nrpages,
-		      (unsigned long)inode_state_read(inode),
+		      (unsigned long)inode_state_read_once(inode),
 		      ll_i2info(inode)->lli_flags);
 
 		rcu_read_lock();

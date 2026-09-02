@@ -3157,7 +3157,6 @@ int lustre_lnet_show_net(char *nw, int detail, int seq_no,
 	char *pos;
 	char err_str[LNET_MAX_STR_LEN] = "\"out of memory\"";
 	bool exist = false, new_net = true;
-	int net_num = 0;
 	size_t buf_size = sizeof(*ni_data) + sizeof(*lnd) + sizeof(*stats);
 
 	buf = calloc(1, buf_size);
@@ -3226,7 +3225,6 @@ int lustre_lnet_show_net(char *nw, int detail, int seq_no,
 		if (rc_net != prev_net) {
 			prev_net = rc_net;
 			new_net = true;
-			net_num++;
 		}
 
 		if (new_net) {
@@ -5491,6 +5489,35 @@ yaml_extract_cpt(struct cYAML *tree,
  * At least one interface is required. If no interfaces are provided the
  * network interface can not be configured.
  */
+
+/* The kernel enforces a maximum of 127 conns-per-peer. The YAML import
+ * path stores conns_per_peer straight into a __u16 tunable without any
+ * range check, so an out-of-range or overflow value (e.g. 10^24) would
+ * be silently truncated and configured. Validate the raw cYAML integer
+ * (int64) before it is truncated, rejecting anything outside 0-127.
+ */
+static int yaml_validate_conns_per_peer(struct cYAML *tree,
+					struct cYAML **err_rc)
+{
+	struct cYAML *lndparams, *conns_per_peer;
+
+	lndparams = cYAML_get_object_child(tree, "lnd tunables");
+	if (!lndparams)
+		return LUSTRE_CFG_RC_NO_ERR;
+
+	conns_per_peer = cYAML_get_object_item(lndparams, "conns_per_peer");
+	if (conns_per_peer &&
+	    (conns_per_peer->cy_valueint < 0 ||
+	     conns_per_peer->cy_valueint > 127)) {
+		cYAML_build_error(-1, -1, "ni", "add",
+				  "invalid conns-per-peer value (valid range 0-127)",
+				  err_rc);
+		return LUSTRE_CFG_RC_OUT_OF_RANGE_PARAM;
+	}
+
+	return LUSTRE_CFG_RC_NO_ERR;
+}
+
 static int handle_yaml_config_ni(struct cYAML *tree, struct cYAML **show_rc,
 				 struct cYAML **err_rc)
 {
@@ -5533,6 +5560,11 @@ static int handle_yaml_config_ni(struct cYAML *tree, struct cYAML **show_rc,
 
 	net_tun_found_mask = yaml_extract_tunables(tree, &net_tunables,
 						   LNET_NETTYP(nw_descr.nw_id));
+
+	rc = yaml_validate_conns_per_peer(tree, err_rc);
+	if (rc != LUSTRE_CFG_RC_NO_ERR)
+		return rc;
+
 	seq_no = cYAML_get_object_item(tree, "seq_no");
 	while (cYAML_get_next_seq_item(local_nis, &local_ni) != NULL) {
 		INIT_LIST_HEAD(&nw_descr.network_on_rule);
@@ -5556,6 +5588,11 @@ static int handle_yaml_config_ni(struct cYAML *tree, struct cYAML **show_rc,
 		tunables.lt_cmn.lct_max_tx_credits = -1;
 		tun_found_mask = yaml_extract_tunables(local_ni, &tunables,
 						      LNET_NETTYP(nw_descr.nw_id));
+
+		rc = yaml_validate_conns_per_peer(local_ni, err_rc);
+		if (rc != LUSTRE_CFG_RC_NO_ERR)
+			return rc;
+
 		if (!(tun_found_mask & FOUND_CMN_TUNABLES) &&
 				(net_tun_found_mask & FOUND_CMN_TUNABLES)) {
 			tunables.lt_cmn = net_tunables.lt_cmn;
@@ -5669,6 +5706,11 @@ static int handle_yaml_config_ip2nets(struct cYAML *tree,
 
 	found = yaml_extract_tunables(tree, &tunables,
 				      LNET_NETTYP(ip2nets.ip2nets_net.nw_id));
+
+	rc = yaml_validate_conns_per_peer(tree, err_rc);
+	if (rc != LUSTRE_CFG_RC_NO_ERR)
+		goto out;
+
 	yaml_extract_cpt(tree, &global_cpts);
 
 	rc = lustre_lnet_config_ip2nets(&ip2nets,

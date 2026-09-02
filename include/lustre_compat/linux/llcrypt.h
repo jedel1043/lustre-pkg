@@ -124,8 +124,8 @@ static inline void llcrypt_handle_d_move(struct dentry *dentry)
 static inline void folio_bounce_private(struct folio *dst, s32 dstpg,
 					struct folio *src, s32 srcpg)
 {
-	s32 spg __maybe_unused = srcpg > 0 ? srcpg : 0;
-	s32 dpg __maybe_unused = dstpg > 0 ? srcpg : 0;
+	s32 spg = srcpg > 0 ? srcpg : 0;
+	s32 dpg = dstpg > 0 ? srcpg : 0;
 
 	if (dpg) {
 		struct page *vmpg;
@@ -142,7 +142,7 @@ static inline void folio_bounce_private(struct folio *dst, s32 dstpg,
 
 /* crypto.c */
 extern int __init llcrypt_init(void);
-extern void __exit llcrypt_exit(void);
+extern void llcrypt_exit(void);
 extern void llcrypt_enqueue_decrypt_work(struct work_struct *);
 extern struct llcrypt_ctx *llcrypt_get_ctx(gfp_t);
 extern void llcrypt_release_ctx(struct llcrypt_ctx *);

@@ -91,6 +91,7 @@ static ssize_t sync_lock_cancel_store(struct kobject *kobj,
 	/* Legacy numeric codes */
 	if (val == -1) {
 		int rc = kstrtoint(buffer, 0, &val);
+
 		if (rc)
 			return rc;
 	}
@@ -543,7 +544,7 @@ int tgt_init(const struct lu_env *env, struct lu_target *lut,
 
 	memset(&attr, 0, sizeof(attr));
 	attr.la_valid = LA_MODE;
-	attr.la_mode = S_IFREG | S_IRUGO | S_IWUSR;
+	attr.la_mode = S_IFREG | 0644;
 	dof.dof_type = dt_mode_to_dft(S_IFREG);
 
 	lu_local_obj_fid(&fid, LAST_RECV_OID);
@@ -587,7 +588,7 @@ int tgt_init(const struct lu_env *env, struct lu_target *lut,
 
 	memset(&attr, 0, sizeof(attr));
 	attr.la_valid = LA_MODE;
-	attr.la_mode = S_IFREG | S_IRUGO | S_IWUSR;
+	attr.la_mode = S_IFREG | 0644;
 	dof.dof_type = dt_mode_to_dft(S_IFREG);
 
 	lu_local_obj_fid(&fid, REPLY_DATA_OID);
@@ -641,6 +642,7 @@ void tgt_fini(const struct lu_env *env, struct lu_target *lut)
 {
 	int i;
 	int rc;
+
 	ENTRY;
 
 	if (lut->lut_lsd.lsd_feature_incompat & OBD_INCOMPAT_MULTI_RPCS &&
@@ -650,8 +652,7 @@ void tgt_fini(const struct lu_env *env, struct lu_target *lut)
 		lut->lut_lsd.lsd_feature_incompat &= ~OBD_INCOMPAT_MULTI_RPCS;
 		rc = tgt_server_data_update(env, lut, 1);
 		if (rc < 0)
-			CERROR("%s: unable to clear MULTI RPCS "
-			       "incompatibility flag\n",
+			CERROR("%s: unable to clear MULTI RPCS incompatibility flag\n",
 			       lut->lut_obd->obd_name);
 	}
 
@@ -808,17 +809,18 @@ LU_KEY_INIT_GENERIC(tgt_ses);
  */
 struct folio *tgt_page_to_corrupt;
 
-int tgt_mod_init(void)
+int __init tgt_mod_init(void)
 {
 	int	result;
+
 	ENTRY;
 
 	result = lu_kmem_init(tgt_caches);
 	if (result != 0)
 		RETURN(result);
 
-	result = lustre_tgt_register_fs();
-	if (result != 0) {
+	result = register_filesystem(&lustre_tgt_fstype);
+	if (result) {
 		lu_kmem_fini(tgt_caches);
 		RETURN(result);
 	}
@@ -849,8 +851,7 @@ void tgt_mod_exit(void)
 	lu_context_key_degister(&tgt_session_key);
 	update_info_fini();
 
-	lustre_tgt_unregister_fs();
+	unregister_filesystem(&lustre_tgt_fstype);
 
 	lu_kmem_fini(tgt_caches);
 }
-

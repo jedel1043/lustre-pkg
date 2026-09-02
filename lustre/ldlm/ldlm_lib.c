@@ -695,7 +695,7 @@ int client_connect_import(const struct lu_env *env,
 
 	imp->imp_dlm_handle = conn;
 	rc = ptlrpc_init_import(imp);
-	if (rc != 0)
+	if (rc)
 		GOTO(out_ldlm, rc);
 
 	ocd = &imp->imp_connect_data;
@@ -706,7 +706,7 @@ int client_connect_import(const struct lu_env *env,
 	}
 
 	rc = ptlrpc_connect_import(imp);
-	if (rc != 0) {
+	if (rc) {
 		LASSERT(imp->imp_state == LUSTRE_IMP_DISCON);
 		GOTO(out_ldlm, rc);
 	}
@@ -729,6 +729,19 @@ out_ldlm:
 		cli->cl_conn_count--;
 		class_disconnect(*exp);
 		*exp = NULL;
+		/*
+		 * Connect failed before obd_disconnect() could be called, so
+		 * client_disconnect_export() was never called and
+		 * ldlm_namespace_free_prior() was skipped.  Call it now so
+		 * that LDLM_NS_STOPPING is set before
+		 * ldlm_namespace_free_post() runs in client_obd_cleanup(),
+		 * preventing a kobject leak and the pool recalc race on the
+		 * namespace.
+		 */
+		if (obd->obd_namespace)
+			ldlm_namespace_free_prior(obd->obd_namespace, imp,
+						  test_bit(OBDF_FORCE,
+							   obd->obd_flags));
 	}
 out_sem:
 	up_write(&cli->cl_sem);
@@ -1056,7 +1069,7 @@ int rev_import_init(struct obd_export *export)
 
 	revimp->imp_remote_handle.cookie = 0ULL;
 	revimp->imp_client = &obd->obd_ldlm_client;
-	revimp->imp_dlm_fake = 1;
+	set_bit(IMPF_DLM_FAKE, revimp->imp_flags);
 
 	/* it is safe to connect import in new state as no sends possible */
 	spin_lock(&export->exp_lock);
@@ -1193,8 +1206,9 @@ int target_handle_connect(struct ptlrpc_request *req)
 		GOTO(out, rc = -ENODEV);
 	}
 	/* allow only local connection for MGS */
-	if (target->obd_no_conn && !(nid_is_lo0(&req->rq_peer.nid) &&
-			!strcmp(target->obd_name, LUSTRE_MGS_OBDNAME))) {
+	if (test_bit(OBDF_NO_CONN, target->obd_flags) &&
+	    !(nid_is_lo0(&req->rq_peer.nid) &&
+	    !strcmp(target->obd_name, LUSTRE_MGS_OBDNAME))) {
 		CDEBUG(D_INFO,
 		       "%s: Temporarily refusing client connection from %s\n",
 		       target->obd_name, libcfs_nidstr(&req->rq_peer.nid));
@@ -2866,6 +2880,9 @@ static int target_recovery_thread(void *arg)
 	 */
 	CDEBUG(D_INFO, "2: lock replay stage - %d clients\n",
 	       atomic_read(&obd->obd_lock_replay_clients));
+
+	CFS_FAIL_TIMEOUT(OBD_FAIL_PTLRPC_FAIL_REPLAY, 10);
+
 	while ((req = target_next_replay_lock(lut))) {
 		LASSERT(trd->trd_processing_task == current->pid);
 		DEBUG_REQ(D_HA, req, "processing lock from %s:",
@@ -3031,8 +3048,8 @@ void target_recovery_init(struct lu_target *lut, svc_handler_t handler)
 		return;
 	}
 
-	CDEBUG(D_HA, "RECOVERY: service %s, %d recoverable clients, "
-	       "last_transno %llu\n", obd->obd_name,
+	CDEBUG(D_HA, "RECOVERY: service %s, %d recoverable clients, last_transno %llu\n",
+	       obd->obd_name,
 	       atomic_read(&obd->obd_max_recoverable_clients),
 	       obd->obd_last_committed);
 	LASSERT(!test_bit(OBDF_STOPPING, obd->obd_flags));

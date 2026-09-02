@@ -76,9 +76,9 @@ int cl_setattr_ost(struct inode *inode, const struct iattr *attr,
 	if (attr->ia_valid & ATTR_SIZE) {
 		io->u.ci_setattr.sa_subtype = CL_SETATTR_TRUNC;
 		io->u.ci_setattr.sa_attr_uid =
-			from_kuid(&init_user_ns, current_uid());
+			from_kuid(&init_user_ns, inode->i_uid);
 		io->u.ci_setattr.sa_attr_gid =
-			from_kgid(&init_user_ns, current_gid());
+			from_kgid(&init_user_ns, inode->i_gid);
 		io->u.ci_setattr.sa_attr_projid = ll_i2info(inode)->lli_projid;
 	}
 again:
@@ -155,7 +155,7 @@ int cl_file_inode_init(struct inode *inode, struct lustre_md *md)
 		 * unnecessary to perform lookup-alloc-lookup-insert, just
 		 * alloc and insert directly.
 		 */
-		if (!(inode_state_read(inode) & I_NEW)) {
+		if (!(inode_state_read_once(inode) & I_NEW)) {
 			result = -EIO;
 			CERROR("%s: unexpected not-NEW inode "DFID": rc = %d\n",
 			       ll_i2sbi(inode)->ll_fsname, PFID(fid), result);

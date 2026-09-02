@@ -54,7 +54,10 @@ void lmv_activate_target(struct lmv_obd *lmv, struct lmv_tgt_desc *tgt,
 	lmv->lmv_mdt_descs.ltd_lmv_desc.ld_active_tgt_count +=
 		(activate ? 1 : -1);
 
-	tgt->ltd_exp->exp_obd->obd_inactive = !activate;
+	if (activate)
+		clear_bit(OBDF_INACTIVE, tgt->ltd_exp->exp_obd->obd_flags);
+	else
+		set_bit(OBDF_INACTIVE, tgt->ltd_exp->exp_obd->obd_flags);
 }
 
 /**
@@ -219,9 +222,7 @@ static int lmv_notify(struct obd_device *obd, struct obd_device *watched,
 	}
 
 	/* Pass the notification up the chain.  */
-	if (obd->obd_observer)
-		rc = obd_notify(obd->obd_observer, watched, ev);
-
+	rc = obd_notify_observer(obd, watched, ev);
 	RETURN(rc);
 }
 
@@ -537,6 +538,8 @@ out_disc:
 		--lmv->lmv_mdt_descs.ltd_lmv_desc.ld_active_tgt_count;
 		obd_register_observer(tgt->ltd_exp->exp_obd, NULL);
 		obd_disconnect(tgt->ltd_exp);
+		tgt->ltd_exp->exp_obd->obd_upcall.onu_owner = NULL;
+		tgt->ltd_exp->exp_obd->obd_upcall.onu_upcall = NULL;
 	}
 
 	goto unlock;
@@ -601,6 +604,8 @@ static int lmv_disconnect_mdc(struct obd_device *obd, struct lmv_tgt_desc *tgt)
 		       tgt->ltd_exp->exp_obd->obd_name,
 		       tgt->ltd_uuid.uuid, rc);
 	}
+	tgt->ltd_exp->exp_obd->obd_upcall.onu_owner = NULL;
+	tgt->ltd_exp->exp_obd->obd_upcall.onu_upcall = NULL;
 	tgt->ltd_exp = NULL;
 	RETURN(0);
 }
@@ -905,10 +910,9 @@ static int lmv_hsm_ct_register(struct obd_device *obd, unsigned int cmd,
 		/* no registration done: return error */
 		GOTO(err_kkuc_rem, rc = -ENOTCONN);
 
-	RETURN(0);
-
 err_kkuc_rem:
-	libcfs_kkuc_group_rem(&obd->obd_uuid, lk->lk_uid, lk->lk_group);
+	if (rc)
+		libcfs_kkuc_group_rem(&obd->obd_uuid, lk->lk_uid, lk->lk_group);
 
 err_fput:
 	fput(filp);
@@ -2179,7 +2183,7 @@ struct lu_tgt_desc *lmv_locate_tgt_next_avail(struct lmv_obd *lmv,
 		return ERR_PTR(-EDQUOT);
 
 	/* Make start random to spread creates across MDTs */
-	start = (cur->ltd_index + get_random_u32()) % count;
+	start = (cur->ltd_index + 1 + get_random_u32_below(count - 1)) % count;
 
 	for (i = 0; i < count ; i++) {
 		__u32 idx = (start+i) % count;
@@ -2359,11 +2363,10 @@ retry:
 	    lmv->lmv_mdt_descs.ltd_lmv_desc.ld_active_tgt_count > 1) {
 		struct lmv_tgt_desc *new_tgt;
 
-		/* below message is checked in sanity-quota test_98 */
 		CDEBUG(D_QUOTA,
-		       "mkdir hit EDQUOT on MDT%04x (retry %d/%u), searching for alternative MDT\n",
-		       tgt->ltd_index, quota_retry,
-		       lmv->lmv_mdt_descs.ltd_lmv_desc.ld_active_tgt_count);
+		       "%s: mkdir hit EDQUOT on MDT%04x (retry %d/%u), searching for alternative MDT: rc = %d\n",
+		       lmv2obd_dev(lmv)->obd_name, tgt->ltd_index, quota_retry,
+		       lmv->lmv_mdt_descs.ltd_lmv_desc.ld_active_tgt_count, rc);
 
 		set_bit(tgt->ltd_index, exclude_bitmap);
 

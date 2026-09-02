@@ -474,6 +474,7 @@ extern bool obd_enable_fname_encoding;
 #define OBD_FAIL_PTLRPC_ENQ_RESEND	 0x534
 #define OBD_FAIL_PTLRPC_DELAY_SEND_FAIL	 0x535
 #define OBD_FAIL_PTLRPC_REPLAY_PAUSE	 0x536
+#define OBD_FAIL_PTLRPC_FAIL_REPLAY	 0x537
 
 #define OBD_FAIL_OBD_PING_NET            0x600
 /*	OBD_FAIL_OBD_LOG_CANCEL_NET      0x601 obsolete since 1.5 */
@@ -777,6 +778,7 @@ extern bool obd_enable_fname_encoding;
 
 #define OBD_FAIL_OSD_FAIL_AT_TRUNCATE		0x2301
 #define OBD_FAIL_OSD_MARK_COMPRESSED	 	0x2302
+#define OBD_FAIL_OSD_FALLOCATE_ERR		0x2303
 
 /* continuation of MDS related constants */
 #define OBD_FAIL_MDS_PAUSE_CREATE_AFTER_LOOKUP	0x2401
@@ -882,7 +884,7 @@ do {									      \
 #define __OBD_VMALLOC_VERBOSE(ptr, cptab, cpt, size)			      \
 do {									      \
 	(ptr) = cptab == NULL ?						      \
-		__compat_vmalloc(size, GFP_NOFS | __GFP_HIGHMEM | __GFP_ZERO) :\
+		__compat_vmalloc(size, GFP_NOFS | __GFP_ZERO) :		      \
 		cfs_cpt_vzalloc(cptab, cpt, size);			      \
 	if (unlikely((ptr) == NULL)) {                                        \
 		CERROR("vmalloc of '" #ptr "' (%d bytes) failed\n",           \
@@ -1094,6 +1096,25 @@ struct obd_statfs_info {
 	__u32		os_reserved_mb_low;	/* reserved mb low */
 	__u32		os_reserved_mb_high;	/* reserved mb high */
 	bool		os_enable_pre;		/* enable pre create logic */
+};
+
+/* Counter event rating based on Sliding Window Counter algorithm */
+/* Two fixed time-based sliding windows: previous and current one. */
+#define OBD_COUNTER_NUM	2
+
+struct obd_counter_instance {
+	/*
+	 * Truncated 32-bit monotonic seconds (ktime_get_seconds()) of the
+	 * last processed event. Zero means unset.
+	 */
+	u32		oci_last_event_time;
+	/*
+	 * Truncated 32-bit monotonic seconds (ktime_get_seconds()) when the
+	 * threshold was last exceeded. Zero means no recent trigger.
+	 */
+	u32		oci_last_trigger_time;
+	/* 32-bit counters for each time window */
+	u32		oci_hist[OBD_COUNTER_NUM];
 };
 
 /* Define a fixed 4096-byte encryption unit size */

@@ -20,6 +20,7 @@
 #define CFS_FAIL_DELAY_MSG_FORWARD	0xe002
 #define CFS_FAIL_TEST_PING_MD		0xe003
 #define CFS_FAIL_RTR_HEALTH_INC		0xe004
+#define CFS_FAIL_SOCK_CONN		0xe020
 
 #include <linux/hash.h>
 #include <linux/netdevice.h>
@@ -34,7 +35,12 @@
 #include <uapi/linux/lnet/lnetctl.h>
 #include <uapi/linux/lnet/nidstr.h>
 
-#include "lock.h"
+enum {
+	CFS_PERCPT_LOCK_EX	= -1,	/* negative */
+};
+
+void cfs_percpt_lock(struct cfs_percpt_lock *pcl, int index);
+void cfs_percpt_unlock(struct cfs_percpt_lock *pcl, int index);
 
 extern struct lnet the_lnet;			/* THE network */
 
@@ -468,6 +474,7 @@ lnet_ni_alloc(struct lnet_net *net, struct cfs_expr_list *el,
 struct lnet_ni *
 lnet_ni_alloc_w_cpt_array(struct lnet_net *net, struct lnet_nid *nid,
 			  u32 *cpts, u32 ncpts, char *iface);
+int lnet_ni_set_default_cpts(struct lnet_ni *ni);
 int lnet_ni_add_interface(struct lnet_ni *ni, char *iface);
 
 static inline int
@@ -1250,6 +1257,12 @@ void lnet_incr_stats(struct lnet_element_stats *stats,
 
 __u32 lnet_sum_stats(struct lnet_element_stats *stats,
 		     enum lnet_stats_type stats_type);
+
+void lnet_record_latency(struct lnet_latency_stats *stats, s64 ns);
+void lnet_latency_stats_summary(struct lnet_latency_stats *stats,
+				struct lnet_latency_summary *out);
+void lnet_latency_stats_reset(struct lnet_latency_stats *stats);
+void lnet_reset_element_stats(struct lnet_element_stats *stats);
 
 void lnet_usr_translate_stats(struct lnet_ioctl_element_msg_stats *msg_stats,
 			      struct lnet_element_stats *stats);
