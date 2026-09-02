@@ -43,7 +43,6 @@ override_dh_auto_configure:
 		--with-systemdsystemunitdir=/usr/lib/systemd/system
 
 override_dh_auto_build:
-	dh_auto_build -- undef.h
 	dh_auto_build -- utils
 
 override_dh_install:
