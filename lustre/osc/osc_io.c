@@ -20,7 +20,7 @@
 
 #include <lustre_obdo.h>
 #include <lustre_osc.h>
-#include <linux/pagevec.h>
+#include <lustre_compat/linux/folio_batch.h>
 #include <linux/falloc.h>
 
 #include "osc_internal.h"
@@ -1152,10 +1152,17 @@ static int osc_io_fsync_start(const struct lu_env *env,
 		}
 
 		rc = osc_fsync_ost(env, osc, fio);
-		if (result == 0) {
+		/* The RPC is issued unconditionally above, and its completion
+		 * writes into @cbargs, which lives in the session. Record that
+		 * it is in flight whenever it was actually sent -- even if an
+		 * earlier error is already latched in @result -- otherwise
+		 * osc_io_fsync_end() skips the wait and the upcall lands on a
+		 * freed session.
+		 */
+		if (rc == 0)
 			cbargs->opc_rpc_sent = 1;
+		if (result == 0)
 			result = rc;
-		}
 	}
 
 	RETURN(result);

@@ -276,8 +276,12 @@ find_with_lock:
 		rc = upcall_cache_get_entry_internal(cache, entry, args,
 						     &fsgid, &ginfo);
 		write_lock(&cache->uc_lock);
-		if (rc)
+		if (rc) {
+			if (entry == new)
+				UC_CACHE_SET_INVALID(entry);
+			put_entry(cache, entry);
 			GOTO(out, entry = ERR_PTR(rc));
+		}
 	}
 
 	/* acquire for new one */
@@ -434,6 +438,7 @@ int upcall_cache_downcall(struct upcall_cache *cache, __s32 err, __u64 key,
 	struct list_head *head;
 	int found = 0, rc = 0;
 	bool writelock = false;
+
 	ENTRY;
 
 	LASSERT(cache);
@@ -466,8 +471,8 @@ int upcall_cache_downcall(struct upcall_cache *cache, __s32 err, __u64 key,
 	}
 
 	if (!UC_CACHE_IS_ACQUIRING(entry)) {
-		CDEBUG(D_RPCTRACE, "%s: found uptodate entry %p (key %llu)"
-		       "\n", cache->uc_name, entry, entry->ue_key);
+		CDEBUG(D_RPCTRACE, "%s: found uptodate entry %p (key %llu)\n",
+		       cache->uc_name, entry, entry->ue_key);
 		write_lock_from_read(&cache->uc_lock, &writelock);
 		GOTO(out, rc = 0);
 	}
@@ -510,6 +515,7 @@ void upcall_cache_flush(struct upcall_cache *cache, int force)
 {
 	struct upcall_cache_entry *entry, *next;
 	int i;
+
 	ENTRY;
 
 	write_lock(&cache->uc_lock);
@@ -534,6 +540,7 @@ void upcall_cache_flush_one(struct upcall_cache *cache, __u64 key, void *args)
 	struct list_head *head;
 	struct upcall_cache_entry *entry;
 	int found = 0;
+
 	ENTRY;
 
 	head = &cache->uc_hashtable[UC_CACHE_HASH_INDEX(key,
@@ -548,8 +555,7 @@ void upcall_cache_flush_one(struct upcall_cache *cache, __u64 key, void *args)
 	}
 
 	if (found) {
-		CWARN("%s: flush entry %p: key %llu, ref %d, fl %x, "
-		      "cur %lld, ex %lld/%lld\n",
+		CWARN("%s: flush entry %p: key %llu, ref %d, fl %x, cur %lld, ex %lld/%lld\n",
 		      cache->uc_name, entry, entry->ue_key,
 		      atomic_read(&entry->ue_refcount), entry->ue_flags,
 		      ktime_get_real_seconds(), entry->ue_acquire_expire,
@@ -569,6 +575,7 @@ struct upcall_cache *upcall_cache_init(const char *name, const char *upcall,
 {
 	struct upcall_cache *cache;
 	int i;
+
 	ENTRY;
 
 	OBD_ALLOC(cache, sizeof(*cache));

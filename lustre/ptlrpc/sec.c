@@ -1432,10 +1432,10 @@ EXPORT_SYMBOL(sptlrpc_sec_put);
  * policy module is responsible for taking refrence of import
  */
 static
-struct ptlrpc_sec * sptlrpc_sec_create(struct obd_import *imp,
-				       struct ptlrpc_svc_ctx *svc_ctx,
-				       struct sptlrpc_flavor *sf,
-				       enum lustre_sec_part sp)
+struct ptlrpc_sec *sptlrpc_sec_create(struct obd_import *imp,
+				      struct ptlrpc_svc_ctx *svc_ctx,
+				      struct sptlrpc_flavor *sf,
+				      enum lustre_sec_part sp)
 {
 	struct ptlrpc_sec_policy *policy;
 	struct ptlrpc_sec *sec;
@@ -2632,7 +2632,7 @@ void sptlrpc_svc_ctx_addref(struct ptlrpc_request *req)
 	struct ptlrpc_svc_ctx *ctx = req->rq_svc_ctx;
 
 	if (ctx != NULL)
-		atomic_inc(&ctx->sc_refcount);
+		refcount_inc(&ctx->sc_refcount);
 }
 
 void sptlrpc_svc_ctx_decref(struct ptlrpc_request *req)
@@ -2642,11 +2642,13 @@ void sptlrpc_svc_ctx_decref(struct ptlrpc_request *req)
 	if (ctx == NULL)
 		return;
 
-	LASSERT(atomic_read(&(ctx)->sc_refcount) > 0);
-	if (atomic_dec_and_test(&ctx->sc_refcount)) {
+	LASSERT(refcount_read(&(ctx)->sc_refcount) > 0);
+
+	if (refcount_dec_and_test(&ctx->sc_refcount)) {
 		if (ctx->sc_policy->sp_sops->free_ctx)
 			ctx->sc_policy->sp_sops->free_ctx(ctx);
 	}
+
 	req->rq_svc_ctx = NULL;
 }
 
@@ -2657,7 +2659,7 @@ void sptlrpc_svc_ctx_invalidate(struct ptlrpc_request *req)
 	if (ctx == NULL)
 		return;
 
-	LASSERT(atomic_read(&(ctx)->sc_refcount) > 0);
+	LASSERT(refcount_read(&(ctx)->sc_refcount) > 0);
 	if (ctx->sc_policy->sp_sops->invalidate_ctx)
 		ctx->sc_policy->sp_sops->invalidate_ctx(ctx);
 }

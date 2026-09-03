@@ -126,9 +126,12 @@ cleanup_netns() {
 	cleanup_fakeif
 }
 
+# Arguments are lnet module options. Expand them unquoted at the call
+# site: modprobe takes one option per argument, and an empty quoted
+# argument would suppress load_module()'s MODOPTS_LNET fallback.
 configure_dlc() {
 	echo "Loading LNet and configuring DLC"
-	load_lnet || return $?
+	load_lnet "$@" || return $?
 	do_lnetctl lnet configure $LNET_CONFIG_OPT
 }
 
@@ -1188,7 +1191,20 @@ test_40() {
 run_test 40 "LNetAddPeer merges a pre-existing non-primary peer NID"
 
 test_50() {
-	reinit_dlc || return $?
+	# The default pool is LNET_NRB_LARGE 1 MiB buffers, about 1 GiB,
+	# which a small test node cannot spare. The *_router_buffers
+	# parameters are read-only, so they have to be set at load time.
+	# Keep the site options first so that these ones win.
+	local mod_opts="$MODOPTS_LNET"
+	mod_opts+=" tiny_router_buffers=16"
+	mod_opts+=" small_router_buffers=8"
+	mod_opts+=" large_router_buffers=4"
+
+	cleanup_lnet || error "Failed to unload modules before test execution"
+
+	configure_dlc $mod_opts || error "configure_dlc failed $?"
+
+	define_global_yaml
 
 	local param
 
@@ -1206,7 +1222,7 @@ EOF
 	do_lnetctl import $tyaml ||
 		error "Import failed rc = $?"
 
-	# Get default buffer sizes for later
+	# Get the configured buffer sizes for later
 	local tiny=$($LNETCTL export --backup |
 		     awk '/\s+tiny:/{print $NF}')
 	local small=$($LNETCTL export --backup |
@@ -1268,6 +1284,8 @@ EOF
 		error "Expect small buffers $small found $small2"
 	((large2 == large)) ||
 		error "Expect large buffers $large found $large2"
+
+	cleanup_lnet
 }
 run_test 50 "Enable/disable routing via yaml import"
 
@@ -1922,7 +1940,10 @@ test_109() {
 	FAKE_IF_ALIAS="${FAKE_IF}"
 	FAKE_IF_ALIAS+=":0"
 
-	ifconfig "$FAKE_IF_ALIAS" "$FAKE_IP_ALIAS" up ||
+	echo "ip addr add \"${FAKE_IP_ALIAS}/31\" dev $FAKE_IF" \
+		"label $FAKE_IF_ALIAS"
+	ip addr add "${FAKE_IP_ALIAS}/31" dev "$FAKE_IF" \
+		label "$FAKE_IF_ALIAS" ||
 		error "Failed to add fake IF alias"
 
 	reinit_dlc || return $?
@@ -1937,9 +1958,6 @@ test_109() {
 	# add interface with shorter name first
 	add_net "tcp" "$FAKE_IF" || return $?
 	add_net "tcp" "$FAKE_IF_ALIAS" || return $?
-
-	ifconfig "$FAKE_IF_ALIAS" "$FAKE_IP_ALIAS" down ||
-		error "Failed to clean up fake IF alias"
 
 	cleanup_fakeif
 	cleanup_lnet
@@ -3052,7 +3070,8 @@ setup_health_test() {
 	local mr=$($LNETCTL peer show --nid ${RNIDS[0]} |
 		   awk '/Multi-Rail/{print $NF}')
 
-	if ${need_mr} && [[ $mr == False ]]; then
+	# 2.16 and prior routers return capitalized False, so normalize it
+	if ${need_mr} && [[ ${mr,,} == false ]]; then
 		cleanup_health_test || return $?
 		skip "Need MR peer"
 	fi
@@ -4191,17 +4210,28 @@ check_router_ni_status() {
 	local actual_remote
 	local chk_intvl
 	local timeout
-	local i
+	local idle_period
+	local deadline
+	local samples=0
 
 	chk_intvl=$(cat /sys/module/lnet/parameters/alive_router_check_interval)
 	timeout=$(cat /sys/module/lnet/parameters/router_ping_timeout)
+
+	# A router marks an NI down only after its net has been idle for
+	# alive_router_check_interval + router_ping_timeout. Any ping received
+	# on that net restarts the interval, so allow for a few of them. Poll
+	# on both a wall clock budget and a sample count so that slow do_node
+	# calls cannot shorten the wait.
+	idle_period=$((chk_intvl + timeout))
 
 	actual_local=$(do_node $router "$LNETCTL net show --net $LOCAL_NET" |
 		       awk '/status/{print $NF}')
 	actual_remote=$(do_node $router "$LNETCTL net show --net $REMOTE_NET" |
 			awk '/status/{print $NF}')
 
-	for ((i = 0; i < $((chk_intvl + timeout)); i++)); do
+	deadline=$((SECONDS + 3 * idle_period))
+
+	while ((SECONDS < deadline || samples < idle_period)); do
 		if [[ $actual_local == $expected_local ]] &&
 		   [[ $actual_remote == $expected_remote ]]; then
 			break
@@ -4216,6 +4246,7 @@ check_router_ni_status() {
 		actual_remote=$(do_node $router \
 				"$LNETCTL net show --net $REMOTE_NET" |
 				awk '/status/{print $NF}')
+		samples=$((samples + 1))
 	done
 
 	[[ $actual_local == $expected_local ]] ||
@@ -4815,15 +4846,19 @@ test_233() {
 }
 run_test 233 "Check for successful resends"
 
+# Every NI configured on ${NETTYPE} must report ${para}: ${value}.
 check_parameter() {
 	local para=$1
 	local value=$2
 
-	echo "check parameter ${para} value ${value}"
+	local out=$(do_lnetctl net show --net ${NETTYPE} -v | tee /dev/stderr)
+	local expect=$(grep -c "nid:" <<<"${out}")
 
-	return $(( $(do_lnetctl net show -v | \
-		     tee /dev/stderr | \
-		     grep -c "^ \+${para}: ${value}$") != ${#INTERFACES[@]} ))
+	echo "check parameter ${para} value ${value} on ${expect} NI(s)"
+
+	((expect > 0)) || return 1
+
+	return $(( $(grep -c "^ \+${para}: ${value}$" <<<"${out}") != expect ))
 }
 
 test_234() {
@@ -5104,7 +5139,8 @@ test_238() {
 	local mr=$(do_node ${ROUTERS[0]} "$LNETCTL peer show --nid $my_nid" |
 		   awk '/Multi-Rail:/{print $NF}')
 
-	[[ $mr == false ]] ||
+	# 2.16 and prior routers return capitalized False, so normalize it
+	[[ ${mr,,} == false ]] ||
 		error "Expect 'Multi-Rail: false', found $mr"
 
 	do_mr_forwarding_test false || return $?
@@ -6540,7 +6576,9 @@ test_475() {
 	nid=$($LCTL list_nids | head -n 1)
 	[[ -n $nid ]] || error "No local NID"
 
-	# Latency stats are on by default. Start from a known-zero baseline.
+	# Capture survives reinit_dlc(), so an earlier test may have left it
+	# off. Start from a known-enabled, known-zero baseline.
+	do_lnetctl set latency_stats 1 || error "set latency_stats 1 failed"
 	do_lnetctl stats reset || error "stats reset failed"
 
 	# Pinging ourselves drives a GET round trip on the local NI and the
@@ -6575,6 +6613,43 @@ test_475() {
 		error "local NI get_rtt_samples is $samples after reset"
 }
 run_test 475 "per-operation latency stats populate and reset"
+
+test_476() {
+	local nid out samples i
+
+	reinit_dlc || return $?
+	add_net "${NETTYPE}" "${INTERFACES[0]}" || return $?
+
+	nid=$($LCTL list_nids | head -n 1)
+	[[ -n $nid ]] || error "No local NID"
+
+	# With capture disabled, pinging must not add latency samples.
+	do_lnetctl set latency_stats 0 || error "set latency_stats 0 failed"
+	do_lnetctl stats reset || error "stats reset failed"
+	for i in $(seq 1 10); do
+		do_lnetctl ping $nid > /dev/null || error "ping $nid failed"
+	done
+	out=$($LNETCTL peer show -v 4 --nid $nid)
+	samples=$(sum_lat_field "$out" get_rtt_samples)
+	((samples == 0)) ||
+		error "get_rtt_samples is $samples with capture off"
+
+	# The setting must be visible to "lnetctl global show".
+	out=$($LNETCTL global show)
+	[[ $out =~ latency_stats:[[:space:]]*0 ]] ||
+		error "latency_stats not reported as 0 by global show"
+
+	# Re-enabling capture, pinging must add samples again.
+	do_lnetctl set latency_stats 1 || error "set latency_stats 1 failed"
+	for i in $(seq 1 10); do
+		do_lnetctl ping $nid > /dev/null || error "ping $nid failed"
+	done
+	out=$($LNETCTL peer show -v 4 --nid $nid)
+	samples=$(sum_lat_field "$out" get_rtt_samples)
+	((samples > 0)) ||
+		error "get_rtt_samples is $samples with capture on"
+}
+run_test 476 "lnetctl set latency_stats toggles capture"
 
 test_500() {
 	reinit_dlc || return $?

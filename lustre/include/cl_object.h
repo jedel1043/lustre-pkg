@@ -78,7 +78,7 @@
 #include <linux/spinlock.h>
 #include <lustre_compat/linux/string.h>
 #include <linux/wait.h>
-#include <linux/pagevec.h>
+#include <lustre_compat/linux/folio_batch.h>
 
 #include <lu_object.h>
 #include <lustre_dlm.h>
@@ -808,9 +808,9 @@ struct cl_page_slice {
  * \ingroup cl_lock
  */
 enum cl_lock_mode {
-	CLM_READ,
-	CLM_WRITE,
-	CLM_GROUP,
+	CLM_READ = READ,	/* 0 */
+	CLM_WRITE = WRITE,	/* 1 */
+	CLM_GROUP,		/* 2 */
 	CLM_MAX,
 };
 
@@ -818,8 +818,8 @@ enum cl_lock_mode {
  * Requested transfer type.
  */
 enum cl_req_type {
-	CRT_READ,
-	CRT_WRITE,
+	CRT_READ = READ,	/* 0 */
+	CRT_WRITE = WRITE,	/* 1 */
 	CRT_NR
 };
 
@@ -2627,11 +2627,6 @@ void ll_release_user_pages(struct page **pages, int npages);
 int ll_allocate_dio_buffer(struct cl_dio_pages *cdp, size_t io_size);
 void ll_free_dio_buffer(struct cl_dio_pages *cdp);
 ssize_t ll_dio_user_copy(struct cl_sub_dio *sdio);
-
-#ifndef HAVE_KTHREAD_USE_MM
-#define kthread_use_mm(mm) use_mm(mm)
-#define kthread_unuse_mm(mm) unuse_mm(mm)
-#endif
 
 /** \defgroup cl_env cl_env
  *

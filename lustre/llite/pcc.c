@@ -114,7 +114,9 @@ int pcc_super_init(struct pcc_super *super)
 	INIT_LIST_HEAD(&super->pccs_datasets);
 	super->pccs_generation = 1;
 	super->pccs_async_threshold = PCC_DEFAULT_ASYNC_THRESHOLD;
-	super->pccs_mode = S_IRUSR;
+	super->pccs_mode = 0400;
+	atomic_set(&super->pccs_attach_thread, 0);
+	super->pccs_attach_thread_max = PCC_ATTACH_THREAD_MAX_DEFAULT;
 
 	return 0;
 }
@@ -587,82 +589,89 @@ static int
 pcc_parse_value_pair(struct pcc_cmd *cmd, char *buffer)
 {
 	char *key, *val;
-	unsigned long id;
 	bool enable;
 	int rc;
+
+	ENTRY;
 
 	val = buffer;
 	key = strsep(&val, "=");
 	if (val == NULL || strlen(val) == 0)
-		return -EINVAL;
+		RETURN(-EINVAL);
 
 	/* Key of the value pair */
-	if (strcmp(key, "rwid") == 0) {
-		rc = kstrtoul(val, 10, &id);
+	if (strcmp(key, PCC_CMDNAME_RWID) == 0) {
+		u32 id;
+
+		rc = kstrtou32(val, 10, &id);
 		if (rc)
-			return rc;
-		if (id <= 0)
-			return -EINVAL;
+			RETURN(rc);
+		if (id == 0)
+			RETURN(-EINVAL);
 		cmd->u.pccc_add.pccc_rwid = id;
-	} else if (strcmp(key, "roid") == 0) {
-		rc = kstrtoul(val, 10, &id);
+	} else if (strcmp(key, PCC_CMDNAME_ROID) == 0) {
+		u32 id;
+
+		rc = kstrtou32(val, 10, &id);
 		if (rc)
-			return rc;
-		if (id <= 0)
-			return -EINVAL;
+			RETURN(rc);
+		if (id == 0)
+			RETURN(-EINVAL);
 		cmd->u.pccc_add.pccc_roid = id;
-	} else if (strcmp(key, "auto_attach") == 0) {
+	} else if (strcmp(key, PCC_CMDNAME_AUTO_ATTACH) == 0) {
 		rc = kstrtobool(val, &enable);
 		if (rc)
-			return rc;
+			RETURN(rc);
 		if (enable)
 			cmd->u.pccc_add.pccc_flags |= PCC_DATASET_AUTO_ATTACH;
 		else
 			cmd->u.pccc_add.pccc_flags &= ~PCC_DATASET_AUTO_ATTACH;
-	} else if (strcmp(key, "open_attach") == 0) {
+	} else if (strcmp(key, PCC_CMDNAME_OPEN_ATTACH) == 0) {
 		rc = kstrtobool(val, &enable);
 		if (rc)
-			return rc;
+			RETURN(rc);
 		if (enable)
 			cmd->u.pccc_add.pccc_flags |= PCC_DATASET_OPEN_ATTACH;
 		else
 			cmd->u.pccc_add.pccc_flags &= ~PCC_DATASET_OPEN_ATTACH;
-	} else if (strcmp(key, "io_attach") == 0) {
+	} else if (strcmp(key, PCC_CMDNAME_IO_ATTACH) == 0) {
 		rc = kstrtobool(val, &enable);
 		if (rc)
-			return rc;
+			RETURN(rc);
 		if (enable)
 			cmd->u.pccc_add.pccc_flags |= PCC_DATASET_IO_ATTACH;
 		else
 			cmd->u.pccc_add.pccc_flags &= ~PCC_DATASET_IO_ATTACH;
-	} else if (strcmp(key, "stat_attach") == 0) {
+	} else if (strcmp(key, PCC_CMDNAME_STAT_ATTACH) == 0) {
 		rc = kstrtobool(val, &enable);
 		if (rc)
-			return rc;
+			RETURN(rc);
 		if (enable)
 			cmd->u.pccc_add.pccc_flags |= PCC_DATASET_STAT_ATTACH;
 		else
 			cmd->u.pccc_add.pccc_flags &= ~PCC_DATASET_STAT_ATTACH;
-	} else if (strcmp(key, "rwpcc") == 0 || strcmp(key, "pccrw") == 0) {
+	} else if (strcmp(key, PCC_CMDNAME_RWPCC) == 0 ||
+		   strcmp(key, PCC_CMDNAME_PCCRW) == 0) {
 		rc = kstrtobool(val, &enable);
 		if (rc)
-			return rc;
+			RETURN(rc);
 		if (enable)
 			cmd->u.pccc_add.pccc_flags |= PCC_DATASET_PCCRW;
 		else
 			cmd->u.pccc_add.pccc_flags &= ~PCC_DATASET_PCCRW;
-	} else if (strcmp(key, "ropcc") == 0 || strcmp(key, "pccro") == 0) {
+	} else if (strcmp(key, PCC_CMDNAME_ROPCC) == 0 ||
+		   strcmp(key, PCC_CMDNAME_PCCRO) == 0) {
 		rc = kstrtobool(val, &enable);
 		if (rc)
-			return rc;
+			RETURN(rc);
 		if (enable)
 			cmd->u.pccc_add.pccc_flags |= PCC_DATASET_PCCRO;
 		else
 			cmd->u.pccc_add.pccc_flags &= ~PCC_DATASET_PCCRO;
-	} else if (strcmp(key, "mmap_conv") == 0) {
+	} else if (strcmp(key, PCC_CMDNAME_MMAP_CONV) == 0) {
 		rc = kstrtobool(val, &enable);
 		if (rc)
-			return rc;
+			RETURN(rc);
 		if (enable)
 #ifdef HAVE_ADD_TO_PAGE_CACHE_LOCKED
 			cmd->u.pccc_add.pccc_flags |= PCC_DATASET_MMAP_CONV;
@@ -671,24 +680,24 @@ pcc_parse_value_pair(struct pcc_cmd *cmd, char *buffer)
 #endif
 		else
 			cmd->u.pccc_add.pccc_flags &= ~PCC_DATASET_MMAP_CONV;
-	} else if (strcmp(key, "proj_quota") == 0) {
+	} else if (strcmp(key, PCC_CMDNAME_PROJ_QUOTA) == 0) {
 		rc = kstrtobool(val, &enable);
 		if (rc)
-			return rc;
+			RETURN(rc);
 		if (enable)
 			cmd->u.pccc_add.pccc_flags |= PCC_DATASET_PROJ_QUOTA;
 		else
 			cmd->u.pccc_add.pccc_flags &= ~PCC_DATASET_PROJ_QUOTA;
-	} else if (strcmp(key, "hsmtool") == 0) {
+	} else if (strcmp(key, PCC_YAML_HSMTOOL) == 0) {
 		cmd->u.pccc_add.pccc_hsmtool_type = hsmtool_string2type(val);
 		if (cmd->u.pccc_add.pccc_hsmtool_type != HSMTOOL_POSIX_V1 &&
 		    cmd->u.pccc_add.pccc_hsmtool_type != HSMTOOL_POSIX_V2)
-			return -EINVAL;
+			RETURN(-EINVAL);
 	} else {
-		return -EINVAL;
+		RETURN(-EINVAL);
 	}
 
-	return 0;
+	RETURN(0);
 }
 
 static int
@@ -697,6 +706,8 @@ pcc_parse_value_pairs(struct pcc_cmd *cmd, char *buffer)
 	char *val;
 	char *token;
 	int rc;
+
+	ENTRY;
 
 	switch (cmd->pccc_cmd) {
 	case PCC_ADD_DATASET:
@@ -709,7 +720,7 @@ pcc_parse_value_pairs(struct pcc_cmd *cmd, char *buffer)
 	case PCC_CLEAR_ALL:
 		break;
 	default:
-		return -EINVAL;
+		RETURN(-EINVAL);
 	}
 
 	val = buffer;
@@ -717,10 +728,10 @@ pcc_parse_value_pairs(struct pcc_cmd *cmd, char *buffer)
 		token = strsep(&val, " ");
 		rc = pcc_parse_value_pair(cmd, token);
 		if (rc)
-			return rc;
+			RETURN(rc);
 	}
 
-	return 0;
+	RETURN(0);
 }
 
 static void
@@ -1196,7 +1207,8 @@ pcc_cmd_parse(char *buffer, unsigned long count)
 		GOTO(out, rc = -ENOMEM);
 
 	/* clear all setting */
-	if (strncmp(buffer, "clear", 5) == 0) {
+	if (strncmp(buffer, PCC_CMDNAME_CLEAR,
+		    strlen(PCC_CMDNAME_CLEAR)) == 0) {
 		cmd->pccc_cmd = PCC_CLEAR_ALL;
 		GOTO(out, rc = 0);
 	}
@@ -1207,21 +1219,24 @@ pcc_cmd_parse(char *buffer, unsigned long count)
 		GOTO(out_free_cmd, rc = -EINVAL);
 
 	/* Type of the command */
-	if (strcmp(token, "add") == 0) {
+	if (strcmp(token, PCC_CMDNAME_ADD) == 0) {
 		cmd->pccc_cmd = PCC_ADD_DATASET;
 		INIT_LIST_HEAD(&cmd->u.pccc_add.pccc_conds);
-	} else if (strcmp(token, "del") == 0) {
+	} else if (strcmp(token, PCC_CMDNAME_DEL) == 0) {
 		cmd->pccc_cmd = PCC_DEL_DATASET;
 	} else {
 		GOTO(out_free_cmd, rc = -EINVAL);
 	}
 
-	/* Pathname of the dataset */
-	token = strsep(&val, " ");
-	if ((val == NULL && cmd->pccc_cmd != PCC_DEL_DATASET) ||
-	    !pathname_is_valid(token))
-		GOTO(out_free_cmd, rc = -EINVAL);
-	cmd->pccc_pathname = token;
+	if (cmd->pccc_cmd == PCC_ADD_DATASET ||
+	    cmd->pccc_cmd == PCC_DEL_DATASET) {
+		/* Pathname of the dataset */
+		token = strsep(&val, " ");
+		if ((val == NULL && cmd->pccc_cmd != PCC_DEL_DATASET) ||
+		    !pathname_is_valid(token))
+			GOTO(out_free_cmd, rc = -EINVAL);
+		cmd->pccc_pathname = token;
+	}
 
 	if (cmd->pccc_cmd == PCC_ADD_DATASET) {
 		/* List of ID */
@@ -1725,7 +1740,7 @@ static int pcc_try_datasets_attach(struct inode *inode, enum pcc_io_type iot,
 	if (!rc && !*cached) {
 		/*
 		 * Currently auto attach strategy for a PCC backend is
-		 * unchangeable once once it was added into the PCC datasets on
+		 * unchangeable once it was added into the PCC datasets on
 		 * a client as the support to change auto attach strategy is
 		 * not implemented yet.
 		 */
@@ -1767,6 +1782,7 @@ static struct pcc_attach_context *
 pcc_attach_context_alloc(struct file *file, struct inode *inode, __u32 id)
 {
 	struct pcc_attach_context *pccx;
+	struct pcc_super *super = ll_i2pccs(inode);
 
 	OBD_ALLOC_PTR(pccx);
 	if (!pccx)
@@ -1775,12 +1791,16 @@ pcc_attach_context_alloc(struct file *file, struct inode *inode, __u32 id)
 	pccx->pccx_file = get_file(file);
 	pccx->pccx_inode = inode;
 	pccx->pccx_attach_id = id;
+	atomic_inc(&super->pccs_attach_thread);
 
 	return pccx;
 }
 
 static inline void pcc_attach_context_free(struct pcc_attach_context *pccx)
 {
+	struct pcc_super *super = ll_i2pccs(pccx->pccx_inode);
+
+	atomic_dec(&super->pccs_attach_thread);
 	LASSERT(pccx->pccx_file != NULL);
 	fput(pccx->pccx_file);
 	OBD_FREE_PTR(pccx);
@@ -1897,16 +1917,33 @@ out:
 	RETURN(rc);
 }
 
-static int pcc_readonly_attach_sync(struct file *file,
-				    struct inode *inode, __u32 roid);
+static int pcc_readonly_attach_sync(struct file *file, struct inode *inode,
+				    u32 roid);
 
-static inline int pcc_do_readonly_attach(struct file *file,
-					 struct inode *inode, __u32 roid)
+static inline int pcc_do_readonly_attach(struct file *file, struct inode *inode,
+					 u32 roid)
 {
+	struct pcc_super *super = ll_i2pccs(inode);
+	bool async = true;
 	int rc;
 
-	if (max_t(__u64, ll_i2info(inode)->lli_lazysize, i_size_read(inode)) >=
-	    ll_i2pccs(inode)->pccs_async_threshold) {
+	/* force sync if we're over the active attach limit, so this thread
+	 * can't keep increasing the thread count.  This lets us exceed the
+	 * number of active threads by $NUMTHREADS, but that should be fine
+	 * as long as we avoid unbounded numbers of kthreads.
+	 */
+	if (atomic_read(&super->pccs_attach_thread) >=
+	    super->pccs_attach_thread_max)
+		async = false;
+	/* if the file size is < the async threshold, don't do async */
+	if (max_t(__u64, ll_i2info(inode)->lli_lazysize, i_size_read(inode)) <
+	    super->pccs_async_threshold) {
+		CDEBUG(D_CACHE, "%s: attach thread limit %u hit, using sync\n",
+		       ll_i2sbi(inode)->ll_fsname, super->pccs_attach_thread_max);
+		async = false;
+	}
+
+	if (async) {
 		rc = pcc_readonly_attach_async(file, inode, roid);
 		if (!rc || rc == -EINPROGRESS)
 			return rc;
@@ -2345,10 +2382,10 @@ bool pcc_inode_permission(struct inode *inode)
 {
 	umode_t mask = inode->i_mode & ll_i2pccs(inode)->pccs_mode;
 
-	return (mask & (S_IRUSR | S_IXUSR) &&
+	return (mask & (0500) &&
 		inode_owner_or_capable(&nop_mnt_idmap, inode)) ||
-	       (mask & (S_IRGRP | S_IXGRP) && in_group_p(inode->i_gid)) ||
-	       (mask & (S_IROTH | S_IXOTH));
+	       (mask & (0050) && in_group_p(inode->i_gid)) ||
+	       (mask & (0005));
 }
 
 int pcc_file_open(struct inode *inode, struct file *file)
@@ -3669,11 +3706,12 @@ static int pcc_filp_write(struct file *filp, const void *buf, ssize_t count,
 
 static ssize_t pcc_copy_data(struct file *src, struct file *dst)
 {
+	size_t buf_len = PCC_COPY_BUFFER_BYTES;
+	struct inode *inode = file_inode(src);
+	loff_t offset = 0;
 	ssize_t rc = 0;
 	ssize_t rc2;
-	loff_t pos, offset = 0;
-	size_t buf_len = 1048576;
-	struct inode *inode = file_inode(src);
+	loff_t pos;
 	void *buf;
 
 	ENTRY;
@@ -3722,10 +3760,10 @@ out_free:
 
 static int pcc_attach_data_archive(struct file *file, struct inode *inode,
 				   struct pcc_dataset *dataset,
-				   struct dentry **dentry)
+				   struct dentry **pcc_dentry)
 {
 	const struct cred *old_cred;
-	struct file *pcc_filp;
+	struct file *pcc_file;
 	bool direct = false;
 	struct path path;
 	ssize_t ret;
@@ -3735,12 +3773,13 @@ static int pcc_attach_data_archive(struct file *file, struct inode *inode,
 	ENTRY;
 
 	old_cred = override_creds(pcc_super_cred(inode->i_sb));
-	rc = __pcc_inode_create(dataset, &ll_i2info(inode)->lli_fid, dentry);
+	rc = __pcc_inode_create(dataset, &ll_i2info(inode)->lli_fid,
+				pcc_dentry);
 	if (rc)
 		GOTO(out_cred, rc);
 
 	path.mnt = dataset->pccd_path.mnt;
-	path.dentry = *dentry;
+	path.dentry = *pcc_dentry;
 	/* If the inode is encrypted, we want the PCC file to be synced to the
 	 * storage. This is necessary as we are going to decrypt the page cache
 	 * pages of the PCC inode later in pcc_file_read_iter(), but still we
@@ -3748,18 +3787,18 @@ static int pcc_attach_data_archive(struct file *file, struct inode *inode,
 	 */
 	if (IS_ENCRYPTED(inode))
 		flags |= O_SYNC;
-	pcc_filp = dentry_open(&path, flags, current_cred());
-	if (IS_ERR_OR_NULL(pcc_filp)) {
-		rc = pcc_filp == NULL ? -EINVAL : PTR_ERR(pcc_filp);
+	pcc_file = dentry_open(&path, flags, current_cred());
+	if (IS_ERR_OR_NULL(pcc_file)) {
+		rc = pcc_file == NULL ? -EINVAL : PTR_ERR(pcc_file);
 		GOTO(out_dentry, rc);
 	}
 
-	rc = pcc_inode_reset_iattr(inode, *dentry, ATTR_UID | ATTR_GID,
+	rc = pcc_inode_reset_iattr(inode, *pcc_dentry, ATTR_UID | ATTR_GID,
 				   old_cred->uid, old_cred->gid, 0);
 	if (rc)
 		GOTO(out_fput, rc);
 
-	rc = pcc_file_reset_projid(dataset, pcc_filp,
+	rc = pcc_file_reset_projid(dataset, pcc_file,
 				    ll_i2info(inode)->lli_projid);
 	if (rc)
 		GOTO(out_fput, rc);
@@ -3778,26 +3817,29 @@ static int pcc_attach_data_archive(struct file *file, struct inode *inode,
 		direct = true;
 	}
 
-	ret = pcc_copy_data(file, pcc_filp);
+	ret = pcc_copy_data(file, pcc_file);
 	if (direct)
 		file->f_flags |= O_DIRECT;
+
+	CDEBUG(D_CACHE, "Copied data from OSTs to PCC for %pd: rc = %llu\n",
+	       *pcc_dentry, (long long)ret);
+
 	if (ret < 0)
 		GOTO(out_fput, rc = ret);
-
 	/*
 	 * It must to truncate the PCC copy to the same size of the Lustre
 	 * copy after copy data. Otherwise, it may get wrong file size after
 	 * re-attach a file. See LU-13023 for details.
 	 */
-	rc = pcc_inode_reset_iattr(inode, *dentry,
+	rc = pcc_inode_reset_iattr(inode, *pcc_dentry,
 				   ATTR_SIZE | ATTR_MTIME | ATTR_MTIME_SET,
 				   KUIDT_INIT(0), KGIDT_INIT(0), ret);
 out_fput:
-	fput(pcc_filp);
+	fput(pcc_file);
 out_dentry:
 	if (rc) {
-		pcc_inode_remove(inode, *dentry);
-		dput(*dentry);
+		pcc_inode_remove(inode, *pcc_dentry);
+		dput(*pcc_dentry);
 	}
 out_cred:
 	revert_creds(old_cred);

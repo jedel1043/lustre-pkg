@@ -22,8 +22,9 @@
 #include <linux/spinlock.h>
 #include <linux/sysfs.h>
 #include <lustre_compat/linux/xarray.h>
-#include <lustre_compat/linux/linux-misc.h>
 
+#include <linux/libcfs/libcfs.h>
+#include <linux/libcfs/libcfs_fail.h>
 #include <uapi/linux/lustre/lustre_idl.h>
 #include <lustre_lib.h>
 #include <lustre_export.h>
@@ -483,8 +484,9 @@ struct niobuf_local {
 	__u32		lnb_len;
 	__u32		lnb_flags;
 	int		lnb_rc;
-	struct page	*lnb_page;
+	struct folio	*lnb_folio;
 	void		*lnb_data;
+	__u32		lnb_fpgno;
 	__be16		lnb_guards[MAX_GUARD_NUMBER];
 	__u16		lnb_guard_rpc:1;
 	__u16		lnb_guard_disk:1;
@@ -495,6 +497,27 @@ struct niobuf_local {
 	/* page from TLS for dio/fake rw */
 	__u16		lnb_dio:1;
 };
+
+static inline size_t lnb_pgno(struct niobuf_local *lnb)
+{
+	return lnb->lnb_fpgno;
+}
+
+static inline void *lnb_kmap_local(struct niobuf_local *lnb)
+{
+	return kmap_local_folio(lnb->lnb_folio, lnb_pgno(lnb) << PAGE_SHIFT);
+}
+
+static inline void *ll_lnb_kmap_local(struct niobuf_local *lnb)
+{
+	/* for kernels where kmap_local_* is not available, use kmap() */
+	return ll_kmap_local_folio(lnb->lnb_folio, lnb_pgno(lnb) << PAGE_SHIFT);
+}
+
+static inline struct page *lnb_folio_page(struct niobuf_local *lnb)
+{
+	return folio_page(lnb->lnb_folio, lnb_pgno(lnb));
+}
 
 struct tgt_thread_big_cache {
 	struct niobuf_local	local[PTLRPC_MAX_BRW_PAGES];
@@ -656,6 +679,16 @@ enum {
 	OBDF_NO_IR,		/* no imperative recovery. */
 	OBDF_PROCESS_CONF,	/* device is processing mgs config */
 	OBDF_CHECKSUM_DUMP,	/* dump pages upon cksum error */
+	OBDF_DYNAMIC_NIDS,	/* Allow dynamic NIDs on device */
+	OBDF_READ_ONLY,		/* device is read-only */
+#ifdef CONFIG_LUSTRE_FS_SERVER
+	/* start of the server start range */
+	OBDF_SERVER_OPTS = 65,
+
+	/* device need scrub */
+	OBDF_NEED_SCRUB	= OBDF_SERVER_OPTS,
+	OBDF_NO_TRANSNO,	/* no committed-transno notification */
+#endif
 	OBDF_NUM_FLAGS,
 };
 
@@ -674,14 +707,6 @@ struct obd_device {
 
 	/* bitfield modification is protected by obd_dev_lock */
 	DECLARE_BITMAP(obd_flags, OBDF_NUM_FLAGS);
-	unsigned long
-		obd_dynamic_nids:1,	/* Allow dynamic NIDs on device */
-		obd_read_only:1,	/* device is read-only */
-		obd_need_scrub:1;	/* device need scrub */
-#ifdef CONFIG_LUSTRE_FS_SERVER
-	/* no committed-transno notification */
-	unsigned long			obd_no_transno:1;
-#endif
 
 	/* use separate field as it is set in interrupt to not mess with
 	 * protection of other bits using _bh lock
@@ -778,7 +803,6 @@ struct obd_device {
 	struct dentry			*obd_svc_debugfs_entry;
 	struct lprocfs_stats		*obd_svc_stats;
 	const struct attribute	       **obd_attrs;
-	struct lprocfs_vars	*obd_vars;
 	struct ldebugfs_vars	*obd_debugfs_vars;
 	struct list_head	obd_evict_list;	/* protected with pet_lock */
 	atomic_t		obd_eviction_count;
@@ -1544,8 +1568,8 @@ static inline void client_adjust_max_dirty(struct client_obd *cli)
 			cli->cl_dirty_max_pages = dirty_max;
 	}
 
-	if (cli->cl_dirty_max_pages > compat_totalram_pages() / 8)
-		cli->cl_dirty_max_pages = compat_totalram_pages() / 8;
+	if (cli->cl_dirty_max_pages > totalram_pages() / 8)
+		cli->cl_dirty_max_pages = totalram_pages() / 8;
 
 	/* This value is exported to userspace through the max_dirty_mb
 	 * parameter.  So we round up the number of pages to make it a round

@@ -26,7 +26,7 @@
 #include <linux/backing-dev.h>
 #include <linux/slab.h>
 #include <linux/security.h>
-#include <linux/pagevec.h>
+#include <lustre_compat/linux/folio_batch.h>
 #include <linux/workqueue.h>
 #include <lustre_compat/linux/shrinker.h>
 #include <lustre_compat/linux/xarray.h>
@@ -34,20 +34,6 @@
 #include <lustre_compat/linux/blkdev.h>
 #include <lustre_compat/linux/posix_acl_xattr.h>
 #include <obd_support.h>
-
-#ifdef HAVE_4ARGS_VFS_SYMLINK
-#define ll_vfs_symlink(dir, dentry, mnt, path, mode) \
-		       vfs_symlink(dir, dentry, path, mode)
-#else
-#define ll_vfs_symlink(dir, dentry, mnt, path, mode) \
-		       vfs_symlink(dir, dentry, path)
-#endif
-
-#ifdef HAVE_BVEC_ITER
-#define bio_start_sector(bio) (bio->bi_iter.bi_sector)
-#else
-#define bio_start_sector(bio) (bio->bi_sector)
-#endif
 
 #ifdef HAVE_STRUCT_FILE_LOCK_CORE
 #define C_FLC_TYPE	c.flc_type
@@ -62,23 +48,6 @@
 #define C_FLC_FLAGS	fl_flags
 #define C_FLC_OWNER	fl_owner
 #endif
-
-static inline struct bio *cfs_bio_alloc(struct block_device *bdev,
-					unsigned short nr_vecs,
-					__u32 op, gfp_t gfp_mask)
-{
-	struct bio *bio;
-#ifdef HAVE_BIO_ALLOC_WITH_BDEV
-	bio = bio_alloc(bdev, nr_vecs, op, gfp_mask);
-#else
-	bio = bio_alloc(gfp_mask, nr_vecs);
-	if (bio) {
-		bio_set_dev(bio, bdev);
-		bio->bi_opf = op;
-	}
-#endif /* HAVE_BIO_ALLOC_WITH_BDEV */
-	return bio;
-}
 
 #ifdef HAVE_DENTRY_D_CHILDREN
 #define d_no_children(dentry)	(hlist_empty(&(dentry)->d_children))
@@ -168,18 +137,6 @@ static inline int ll_vfs_removexattr(struct dentry *dentry, struct inode *inode,
 #define LL_BDI_CAP_FLAGS	(BDI_CAP_CGROUP_WRITEBACK | \
 				 BDI_CAP_WRITEBACK | BDI_CAP_WRITEBACK_ACCT)
 
-#ifndef FALLOC_FL_COLLAPSE_RANGE
-#define FALLOC_FL_COLLAPSE_RANGE 0x08 /* remove a range of a file */
-#endif
-
-#ifndef FALLOC_FL_ZERO_RANGE
-#define FALLOC_FL_ZERO_RANGE 0x10 /* convert range to zeros */
-#endif
-
-#ifndef FALLOC_FL_INSERT_RANGE
-#define FALLOC_FL_INSERT_RANGE 0x20 /* insert space within file */
-#endif
-
 #ifdef HAVE_AOPS_MIGRATE_FOLIO
 #define folio_migr	folio
 #else
@@ -246,10 +203,17 @@ static inline void ll_security_release_secctx(char *secdata, u32 seclen,
 #define ll_set_acl(ns, inode, acl, type)	ll_set_acl(inode, acl, type)
 #endif
 
-#ifdef HAVE_RADIX_TREE_REPLACE_SLOT_3ARGS
-# define radix_tree_rcu	__rcu
-#else /* !HAVE_RADIX_TREE_REPLACE_SLOT_3ARGS */
-# define radix_tree_rcu
-#endif /* HAVE_RADIX_TREE_REPLACE_SLOT_3ARGS */
+#ifdef HAVE_IS_PCI_P2PDMA_PAGE
+#include <linux/pci-p2pdma.h>
+#endif
+
+static inline bool lustre_is_p2prdma_page(struct page *page)
+{
+#ifdef HAVE_IS_PCI_P2PDMA_PAGE
+	return is_pci_p2pdma_page(page);
+#else
+	return false;
+#endif
+}
 
 #endif /* _LUSTRE_COMPAT_H */

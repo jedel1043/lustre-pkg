@@ -23,6 +23,7 @@ esac
 AS_IF([test -z "$LDISKFS_SERIES"], [
 AS_IF([test x$RHEL_KERNEL = xyes], [
 	case $RHEL_RELEASE_NO in
+	102)    LDISKFS_SERIES="6.12-rhel10.2.series"   ;;
 	101)    LDISKFS_SERIES="6.12-rhel10.1.series"   ;;
 	100)    LDISKFS_SERIES="6.12-rhel10.0.series"   ;;
 	98)     LDISKFS_SERIES="5.14-rhel9.8.series"    ;;
@@ -47,7 +48,6 @@ AS_IF([test x$RHEL_KERNEL = xyes], [
 	86)     LDISKFS_SERIES="4.18-rhel8.6.series"    ;;
 	85)     LDISKFS_SERIES="4.18-rhel8.5.series"    ;;
 	84)     LDISKFS_SERIES="4.18-rhel8.4.series"    ;;
-	79)	LDISKFS_SERIES="3.10-rhel7.9.series"	;;
 	esac
 ], [test x$SUSE_KERNEL = xyes], [
 	AS_VERSION_COMPARE([$LINUXRELEASE],[5.3.18],[

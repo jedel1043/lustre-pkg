@@ -279,10 +279,23 @@ void __ptlrpc_prep_bulk_page(struct ptlrpc_bulk_desc *desc,
 	LASSERT(len > 0);
 	LASSERT(pageoffset + len <= PAGE_SIZE);
 
+	/*
+	 * Each kiov adds at least PTLRPC_BULK_INTEROP_PAGE_SIZE to bd_iop_len,
+	 * so an MD fills to LNET_MTU at or before its LNET_MAX_IOV'th kiov and
+	 * the per-MD iov cap needs no runtime check. This holds only while an
+	 * MTU worth of interop pages fits the cap.
+	 */
+	BUILD_BUG_ON(LNET_MTU / PTLRPC_BULK_INTEROP_PAGE_SIZE > LNET_MAX_IOV);
 restart:
-	if (((desc->bd_iov_count % LNET_MAX_IOV) == 0) ||
-	    ((desc->bd_iop_len + PTLRPC_BULK_INTEROP_PAGE_SIZE) > LNET_MTU)) {
-		/* no free for align chunk */
+	/*
+	 * Open a new MD when the current one would exceed LNET_MTU. The
+	 * boundary is keyed on bd_iop_len, the 4KiB-virtual on-wire byte
+	 * count, because sender and receiver run this packer on page lists
+	 * that differ by page size and only bd_iop_len is identical on both;
+	 * both ends must therefore agree on where each MD begins and ends.
+	 */
+	if (desc->bd_md_count == 0 ||
+	    (desc->bd_iop_len + PTLRPC_BULK_INTEROP_PAGE_SIZE) > LNET_MTU) {
 		desc->bd_mds_off[desc->bd_md_count] = desc->bd_iov_count;
 		desc->bd_md_count++;
 		desc->bd_iop_len = 0;
@@ -1665,6 +1678,7 @@ static int after_reply(struct ptlrpc_request *req)
 
 	if (obd->obd_svc_stats) {
 		s64 qtime = ktime_us_delta(work_start, req->rq_queued_time_ns);
+
 		lprocfs_counter_add(obd->obd_svc_stats, PTLRPC_REQWAIT_CNTR,
 				    qtime);
 		ptlrpc_lprocfs_rpc_sent(req, timediff);
@@ -3558,6 +3572,7 @@ int ptlrpc_replay_req(struct ptlrpc_request *req)
 void ptlrpc_abort_inflight(struct obd_import *imp)
 {
 	struct ptlrpc_request *req;
+
 	ENTRY;
 
 	/*
@@ -3672,7 +3687,7 @@ void ptlrpc_init_xid(void)
  * Multi-bulk BRW RPCs consume multiple XIDs for each bulk transfer, starting
  * at the returned xid, up to xid + PTLRPC_BULK_OPS_COUNT - 1. The BRW RPC
  * itself uses the last bulk xid needed, so the server can determine the
- * the number of bulk transfers from the RPC XID and a bitmask.  The starting
+ * number of bulk transfers from the RPC XID and a bitmask.  The starting
  * xid must align to a power-of-two value.
  *
  * This is assumed to be true due to the initial ptlrpc_last_xid

@@ -15,15 +15,9 @@
 #define __LIBCFS_LIBCFS_H__
 
 #include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/workqueue.h>
-#include <linux/sched.h>
-#include <linux/sched/signal.h>
-
 #include <uapi/linux/lnet/libcfs_ioctl.h>
 #include <linux/libcfs/libcfs_debug.h>
 #include <linux/libcfs/libcfs_private.h>
-#include <linux/libcfs/libcfs_fail.h>
 
 #define LIBCFS_VERSION LUSTRE_VERSION_STRING
 
@@ -31,37 +25,33 @@ typedef s32 timeout_t;
 
 int libcfs_setup(void);
 
-#ifdef HAVE_CONST_CTR_TABLE
-#define DEFINE_CTL_TABLE_INIT(__name, init)\
-	const struct ctl_table *__name = init
-#define cfs_proc_handler(h)	(h)
-#else
-#define DEFINE_CTL_TABLE_INIT(__name, init)\
-	struct ctl_table *__name = init
-typedef int (*cfs_ctl_table_handler_t)(struct ctl_table *,
-				       int, void __user *, size_t *, loff_t *);
-#define cfs_proc_handler(h)	((cfs_ctl_table_handler_t)(h))
-#endif
+static inline unsigned long cfs_time_seconds(time64_t seconds)
+{
+	return nsecs_to_jiffies64(seconds * NSEC_PER_SEC);
+}
 
-void lnet_insert_debugfs(const struct ctl_table *table,
+/* Describes one libcfs/LNet debugfs file.  Never registered with the sysctl
+ * core, so the handler takes the __user pointer it is really given.
+ */
+struct lnet_debugfs_table {
+	const char	*procname;
+	void		*data;
+	int		maxlen;
+	umode_t		mode;
+	void		*extra1;
+	void		*extra2;
+	int		(*proc_handler)(const struct lnet_debugfs_table *table,
+					int write, void __user *buffer,
+					size_t *lenp, loff_t *ppos);
+};
+
+void lnet_insert_debugfs(const struct lnet_debugfs_table *table,
 			 struct module *mod, void **statep);
-void lnet_remove_debugfs(const struct ctl_table *table);
+void lnet_remove_debugfs(const struct lnet_debugfs_table *table);
 void lnet_debugfs_fini(void **statep);
 
-/* helper for sysctl handlers */
-int debugfs_doint(const struct ctl_table *table, int write,
+int debugfs_doint(const struct lnet_debugfs_table *table, int write,
 		  void __user *buffer, size_t *lenp, loff_t *ppos);
-
-/*
- * Memory
- */
-#if BITS_PER_LONG == 32
-/* limit to lowmem on 32-bit systems */
-#define NUM_CACHEPAGES \
-	min(compat_totalram_pages(), 1UL << (30 - PAGE_SHIFT) * 3 / 4)
-#else
-#define NUM_CACHEPAGES compat_totalram_pages()
-#endif
 
 #define wait_var_event_warning(var, condition, format, ...)		\
 do {									\

@@ -464,7 +464,6 @@ int client_obd_setup(struct obd_device *obd, struct lustre_cfg *lcfg)
 
 	cli->cl_supp_cksum_types = OBD_CKSUM_CRC32;
 	cli->cl_preferred_cksum_type = 0;
-#ifdef CONFIG_ENABLE_CHECKSUM
 	/* Turn on checksumming by default. */
 	cli->cl_checksum = 1;
 	/*
@@ -473,7 +472,6 @@ int client_obd_setup(struct obd_device *obd, struct lustre_cfg *lcfg)
 	 * through procfs.
 	 */
 	cli->cl_cksum_type = cli->cl_supp_cksum_types;
-#endif
 	atomic_set(&cli->cl_resends, OSC_DEFAULT_RESENDS);
 
 	/*
@@ -493,11 +491,11 @@ int client_obd_setup(struct obd_device *obd, struct lustre_cfg *lcfg)
 
 	if (!strcmp(name, LUSTRE_MDC_NAME)) {
 		cli->cl_max_rpcs_in_flight = OBD_MAX_RIF_DEFAULT;
-	} else if (compat_totalram_pages() >> (20 - PAGE_SHIFT) <= 128 /* MB */) {
+	} else if (totalram_pages() >> (20 - PAGE_SHIFT) <= 128 /* MB */) {
 		cli->cl_max_rpcs_in_flight = 2;
-	} else if (compat_totalram_pages() >> (20 - PAGE_SHIFT) <= 256 /* MB */) {
+	} else if (totalram_pages() >> (20 - PAGE_SHIFT) <= 256 /* MB */) {
 		cli->cl_max_rpcs_in_flight = 3;
-	} else if (compat_totalram_pages() >> (20 - PAGE_SHIFT) <= 512 /* MB */) {
+	} else if (totalram_pages() >> (20 - PAGE_SHIFT) <= 512 /* MB */) {
 		cli->cl_max_rpcs_in_flight = 4;
 	} else {
 		if (osc_on_mdt(obd->obd_name))
@@ -566,7 +564,7 @@ int client_obd_setup(struct obd_device *obd, struct lustre_cfg *lcfg)
 		 * detects that while process IR log for that OBD
 		 */
 		spin_lock(&obd->obd_dev_lock);
-		obd->obd_dynamic_nids = 1;
+		set_bit(OBDF_DYNAMIC_NIDS, obd->obd_flags);
 		spin_unlock(&obd->obd_dev_lock);
 	}
 	if (rc) {
@@ -1691,6 +1689,33 @@ dont_check_exports:
 		if (atomic_inc_return(&target->obd_connected_clients) ==
 		    atomic_read(&target->obd_max_recoverable_clients))
 			wake_up(&target->obd_next_transno_waitq);
+
+		/* record reconnect delay for real filesystem clients only,
+		 * skipping the self-export, server-to-server OSP/MDS-MDS
+		 * connections, and lightweight clients. Use the export's
+		 * saved connect flags so this is correct on reconnect too;
+		 * mds_conn / mds_mds_conn are only set on INITIAL connect.
+		 */
+		if (target->obd_recovery_start &&
+		    target->obd_self_export != export &&
+		    !(exp_connect_flags(export) &
+		      (OBD_CONNECT_MDS | OBD_CONNECT_MDS_MDS |
+		       OBD_CONNECT_LIGHTWEIGHT))) {
+			struct obd_device_target *obt = obd2obt(target);
+			time64_t delay = ktime_get_seconds() -
+					 target->obd_recovery_start;
+
+			if (delay < 0)
+				delay = 0;
+			if (export->exp_nid_stats)
+				export->exp_nid_stats->nid_reconnect_delay =
+					delay;
+			lprocfs_oh_tally_log2(&obt->obt_reconnect_hist,
+					      (unsigned int)delay);
+			lprocfs_reconnect_top_tally(
+				obt, &export->exp_connection->c_peer.nid,
+				delay);
+		}
 	}
 
 	/* Tell the client we're in recovery, when client is involved in it. */
@@ -3056,6 +3081,8 @@ void target_recovery_init(struct lu_target *lut, svc_handler_t handler)
 	obd->obd_next_recovery_transno = obd->obd_last_committed + 1;
 	obd->obd_recovery_start = 0;
 	obd->obd_recovery_end = 0;
+	lprocfs_oh_clear(&obd2obt(obd)->obt_reconnect_hist);
+	lprocfs_reconnect_top_clear(obd2obt(obd));
 	hrtimer_setup(&obd->obd_recovery_timer, target_recovery_expired,
 		      CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
 	target_start_recovery_thread(lut, handler);
@@ -3293,13 +3320,13 @@ void target_committed_to_req(struct ptlrpc_request *req)
 {
 	struct obd_export *exp = req->rq_export;
 
-	if (!exp->exp_obd->obd_no_transno && req->rq_repmsg != NULL)
+	if (!test_bit(OBDF_NO_TRANSNO, exp->exp_obd->obd_flags) && req->rq_repmsg != NULL)
 		lustre_msg_set_last_committed(req->rq_repmsg,
 					      exp->exp_last_committed);
 	else
 		DEBUG_REQ(D_IOCTL, req,
 			  "not sending last_committed update (%d/%d)",
-			  exp->exp_obd->obd_no_transno,
+			  test_bit(OBDF_NO_TRANSNO, exp->exp_obd->obd_flags),
 			  req->rq_repmsg == NULL);
 
 	CDEBUG(D_INFO, "last_committed %llu, transno %llu, xid %llu\n",

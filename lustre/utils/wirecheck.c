@@ -796,6 +796,9 @@ check_obdo(void)
 	CHECK_DEFINE_64X(OBD_MD_FLLAZYBLOCKS);
 	CHECK_DEFINE_64X(OBD_MD_ENCCTX);
 
+	CHECK_CVALUE(MBO_XA_SEC_SELINUX);
+	CHECK_CVALUE(MBO_XA_SEC_SMACK);
+
 	CHECK_CVALUE_X(OBD_FL_INLINEDATA);
 	CHECK_CVALUE_X(OBD_FL_OBDMDEXISTS);
 	CHECK_CVALUE_X(OBD_FL_DELORPHAN);
@@ -1054,7 +1057,7 @@ check_obd_statfs(void)
 	CHECK_MEMBER(obd_statfs, os_state);
 	CHECK_MEMBER(obd_statfs, os_fprecreated);
 	CHECK_MEMBER(obd_statfs, os_granted);
-	CHECK_MEMBER(obd_statfs, os_spare3);
+	CHECK_MEMBER(obd_statfs, os_failure_domain);
 	CHECK_MEMBER(obd_statfs, os_spare4);
 	CHECK_MEMBER(obd_statfs, os_spare5);
 	CHECK_MEMBER(obd_statfs, os_spare6);
@@ -1304,7 +1307,7 @@ check_mdt_body(void)
 	CHECK_MEMBER(mdt_body, mbo_dom_size);
 	CHECK_MEMBER(mdt_body, mbo_dom_blocks);
 	CHECK_MEMBER(mdt_body, mbo_btime);
-	CHECK_MEMBER(mdt_body, mbo_padding_9);
+	CHECK_MEMBER(mdt_body, mbo_xattr_absent);
 	CHECK_MEMBER(mdt_body, mbo_padding_10);
 
 	CHECK_VALUE_64O(MDS_FMODE_CLOSED);

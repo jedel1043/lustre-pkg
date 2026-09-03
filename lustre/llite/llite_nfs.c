@@ -71,7 +71,7 @@ struct inode *search_inode_for_lustre(struct super_block *sb,
 
 	op_data->op_fid1 = *fid;
 	op_data->op_mode = eadatalen;
-	op_data->op_valid = OBD_MD_FLEASIZE;
+	op_data->op_valid = OBD_MD_FLEASIZE | OBD_MD_FLDIREA | OBD_MD_MEA;
 
 	/* mds_fid2dentry ignores f_type */
 	rc = md_getattr(sbi->ll_md_exp, op_data, &req);
@@ -157,6 +157,9 @@ ll_iget_for_nfs(struct super_block *sb, struct lu_fid *fid, struct lu_fid *paren
 			 * .lustre inode.
 			 */
 			d_add(dot, tmp);
+		} else if (is_dot_lustre) {
+			/* Cached .lustre dentry already holds the inode. */
+			iput(inode);
 		}
 		inode_unlock(d_inode(sb->s_root));
 
@@ -173,6 +176,9 @@ ll_iget_for_nfs(struct super_block *sb, struct lu_fid *fid, struct lu_fid *paren
 					goto free_dot;
 				}
 				d_add(obf, inode);
+			} else {
+				/* Cached dentry already holds the inode. */
+				iput(inode);
 			}
 			inode_unlock(d_inode(dot));
 free_dot:

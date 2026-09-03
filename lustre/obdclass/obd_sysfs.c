@@ -52,7 +52,7 @@
 bool obd_enable_health_write;
 EXPORT_SYMBOL(obd_enable_health_write);
 
-bool obd_enable_fname_encoding = false;
+bool obd_enable_fname_encoding;
 EXPORT_SYMBOL(obd_enable_fname_encoding);
 
 struct static_lustre_uintvalue_attr {
@@ -196,7 +196,7 @@ static ssize_t max_dirty_mb_store(struct kobject *kobj, struct attribute *attr,
 
 	val *= 1 << (20 - PAGE_SHIFT); /* convert to pages */
 
-	if (val > ((compat_totalram_pages() / 10) * 9)) {
+	if (val > ((totalram_pages() / 10) * 9)) {
 		/* Somebody wants to assign too much memory to dirty pages */
 		return -EINVAL;
 	}
@@ -233,7 +233,7 @@ static ssize_t no_transno_store(struct kobject *kobj,
 	}
 
 	spin_lock(&obd->obd_dev_lock);
-	obd->obd_no_transno = 1;
+	set_bit(OBDF_NO_TRANSNO, obd->obd_flags);
 	spin_unlock(&obd->obd_dev_lock);
 	return count;
 }
@@ -281,7 +281,7 @@ health_check_show(struct kobject *kobj, struct attribute *attr, char *buf)
 				 test_bit(OBDF_ATTACHED, obd->obd_flags) &&
 				 test_bit(OBDF_SET_UP, obd->obd_flags) &&
 				 !test_bit(OBDF_STOPPING, obd->obd_flags) &&
-				 !obd->obd_read_only) {
+				 !test_bit(OBDF_READ_ONLY, obd->obd_flags)) {
 		LASSERT(obd->obd_magic == OBD_DEVICE_MAGIC);
 
 		class_incref(obd, __func__, current);

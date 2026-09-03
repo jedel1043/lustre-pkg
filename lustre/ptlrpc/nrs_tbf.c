@@ -473,7 +473,9 @@ nrs_tbf_cli_fini(struct nrs_tbf_client *cli)
 {
 	LASSERT(list_empty(&cli->tc_list));
 	LASSERT(!test_bit(NRS_TBF_CLI_HEAP_BIT, &cli->tc_state));
-	LASSERT(!test_and_set_bit(NRS_TBF_CLI_DEL_BIT, &cli->tc_state));
+	if (test_and_set_bit(NRS_TBF_CLI_DEL_BIT, &cli->tc_state))
+		LASSERTF(0, "TBF client %s: delete bit already set\n",
+			 nrs_tbf_cli2str(cli));
 
 	TBF_CLI_DEBUG(cli, "TBF class fini");
 	spin_lock(&cli->tc_rule_lock);
@@ -835,6 +837,7 @@ nrs_tbf_jobid_list_parse(char *orig, struct list_head *jobid_list)
 {
 	char *str, *copy;
 	int rc = 0;
+
 	ENTRY;
 
 	copy = kstrdup(orig, GFP_KERNEL);
@@ -2050,6 +2053,7 @@ static int nrs_tbf_ctl(struct ptlrpc_nrs_policy *policy,
 		       void *arg)
 {
 	int rc = 0;
+
 	ENTRY;
 
 	assert_spin_locked(&policy->pol_nrs->nrs_lock);
@@ -2349,10 +2353,12 @@ static int nrs_tbf_req_add(struct ptlrpc_nrs_policy *policy,
 					  &cli->tc_list);
 			if (policy->pol_nrs->nrs_throttling) {
 				__u64 deadline = cli->tc_deadline;
+
 				if ((head->th_deadline > deadline) &&
 				    (hrtimer_try_to_cancel(&head->th_timer)
 				     >= 0)) {
 					ktime_t time;
+
 					head->th_deadline = deadline;
 					time = ktime_set(0, 0);
 					time = ktime_add_ns(time, deadline);
@@ -2442,7 +2448,7 @@ ptlrpc_lprocfs_nrs_tbf_rule_seq_show(struct seq_file *m, void *data)
 	struct ptlrpc_service	    *svc = m->private;
 	int			     rc;
 
-	seq_printf(m, "regular_requests:\n");
+	seq_puts(m, "regular_requests:\n");
 	/**
 	 * Perform two separate calls to this as only one of the NRS heads'
 	 * policies may be in the ptlrpc_nrs_pol_state::NRS_POL_STATE_STARTED or
@@ -2472,7 +2478,7 @@ ptlrpc_lprocfs_nrs_tbf_rule_seq_show(struct seq_file *m, void *data)
 	if (!nrs_svc_has_hp(svc))
 		goto no_hp;
 
-	seq_printf(m, "high_priority_requests:\n");
+	seq_puts(m, "high_priority_requests:\n");
 	rc = ptlrpc_nrs_policy_control(svc, PTLRPC_NRS_QUEUE_HP,
 				       NRS_POL_NAME_TBF,
 				       NRS_CTL_TBF_RD_RULE,
@@ -2495,6 +2501,7 @@ no_hp:
 static int nrs_tbf_id_parse(struct nrs_tbf_cmd *cmd, char *token)
 {
 	int rc;
+
 	ENTRY;
 
 	if (!nrs_tbf_flags_valid(cmd->u.tc_start.ts_valid_type))

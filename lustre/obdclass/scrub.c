@@ -17,6 +17,7 @@
 #define DEBUG_SUBSYSTEM S_LFSCK
 
 #include <linux/kthread.h>
+#include <linux/libcfs/libcfs_fail.h>
 #include <lustre_scrub.h>
 #include <lustre_lib.h>
 #include <lustre_fid.h>
@@ -109,10 +110,10 @@ EXPORT_SYMBOL(scrub_file_init);
 void scrub_file_reset(struct lustre_scrub *scrub, guid_t uuid, u64 flags)
 {
 	struct scrub_file *sf = &scrub->os_file;
+
 	ENTRY;
 
-	CDEBUG(D_LFSCK, "%s: reset OI scrub file, old flags = "
-	       "%#llx, add flags = %#llx\n",
+	CDEBUG(D_LFSCK, "%s: reset OI scrub file, old flags = %#llx, add flags = %#llx\n",
 	       scrub->os_name, sf->sf_flags, flags);
 
 	guid_copy(&sf->sf_uuid, &uuid);
@@ -161,8 +162,7 @@ int scrub_file_load(const struct lu_env *env, struct lustre_scrub *scrub)
 
 	/* corrupted */
 	if (rc < buf.lb_len) {
-		CDEBUG(D_LFSCK, "%s: fail to load scrub file, "
-		       "expected = %d: rc = %d\n",
+		CDEBUG(D_LFSCK, "%s: fail to load scrub file, expected = %d: rc = %d\n",
 		       scrub->os_name, (int)buf.lb_len, rc);
 		return -EFAULT;
 	}
@@ -194,6 +194,7 @@ int scrub_file_store(const struct lu_env *env, struct lustre_scrub *scrub)
 	struct thandle *th;
 	loff_t pos = 0;
 	int rc;
+
 	ENTRY;
 
 	/* Skip store under rdonly mode. */
@@ -362,6 +363,7 @@ int scrub_thread_post(const struct lu_env *env, struct lustre_scrub *scrub,
 {
 	struct scrub_file *sf = &scrub->os_file;
 	int rc;
+
 	ENTRY;
 
 	CDEBUG(D_LFSCK, "%s: OI scrub post with result = %d\n",
@@ -409,6 +411,7 @@ int scrub_start(int (*threadfn)(void *data), struct lustre_scrub *scrub,
 {
 	struct task_struct *task;
 	int rc;
+
 	ENTRY;
 
 	if (scrub->os_task)
@@ -649,6 +652,7 @@ int lustre_index_register(struct dt_device *dev, const char *devname,
 {
 	struct lustre_index_backup_unit *libu, *pos;
 	int rc = 0;
+
 	ENTRY;
 
 	if (dev->dd_rdonly || *guard)
@@ -687,8 +691,7 @@ int lustre_index_register(struct dt_device *dev, const char *devname,
 			 * replace it with new values. */
 			if (unlikely(keysize != pos->libu_keysize ||
 				     recsize != pos->libu_recsize)) {
-				CWARN("%s: the index "DFID" has registered "
-				      "with %u/%u, may be invalid, replace "
+				CWARN("%s: the index "DFID" has registered with %u/%u, may be invalid, replace "
 				      "with %u/%u\n",
 				      devname, PFID(fid), pos->libu_keysize,
 				      pos->libu_recsize, keysize, recsize);
@@ -761,6 +764,7 @@ static int lustre_index_backup_body(const struct lu_env *env,
 		.lb_len = bufsize
 	};
 	int rc;
+
 	ENTRY;
 
 	th = dt_trans_create(env, dev);
@@ -802,6 +806,7 @@ static int lustre_index_backup_header(const struct lu_env *env,
 	loff_t pos = 0;
 	int rc;
 	bool punch = false;
+
 	ENTRY;
 
 	LASSERT(sizeof(*la) <= bufsize);
@@ -858,6 +863,7 @@ static int lustre_index_update_lma(const struct lu_env *env,
 	struct thandle *th;
 	int fl = LU_XATTR_REPLACE;
 	int rc;
+
 	ENTRY;
 
 	LASSERT(bufsize >= lbuf.lb_len);
@@ -917,6 +923,7 @@ static int lustre_index_backup_one(const struct lu_env *env,
 	int count = 0;
 	int size = 0;
 	int rc;
+
 	ENTRY;
 
 	tgt_obj = lu2dt(lu_object_find_slice(env, &dev->dd_lu_dev,
@@ -943,7 +950,7 @@ static int lustre_index_backup_one(const struct lu_env *env,
 
 	lustre_fid2lbx(buf, &libu->libu_fid, bufsize);
 	bak_obj = local_file_find_or_create(env, los, parent, buf,
-					    S_IFREG | S_IRUGO | S_IWUSR);
+					    S_IFREG | 0644);
 	if (IS_ERR_OR_NULL(bak_obj))
 		GOTO(out, rc = bak_obj ? PTR_ERR(bak_obj) : -ENOENT);
 
@@ -1026,6 +1033,7 @@ void lustre_index_backup(const struct lu_env *env, struct dt_device *dev,
 	char *buf = NULL;
 	struct lu_fid fid;
 	int rc;
+
 	ENTRY;
 
 	if (dev->dd_rdonly || *guard)
@@ -1126,6 +1134,7 @@ int lustre_index_restore(const struct lu_env *env, struct dt_device *dev,
 	int count;
 	int rc;
 	bool registered = false;
+
 	ENTRY;
 
 	LASSERT(bufsize >= sizeof(*la) + sizeof(*dof) +

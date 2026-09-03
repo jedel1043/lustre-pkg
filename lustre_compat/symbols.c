@@ -9,8 +9,14 @@
  * Author: Timothy Day <timday@amazon.com>
  */
 
+/* No you can't turn this into a Makefile variable since this
+ * would be applied to the libcfs module.
+ */
+#define COMPAT_BUILD	1
+
 #include <linux/kprobes.h>
 #include <linux/memcontrol.h>
+#include <lustre_compat/linux/kallsyms.h>
 #include <lustre_compat/linux/mm.h>
 #include <lustre_compat/linux/security.h>
 #include <lustre_compat/linux/vmalloc.h>

@@ -113,7 +113,6 @@ void class_free_dev(struct obd_device *obd);
 struct obd_device *class_str2obd(const char *str);
 int class_name2dev(const char *name);
 struct obd_device *class_name2obd(const char *name);
-int class_uuid2dev(struct obd_uuid *uuid);
 struct obd_device *class_uuid2obd(struct obd_uuid *uuid);
 struct obd_device *class_find_client_obd(struct obd_uuid *tgt_uuid,
 					 const char *type_name,
@@ -586,7 +585,7 @@ static inline int obd_setup(struct obd_device *obd, struct lustre_cfg *cfg)
 #ifdef CONFIG_LUSTRE_FS_SERVER
 			if (lu_device_is_dt(dev) &&
 			    lu2dt_dev(dev)->dd_rdonly)
-				obd->obd_read_only = 1;
+				set_bit(OBDF_READ_ONLY, obd->obd_flags);
 #endif
 
 			rc = ldto_device_init(&env, dev, ldt->ldt_name, NULL);
