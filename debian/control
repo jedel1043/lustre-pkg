@@ -34,7 +34,8 @@ Depends: ${shlibs:Depends},
          libnl-genl-3-200,
          libmount1,
          libkeyutils1,
-         python3
+         python3,
+         lustre-client-modules
 Suggests: bash-completion
 Description: Userspace utilities for the Lustre filesystem (client)
  Lustre is a scalable, secure, robust, highly-available cluster file system.
@@ -57,7 +58,8 @@ Depends: ${shlibs:Depends},
          libnl-genl-3-200,
          libmount1,
          libkeyutils1,
-         python3
+         python3,
+         lustre-server-modules
 Suggests: bash-completion
 Provides: lustre-client-utils (= ${binary:Version})
 Conflicts: lustre-client-utils
