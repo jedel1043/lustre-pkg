@@ -1,3 +1,22 @@
+lustre (2.17.58-0ubuntu1~ppa1~stonking1) stonking; urgency=medium
+
+  [ José Julián Espina ]
+  * New upstream release
+  * Rediff patches.
+    Drop 0001-Add-shebang-to-iokit-config-script.patch
+    Drop 0008-LU-20162-lprocfs-revert-LU-20162-obdclass-pin-debugf.patch
+    Drop 0004-Fix-execute-permissions-on-lsvcgss-service.patch
+    Drop 0009-Add-compatibility-patch-for-Linux-7.1.patch
+  * chore: skip make command for removed file
+  * chore: update copyright
+  * fix: adjust dkms script to new libcfs location
+  * Add compatibility patch for Linux 7.2
+  * chore: make utils depend on virtual module packages
+  * Guard unused again label on lustre/llite/namei.c
+  * Gate tests and iokit behind config
+
+ -- José Julián Espina Del Ángel <julian.espina@canonical.com>  Thu, 03 Sep 2026 17:36:21 -0600
+
 lustre (2.17.54-0ubuntu1~ppa2~stonking2) stonking; urgency=medium
 
   [ José Julián Espina ]
