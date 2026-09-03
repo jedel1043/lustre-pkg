@@ -2,5 +2,4 @@
 0003-Switch-to-StandardOutput-journal-for-lsvcgss-service.patch
 0005-Explicitly-link-against-libyaml-on-liblustreapi.patch
 0006-Check-if-zfs-nvlist-are-const-on-userland-builds.patch
-0009-Add-compatibility-patch-for-Linux-7.1.patch
 0010-Add-compatibility-patch-for-Linux-7.2.patch

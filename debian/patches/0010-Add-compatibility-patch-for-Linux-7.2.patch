@@ -3,37 +3,20 @@ Date: Wed, 2 Sep 2026 17:55:08 -0600
 Subject: Add compatibility patch for Linux 7.2
 
 ---
- config/lustre-core.m4                   | 69 +++++++++++++++++++++++++
+ config/lustre-core.m4                   | 69 +++++++++++++++++++++++++++++++++
  include/linux/libcfs/libcfs_private.h   |  1 +
- include/lustre_compat/linux/string.h    | 23 +++++++++
- include/uapi/linux/lustre/lustre_user.h | 23 +++++++++
+ include/lustre_compat/linux/string.h    | 23 +++++++++++
+ include/uapi/linux/lustre/lustre_user.h | 23 +++++++++++
  lustre/include/lustre_compat.h          |  1 +
- lustre/llite/llite_lib.c                |  5 +-
- lustre/llite/rw.c                       |  4 +-
- lustre/llite/vvp_io.c                   |  5 +-
- lustre/llite/vvp_object.c               |  4 +-
- lustre/llite/xattr_security.c           | 40 +++++++++++++++
- lustre/mdc/mdc_locks.c                  |  8 +--
- lustre/osc/osc_request.c                |  3 +-
- lustre/osd-ldiskfs/osd_compat.c         |  9 ++--
- lustre/osd-ldiskfs/osd_handler.c        | 89 +++++++++++++++++++--------------
- lustre/osd-ldiskfs/osd_iam_lfix.c       |  5 +-
- lustre/osd-ldiskfs/osd_iam_lvar.c       |  5 +-
- lustre/osd-ldiskfs/osd_io.c             | 24 +++++----
- lustre/osd-wbcfs/osd_object.c           | 14 +++---
- lustre/target/tgt_mount.c               |  4 +-
- lustre_compat/fs/crypto/crypto.c        |  4 +-
- lustre_compat/fs/crypto/hooks.c         |  4 +-
+ lustre/llite/xattr_security.c           | 40 +++++++++++++++++++
  lustre_compat/fs/crypto/keyring.c       |  4 +-
- lustre_compat/fs/crypto/keysetup.c      |  4 +-
- lustre_compat/fs/crypto/policy.c        | 12 ++---
- 24 files changed, 272 insertions(+), 92 deletions(-)
+ 7 files changed, 159 insertions(+), 2 deletions(-)
 
 diff --git a/config/lustre-core.m4 b/config/lustre-core.m4
-index f74e4f2..ff4add2 100644
+index 2ee736b..bdf97c5 100644
 --- a/config/lustre-core.m4
 +++ b/config/lustre-core.m4
-@@ -2471,6 +2471,67 @@ AC_DEFUN([LC_HAVE_STRUCT_PAGEVEC], [
+@@ -2425,6 +2425,67 @@ AC_DEFUN([LC_HAVE_STRUCT_PAGEVEC], [
  	])
  ]) # LC_HAVE_STRUCT_PAGEVEC
  
@@ -101,10 +84,10 @@ index f74e4f2..ff4add2 100644
  #
  # LC_HAVE_FLUSH___WORKQUEUE
  #
-@@ -3984,6 +4045,10 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
+@@ -3973,6 +4034,10 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
+ 
  	# 7.1
- 	LC_SRC_HAVE_FOLIO_BATCH_HEADER
- 	LC_SRC_HAVE_DENTRY_D_ALIAS
+ 	LC_SRC_HAVE_DCACHE_ANON_UNION_D_ALIAS
 +
 +	# 7.2
 +	LC_SRC_HAVE_KERNEL_STRNCPY
@@ -112,10 +95,10 @@ index f74e4f2..ff4add2 100644
  ])
  
  AC_DEFUN([LC_PROG_LINUX_RESULTS], [
-@@ -4211,6 +4276,10 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
+@@ -4201,6 +4266,10 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
+ 
  	# 7.1
- 	LC_HAVE_FOLIO_BATCH_HEADER
- 	LC_HAVE_DENTRY_D_ALIAS
+ 	LC_HAVE_DCACHE_ANON_UNION_D_ALIAS
 +
 +	# 7.2
 +	LC_HAVE_KERNEL_STRNCPY
@@ -170,7 +153,7 @@ index 515dfe7..b078467 100644
  /** from linux 5.19 include/linux/string.h: */
  #define memset_startat(obj, v, member)					\
 diff --git a/include/uapi/linux/lustre/lustre_user.h b/include/uapi/linux/lustre/lustre_user.h
-index f6b01ff..5fbd4f1 100644
+index 1290b37..1fa879d 100644
 --- a/include/uapi/linux/lustre/lustre_user.h
 +++ b/include/uapi/linux/lustre/lustre_user.h
 @@ -1459,6 +1459,29 @@ struct obd_uuid {
@@ -204,79 +187,17 @@ index f6b01ff..5fbd4f1 100644
  				   const struct obd_uuid *u2)
  {
 diff --git a/lustre/include/lustre_compat.h b/lustre/include/lustre_compat.h
-index 386d162..b34491d 100644
+index 1d76303..d07dd24 100644
 --- a/lustre/include/lustre_compat.h
 +++ b/lustre/include/lustre_compat.h
-@@ -32,6 +32,7 @@
- #include <linux/pagevec.h>
- #endif
+@@ -28,6 +28,7 @@
+ #include <linux/security.h>
+ #include <lustre_compat/linux/folio_batch.h>
  #include <linux/workqueue.h>
 +#include <lustre_compat/linux/string.h>
  #include <lustre_compat/linux/shrinker.h>
  #include <lustre_compat/linux/xarray.h>
  #include <lustre_compat/linux/folio.h>
-diff --git a/lustre/llite/llite_lib.c b/lustre/llite/llite_lib.c
-index ddc0d43..1e67779 100644
---- a/lustre/llite/llite_lib.c
-+++ b/lustre/llite/llite_lib.c
-@@ -3053,8 +3053,9 @@ int ll_update_inode(struct inode *inode, struct lustre_md *md)
- 	if (body->mbo_valid & OBD_MD_FLMTIME) {
- 		if (body->mbo_mtime > inode_get_mtime_sec(inode)) {
- 			CDEBUG(D_INODE,
--			       "setting ino %lu mtime from %lld to %llu\n",
--			       inode->i_ino, (s64) inode_get_mtime_sec(inode),
-+			       "setting ino %llu mtime from %lld to %llu\n",
-+			       (unsigned long long)inode->i_ino,
-+			       (s64) inode_get_mtime_sec(inode),
- 			       body->mbo_mtime);
- 			inode_set_mtime(inode, body->mbo_mtime, 0);
- 		}
-diff --git a/lustre/llite/rw.c b/lustre/llite/rw.c
-index 0da9c48..ee1ab6d 100644
---- a/lustre/llite/rw.c
-+++ b/lustre/llite/rw.c
-@@ -1874,8 +1874,8 @@ int ll_readpage(struct file *file, struct page *vmpage)
- 	 * the PCC copy.
- 	 */
- 	if (inode->i_op != &ll_file_inode_operations) {
--		CERROR("%s: readpage() on invalidated PCC inode %lu: rc=%d\n",
--		       sb->s_id, inode->i_ino, -EIO);
-+		CERROR("%s: readpage() on invalidated PCC inode %llu: rc=%d\n",
-+		       sb->s_id, (unsigned long long)inode->i_ino, -EIO);
- 		unlock_page(vmpage);
- 		RETURN(-EIO);
- 	}
-diff --git a/lustre/llite/vvp_io.c b/lustre/llite/vvp_io.c
-index 4b345ec..2b6efee 100644
---- a/lustre/llite/vvp_io.c
-+++ b/lustre/llite/vvp_io.c
-@@ -859,8 +859,9 @@ static int vvp_io_read_start(const struct lu_env *env,
- 		GOTO(out, result);
- 
- 	LU_OBJECT_HEADER(D_INODE, env, &obj->co_lu,
--			 "Read ino %lu, %zu bytes, offset %lld, size %llu\n",
--			 inode->i_ino, crw_bytes, pos, i_size_read(inode));
-+			 "Read ino %llu, %zu bytes, offset %lld, size %llu\n",
-+			 (unsigned long long)inode->i_ino, crw_bytes, pos,
-+			 i_size_read(inode));
- 
- 	/* initialize read-ahead window once per syscall */
- 	if (!vio->vui_ra_valid) {
-diff --git a/lustre/llite/vvp_object.c b/lustre/llite/vvp_object.c
-index 7a0ce13..9584968 100644
---- a/lustre/llite/vvp_object.c
-+++ b/lustre/llite/vvp_object.c
-@@ -47,8 +47,8 @@ static int vvp_object_print(const struct lu_env *env, void *cookie,
- 	     inode);
- 	if (inode) {
- 		lli = ll_i2info(inode);
--		(*p)(env, cookie, "%lu/%u %o %u %d %p "DFID,
--		     inode->i_ino, inode->i_generation, inode->i_mode,
-+		(*p)(env, cookie, "%llu/%u %o %u %d %p "DFID,
-+		     (unsigned long long)inode->i_ino, inode->i_generation, inode->i_mode,
- 		     inode->i_nlink, atomic_read(&inode->i_count),
- 		     lli->lli_clob, PFID(&lli->lli_fid));
- 	}
 diff --git a/lustre/llite/xattr_security.c b/lustre/llite/xattr_security.c
 index eda23b6..34aca60 100644
 --- a/lustre/llite/xattr_security.c
@@ -335,470 +256,6 @@ index eda23b6..34aca60 100644
  
  	/* sanity check */
  	sbi->ll_secctx_name[rc] = '\0';
-diff --git a/lustre/mdc/mdc_locks.c b/lustre/mdc/mdc_locks.c
-index d48cd58..81d39a3 100644
---- a/lustre/mdc/mdc_locks.c
-+++ b/lustre/mdc/mdc_locks.c
-@@ -107,10 +107,12 @@ int mdc_set_lock_data(struct obd_export *exp, const struct lustre_handle *lockh,
- 		struct inode *old_inode = lock->l_resource->lr_lvb_inode;
- 
- 		LASSERTF(inode_state_read_once(old_inode) & I_FREEING,
--			 "Found existing inode %px/%lu/%u state %lu in lock: setting data to %px/%lu/%u\n",
--			 old_inode, old_inode->i_ino, old_inode->i_generation,
-+			 "Found existing inode %px/%llu/%u state %lu in lock: setting data to %px/%llu/%u\n",
-+			 old_inode, (unsigned long long)old_inode->i_ino,
-+			 old_inode->i_generation,
- 			 (unsigned long)inode_state_read_once(old_inode),
--			 new_inode, new_inode->i_ino, new_inode->i_generation);
-+			 new_inode, (unsigned long long)new_inode->i_ino,
-+			 new_inode->i_generation);
- 	}
- 	lock->l_resource->lr_lvb_inode = new_inode;
- 	if (bits)
-diff --git a/lustre/osc/osc_request.c b/lustre/osc/osc_request.c
-index 20c91b4..7b20f51 100644
---- a/lustre/osc/osc_request.c
-+++ b/lustre/osc/osc_request.c
-@@ -2368,7 +2368,8 @@ static int osc_brw_fini_request(struct ptlrpc_request *req, int rc)
- 		int idx;
- 
- 		if (!ll_has_encryption_key(inode)) {
--			CDEBUG(D_SEC, "no enc key for ino %lu\n", inode->i_ino);
-+			CDEBUG(D_SEC, "no enc key for ino %llu\n",
-+			       (unsigned long long)inode->i_ino);
- 			GOTO(out, rc);
- 		}
- 		for (idx = 0; idx < aa->aa_page_count; idx++) {
-diff --git a/lustre/osd-ldiskfs/osd_compat.c b/lustre/osd-ldiskfs/osd_compat.c
-index d6dfbaf..79269b9 100644
---- a/lustre/osd-ldiskfs/osd_compat.c
-+++ b/lustre/osd-ldiskfs/osd_compat.c
-@@ -78,8 +78,8 @@ static struct dentry *osd_lookup_noperm_common(struct osd_device *dev,
- 		return dchild;
- 
- 	if (dchild->d_inode && unlikely(is_bad_inode(dchild->d_inode))) {
--		CERROR("%s: bad inode returned %lu/%u: rc = -ENOENT\n",
--		       osd_name(dev), dchild->d_inode->i_ino,
-+		CERROR("%s: bad inode returned %llu/%u: rc = -ENOENT\n",
-+		       osd_name(dev), (unsigned long long)dchild->d_inode->i_ino,
- 		       dchild->d_inode->i_generation);
- 		dput(dchild);
- 		dchild = ERR_PTR(-ENOENT);
-@@ -151,8 +151,9 @@ simple_mkdir(const struct lu_env *env, struct osd_device *osd,
- 
- 		if (!S_ISDIR(old_mode)) {
- 			err = -ENOTDIR;
--			CERROR("%s: found '%s' (%lu/%u) is mode %o: rc = %d\n",
--			       osd->od_svname, name, inode->i_ino,
-+			CERROR("%s: found '%s' (%llu/%u) is mode %o: rc = %d\n",
-+			       osd->od_svname, name,
-+			       (unsigned long long)inode->i_ino,
- 			       inode->i_generation, old_mode, err);
- 			GOTO(out_err, err);
- 		}
-diff --git a/lustre/osd-ldiskfs/osd_handler.c b/lustre/osd-ldiskfs/osd_handler.c
-index 9f51bc4..ae339ce 100644
---- a/lustre/osd-ldiskfs/osd_handler.c
-+++ b/lustre/osd-ldiskfs/osd_handler.c
-@@ -475,10 +475,11 @@ int osd_get_lma(struct osd_thread_info *info, struct inode *inode,
- 		/* Check LMA compatibility */
- 		if (lma->lma_incompat & ~LMA_INCOMPAT_SUPP) {
- 			rc = -EOPNOTSUPP;
--			CWARN("%s: unsupported incompat LMA feature(s) %#x for fid = "DFID", ino = %lu: rc = %d\n",
-+			CWARN("%s: unsupported incompat LMA feature(s) %#x for fid = "DFID", ino = %llu: rc = %d\n",
- 			      osd_ino2name(inode),
- 			      lma->lma_incompat & ~LMA_INCOMPAT_SUPP,
--			      PFID(&lma->lma_self_fid), inode->i_ino, rc);
-+			      PFID(&lma->lma_self_fid),
-+			      (unsigned long long)inode->i_ino, rc);
- 		}
- 	} else if (rc == 0) {
- 		rc = -ENODATA;
-@@ -605,12 +606,14 @@ int osd_ldiskfs_add_entry(struct osd_thread_info *info, struct osd_device *osd,
- 
- 		/* below message is checked in sanity.sh test_129 */
- 		if (rc == -ENOSPC) {
--			CWARN("%s: directory (inode: %lu, FID: %s) has reached max size limit\n",
--			      osd_name(osd), parent->i_ino, fidstr);
-+			CWARN("%s: directory (inode: %llu, FID: %s) has reached max size limit\n",
-+			      osd_name(osd), (unsigned long long)parent->i_ino,
-+			      fidstr);
- 		} else {
- 			rc = 0;	/* ignore such error now */
--			CWARN("%s: directory (inode: %lu, FID: %s) is approaching max size limit\n",
--			      osd_name(osd), parent->i_ino, fidstr);
-+			CWARN("%s: directory (inode: %llu, FID: %s) is approaching max size limit\n",
-+			      osd_name(osd), (unsigned long long)parent->i_ino,
-+			      fidstr);
- 		}
- 
- 	}
-@@ -868,9 +871,9 @@ static int osd_check_lma(const struct lu_env *env, struct osd_object *obj)
- 			     (CFS_FAIL_CHECK(OBD_FAIL_OSD_LMA_INCOMPAT) &&
- 			      S_ISREG(inode->i_mode)))) {
- 			CWARN("%s: unsupported incompat LMA feature(s) %#x for "
--			      "fid = "DFID", ino = %lu\n", osd_name(osd),
-+			      "fid = "DFID", ino = %llu\n", osd_name(osd),
- 			      lma->lma_incompat & ~LMA_INCOMPAT_SUPP,
--			      PFID(rfid), inode->i_ino);
-+			      PFID(rfid), (unsigned long long)inode->i_ino);
- 			rc = -EOPNOTSUPP;
- 		} else {
- 			fid = &lma->lma_self_fid;
-@@ -1089,9 +1092,9 @@ again:
- out:
- 	if (rc < 0)
- 		CDEBUG(D_LFSCK,
--		       "%s: cannot check LMV, ino = %lu/%u: rc = %d\n",
--		       osd_ino2name(inode), inode->i_ino, inode->i_generation,
--		       rc);
-+		       "%s: cannot check LMV, ino = %llu/%u: rc = %d\n",
-+		       osd_ino2name(inode), (unsigned long long)inode->i_ino,
-+		       inode->i_generation, rc);
- 	else
- 		rc = 0;
- 
-@@ -2531,7 +2534,8 @@ static void osd_object_delete(const struct lu_env *env, struct lu_object *l)
- 	if (obj->oo_destroyed) {
- 		struct qsd_instance *qsd;
- 
--		CDEBUG(D_QUOTA, " %p ino=%lu\n", inode, inode->i_ino);
-+		CDEBUG(D_QUOTA, " %p ino=%llu\n", inode,
-+		       (unsigned long long)inode->i_ino);
- 		qsd = osd->od_quota_slave_dt;
- 		osd_quota_refresh(env, qsd, projid, uid, gid);
- 
-@@ -2571,9 +2575,9 @@ static int osd_object_print(const struct lu_env *env, void *cookie,
- 	else
- 		d = NULL;
- 	return (*p)(env, cookie,
--		    LUSTRE_OSD_LDISKFS_NAME"-object@%p(i:%p:%lu/%u)[%s]",
-+		    LUSTRE_OSD_LDISKFS_NAME"-object@%p(i:%p:%llu/%u)[%s]",
- 		    o, o->oo_inode,
--		    o->oo_inode ? o->oo_inode->i_ino : 0UL,
-+		    o->oo_inode ? (unsigned long long)o->oo_inode->i_ino : 0ULL,
- 		    o->oo_inode ? o->oo_inode->i_generation : 0,
- 		    d ? d->id_ops->id_name : "plain");
- }
-@@ -4152,9 +4156,9 @@ static int osd_destroy(const struct lu_env *env, struct dt_object *dt,
- 
- 	if (S_ISDIR(inode->i_mode)) {
- 		if (inode->i_nlink > 2)
--			CERROR("%s: directory "DFID" ino %lu link count is %u at unlink. run e2fsck to repair\n",
--			       osd_name(osd), PFID(fid), inode->i_ino,
--			       inode->i_nlink);
-+			CERROR("%s: directory "DFID" ino %llu link count is %u at unlink. run e2fsck to repair\n",
-+			       osd_name(osd), PFID(fid),
-+			       (unsigned long long)inode->i_ino, inode->i_nlink);
- 
- 		spin_lock(&obj->oo_guard);
- 		clear_nlink(inode);
-@@ -4822,8 +4826,9 @@ static int osd_xattr_get(const struct lu_env *env, struct dt_object *dt,
- 		if (buf->lb_len < sizeof(dt_obj_version_t))
- 			return -ERANGE;
- 
--		CDEBUG(D_INODE, "Get version %#llx for inode %lu\n",
--		       LDISKFS_I(inode)->i_fs_version, inode->i_ino);
-+		CDEBUG(D_INODE, "Get version %#llx for inode %llu\n",
-+		       LDISKFS_I(inode)->i_fs_version,
-+		       (unsigned long long)inode->i_ino);
- 
- 		*ver = LDISKFS_I(inode)->i_fs_version;
- 
-@@ -5206,9 +5211,10 @@ static int osd_xattr_set(const struct lu_env *env, struct dt_object *dt,
- 		LASSERT(buf->lb_len == sizeof(dt_obj_version_t));
- 
- 		CDEBUG(D_INODE,
--		       DFID" set version %#llx (old %#llx) for inode %lu\n",
-+		       DFID" set version %#llx (old %#llx) for inode %llu\n",
- 		       PFID(lu_object_fid(&dt->do_lu)), *version,
--		       LDISKFS_I(inode)->i_fs_version, inode->i_ino);
-+		       LDISKFS_I(inode)->i_fs_version,
-+		       (unsigned long long)inode->i_ino);
- 
- 		LDISKFS_I(inode)->i_fs_version = *version;
- 		/*
-@@ -6839,9 +6845,10 @@ static int osd_index_ea_insert(const struct lu_env *env, struct dt_object *dt,
- 
- 	rc = osd_ea_add_rec(env, obj, child_inode, name, fid, th);
- 
--	CDEBUG(D_INODE, "parent %lu insert %s:%lu rc = %d\n",
--	       obj->oo_inode->i_ino, encode_fn_len(name, namelen),
--	       child_inode->i_ino, rc);
-+	CDEBUG(D_INODE, "parent %llu insert %s:%llu rc = %d\n",
-+	       (unsigned long long)obj->oo_inode->i_ino,
-+	       encode_fn_len(name, namelen),
-+	       (unsigned long long)child_inode->i_ino, rc);
- 
- 	if (child_inode && child_inode != oti->oti_inode)
- 		iput(child_inode);
-@@ -7599,8 +7606,9 @@ osd_dirent_reinsert(const struct lu_env *env, struct osd_device *dev,
- 	 */
- 	if (rc != 0)
- 		CDEBUG(D_LFSCK,
--		       "%s: fail to reinsert the dirent, dir = %lu/%u, name = "DNAME", "DFID": rc = %d\n",
--		       osd_ino2name(inode), dir->i_ino, dir->i_generation,
-+		       "%s: fail to reinsert the dirent, dir = %llu/%u, name = "DNAME", "DFID": rc = %d\n",
-+		       osd_ino2name(inode), (unsigned long long)dir->i_ino,
-+		       dir->i_generation,
- 		       encode_fn_dentry(dentry), PFID(fid), rc);
- 
- 	RETURN(rc);
-@@ -7654,8 +7662,9 @@ osd_dirent_check_repair(const struct lu_env *env, struct osd_object *obj,
- 			rc = 0;
- 		} else {
- 			CDEBUG(D_LFSCK,
--			       "%s: fail to iget() for dirent check_repair, dir = %lu/%u, name = "DNAME", ino = %llu: rc = %d\n",
--			       devname, dir->i_ino, dir->i_generation,
-+			       "%s: fail to iget() for dirent check_repair, dir = %llu/%u, name = "DNAME", ino = %llu: rc = %d\n",
-+			       devname, (unsigned long long)dir->i_ino,
-+			       dir->i_generation,
- 			       encode_fn_oied(ent), ent->oied_ino, rc);
- 		}
- 
-@@ -7698,9 +7707,10 @@ again:
- 		if (IS_ERR(jh)) {
- 			rc = PTR_ERR(jh);
- 			CDEBUG(D_LFSCK, "%s: fail to start trans for dirent "
--			       "check_repair, dir = %lu/%u, credits = %d, "
-+			       "check_repair, dir = %llu/%u, credits = %d, "
- 			       "name = "DNAME", ino = %llu: rc = %d\n",
--			       devname, dir->i_ino, dir->i_generation, credits,
-+			       devname, (unsigned long long)dir->i_ino, dir->i_generation,
-+			       credits,
- 			       encode_fn_oied(ent), ent->oied_ino, rc);
- 
- 			GOTO(out_inode, rc);
-@@ -7767,8 +7777,8 @@ again:
- 			} else {
- 				CDEBUG(D_LFSCK, "%s: expect remote agent "
- 				       "parent directory, but got "DNAME" under "
--				       "dir = %lu/%u with the FID "DFID"\n",
--				       devname, encode_fn_oied(ent), dir->i_ino,
-+				       "dir = %llu/%u with the FID "DFID"\n",
-+				       devname, encode_fn_oied(ent), (unsigned long long)dir->i_ino,
- 				       dir->i_generation, PFID(tfid));
- 
- 				*attr |= LUDA_UNKNOWN;
-@@ -7790,9 +7800,10 @@ again:
- 			 * and points to other's inode.
- 			 */
- 			CDEBUG(D_LFSCK, "%s: the target inode does not "
--			       "recognize the dirent, dir = %lu/%u, "
-+			       "recognize the dirent, dir = %llu/%u, "
- 			       " name = "DNAME", ino = %llu, "
--			       DFID": rc = %d\n", devname, dir->i_ino,
-+			       DFID": rc = %d\n", devname,
-+			       (unsigned long long)dir->i_ino,
- 			       dir->i_generation, encode_fn_oied(ent),
- 			       ent->oied_ino, PFID(fid), rc);
- 			*attr |= LUDA_UNKNOWN;
-@@ -7802,8 +7813,9 @@ again:
- 
- 		if (rc && rc != -ENODATA) {
- 			CDEBUG(D_LFSCK, "%s: fail to verify FID in the dirent, "
--			       "dir = %lu/%u, name = "DNAME", ino = %llu, "
--			       DFID": rc = %d\n", devname, dir->i_ino,
-+			       "dir = %llu/%u, name = "DNAME", ino = %llu, "
-+			       DFID": rc = %d\n", devname,
-+			       (unsigned long long)dir->i_ino,
- 			       dir->i_generation, encode_fn_oied(ent),
- 			       ent->oied_ino, PFID(fid), rc);
- 			*attr |= LUDA_UNKNOWN;
-@@ -7846,9 +7858,10 @@ again:
- 			*attr |= LUDA_REPAIR;
- 		else
- 			CDEBUG(D_LFSCK, "%s: fail to re-insert FID after "
--			       "the dirent, dir = %lu/%u, name = "DNAME", "
-+			       "the dirent, dir = %llu/%u, name = "DNAME", "
- 			       "ino = %llu, "DFID": rc = %d\n",
--			       devname, dir->i_ino, dir->i_generation,
-+			       devname, (unsigned long long)dir->i_ino,
-+			       dir->i_generation,
- 			       encode_fn_oied(ent), ent->oied_ino,
- 			       PFID(fid), rc);
- 	} else {
-diff --git a/lustre/osd-ldiskfs/osd_iam_lfix.c b/lustre/osd-ldiskfs/osd_iam_lfix.c
-index 961ef08..b94f6ca 100644
---- a/lustre/osd-ldiskfs/osd_iam_lfix.c
-+++ b/lustre/osd-ldiskfs/osd_iam_lfix.c
-@@ -160,8 +160,9 @@ static int iam_lfix_init(struct iam_leaf *l)
- 		result = -EIO;
- 		obj = iam_leaf_container(l)->ic_object;
- 		CERROR(
--		"Bad magic in node %llu #%lu: %#x != %#x or bad cnt: %d %d: rc = %d\n",
--			(unsigned long long)l->il_bh->b_blocknr, obj->i_ino,
-+		"Bad magic in node %llu #%llu: %#x != %#x or bad cnt: %d %d: rc = %d\n",
-+			(unsigned long long)l->il_bh->b_blocknr,
-+			(unsigned long long)obj->i_ino,
- 			le16_to_cpu(ill->ill_magic), IAM_LEAF_HEADER_MAGIC,
- 			count, leaf_count_limit(l), result);
- 	}
-diff --git a/lustre/osd-ldiskfs/osd_iam_lvar.c b/lustre/osd-ldiskfs/osd_iam_lvar.c
-index 5f1b583..45f7660 100644
---- a/lustre/osd-ldiskfs/osd_iam_lvar.c
-+++ b/lustre/osd-ldiskfs/osd_iam_lvar.c
-@@ -357,8 +357,9 @@ static int lvar_init(struct iam_leaf *l)
- 
- 		obj = iam_leaf_container(l)->ic_object;
- 		CERROR(
--		"Bad magic in node %llu (#%lu): %#x != %#x or wrong used: %d\n",
--		(unsigned long long)l->il_bh->b_blocknr, obj->i_ino,
-+		"Bad magic in node %llu (#%llu): %#x != %#x or wrong used: %d\n",
-+		(unsigned long long)l->il_bh->b_blocknr,
-+		(unsigned long long)obj->i_ino,
- 		le16_to_cpu(head->vlh_magic), IAM_LVAR_LEAF_MAGIC,
- 		used);
- 		result = -EIO;
-diff --git a/lustre/osd-ldiskfs/osd_io.c b/lustre/osd-ldiskfs/osd_io.c
-index f292f2b..f2acf23c 100644
---- a/lustre/osd-ldiskfs/osd_io.c
-+++ b/lustre/osd-ldiskfs/osd_io.c
-@@ -958,8 +958,9 @@ static int osd_ldiskfs_map_inode_pages(struct inode *inode,
- 
- 	max_page_index = inode->i_sb->s_maxbytes >> PAGE_SHIFT;
- 
--	CDEBUG(D_OTHER, "inode %lu: map %d pages from %lu\n",
--		inode->i_ino, pages, folio_index_page((*lnbs)->lnb_page));
-+	CDEBUG(D_OTHER, "inode %llu: map %d pages from %lu\n",
-+		(unsigned long long)inode->i_ino, pages,
-+		folio_index_page((*lnbs)->lnb_page));
- 
- 	if (osd->od_extents_dense)
- 		compressed = iobuf->dr_lnbs[0]->lnb_flags & OBD_BRW_COMPRESSED;
-@@ -1437,9 +1438,9 @@ static int osd_declare_write_commit(const struct lu_env *env,
- 		credits += dirty_groups;
- 
- 	CDEBUG(D_INODE,
--	       "%s: inode #%lu extent_bytes %u extents %d credits %d\n",
--	       osd_ino2name(inode), inode->i_ino, extent_bytes, extents,
--	       credits);
-+	       "%s: inode #%llu extent_bytes %u extents %d credits %d\n",
-+	       osd_ino2name(inode), (unsigned long long)inode->i_ino,
-+	       extent_bytes, extents, credits);
- 
- out_declare:
- 	osd_trans_declare_op(env, oh, OSD_OT_WRITE, credits);
-@@ -1708,8 +1709,9 @@ int osd_ldiskfs_read(struct inode *inode, void *buf, int size, loff_t *offs)
- 		csize = min(blocksize - boffs, size);
- 		bh = __ldiskfs_bread(NULL, inode, block, 0);
- 		if (IS_ERR(bh)) {
--			CERROR("%s: can't read %u@%llu on ino %lu: rc = %ld\n",
--			       osd_ino2name(inode), csize, *offs, inode->i_ino,
-+			CERROR("%s: can't read %u@%llu on ino %llu: rc = %ld\n",
-+			       osd_ino2name(inode), csize, *offs,
-+			       (unsigned long long)inode->i_ino,
- 			       PTR_ERR(bh));
- 			return PTR_ERR(bh);
- 		}
-@@ -2531,8 +2533,8 @@ static int osd_fallocate_preallocate(const struct lu_env *env,
- 	LASSERT(osd_invariant(obj));
- 	LASSERT(inode != NULL);
- 
--	CDEBUG(D_INODE, "fallocate: inode #%lu: start %llu end %llu mode %d\n",
--	       inode->i_ino, *start, end, mode);
-+	CDEBUG(D_INODE, "fallocate: inode #%llu: start %llu end %llu mode %d\n",
-+	       (unsigned long long)inode->i_ino, *start, end, mode);
- 
- 	dquot_initialize(inode);
- 
-@@ -2579,8 +2581,8 @@ static int osd_fallocate_preallocate(const struct lu_env *env,
- 		rc = ldiskfs_map_blocks(handle, inode, &map, flags);
- 		if (rc <= 0) {
- 			CDEBUG(D_INODE,
--			       "inode #%lu: block %u: len %u: ldiskfs_map_blocks returned %d\n",
--			       inode->i_ino, map.m_lblk, map.m_len, rc);
-+			       "inode #%llu: block %u: len %u: ldiskfs_map_blocks returned %d\n",
-+			       (unsigned long long)inode->i_ino, map.m_lblk, map.m_len, rc);
- 			ldiskfs_mark_inode_dirty(handle, inode);
- 			break;
- 		}
-diff --git a/lustre/osd-wbcfs/osd_object.c b/lustre/osd-wbcfs/osd_object.c
-index e45ac99..9bd664d 100644
---- a/lustre/osd-wbcfs/osd_object.c
-+++ b/lustre/osd-wbcfs/osd_object.c
-@@ -173,9 +173,9 @@ static int osd_object_print(const struct lu_env *env, void *cookie,
- 	struct osd_object *o = osd_obj(l);
- 
- 	return (*p)(env, cookie,
--		    LUSTRE_OSD_WBCFS_NAME"-object@%p(i:%p:%lu/%u)",
-+		    LUSTRE_OSD_WBCFS_NAME"-object@%p(i:%p:%llu/%u)",
- 		    o, o->oo_inode,
--		    o->oo_inode ? o->oo_inode->i_ino : 0UL,
-+		    o->oo_inode ? (unsigned long long)o->oo_inode->i_ino : 0ULL,
- 		    o->oo_inode ? o->oo_inode->i_generation : 0);
- }
- 
-@@ -385,8 +385,8 @@ static int osd_mkfile(const struct lu_env *env, struct osd_object *obj,
- 	inode->i_generation = lu_fid_build_gen(fid);
- 	MEMFS_I(inode)->mei_fid = *fid;
- 	if (unlikely(insert_inode_locked(inode) < 0)) {
--		CERROR("%s: Failed to insert inode %lu "DFID": doubly allocated?\n",
--		       osd_name(osd), inode->i_ino, PFID(fid));
-+		CERROR("%s: Failed to insert inode %llu "DFID": doubly allocated?\n",
-+		       osd_name(osd), (unsigned long long)inode->i_ino, PFID(fid));
- 		iput(inode);
- 		RETURN(-EIO);
- 	}
-@@ -664,9 +664,9 @@ static int osd_destroy(const struct lu_env *env, struct dt_object *dt,
- 	/* TODO: Agent entry remvoal... */
- 	if (S_ISDIR(inode->i_mode)) {
- 		if (inode->i_nlink > 2)
--			CERROR("%s: dir "DFID" ino %lu nlink %u at unlink.\n",
--			       osd_name(osd), PFID(fid), inode->i_ino,
--			       inode->i_nlink);
-+			CERROR("%s: dir "DFID" ino %llu nlink %u at unlink.\n",
-+			       osd_name(osd), PFID(fid),
-+			       (unsigned long long)inode->i_ino, inode->i_nlink);
- 
- 		down_write(&obj->oo_guard);
- 		clear_nlink(inode);
-diff --git a/lustre/target/tgt_mount.c b/lustre/target/tgt_mount.c
-index 00cd586..3986c5f 100644
---- a/lustre/target/tgt_mount.c
-+++ b/lustre/target/tgt_mount.c
-@@ -2339,9 +2339,9 @@ static int server_getattr(struct mnt_idmap *idmap,
- 	if (!root_inode)
- 		return -EACCES;
- 
--	CDEBUG(D_SUPER, "%s: root_inode from %s ino=%lu, dev=%x\n",
-+	CDEBUG(D_SUPER, "%s: root_inode from %s ino=%llu, dev=%x\n",
- 	       lsi->lsi_svname, root_inode == inode ? "lsi" : "vfsmnt",
--	       root_inode->i_ino, root_inode->i_rdev);
-+	       (unsigned long long)root_inode->i_ino, root_inode->i_rdev);
- 	generic_fillattr(IDMAP_ARG RQMASK_ARG root_inode, stat);
- 	iput(root_inode);
- 
-diff --git a/lustre_compat/fs/crypto/crypto.c b/lustre_compat/fs/crypto/crypto.c
-index 9a3faac..b02da34 100644
---- a/lustre_compat/fs/crypto/crypto.c
-+++ b/lustre_compat/fs/crypto/crypto.c
-@@ -540,8 +540,8 @@ void llcrypt_msg(const struct inode *inode, int mask,
- 	vaf.fmt = fmt;
- 	vaf.va = &args;
- 	if (inode)
--		CDEBUG(mask, "llcrypt (%s, inode %lu): %pV\n",
--		       inode->i_sb->s_id, inode->i_ino, &vaf);
-+		CDEBUG(mask, "llcrypt (%s, inode %llu): %pV\n",
-+		       inode->i_sb->s_id, (unsigned long long)inode->i_ino, &vaf);
- 	else
- 		CDEBUG(mask, "llcrypt: %pV\n", &vaf);
- 	va_end(args);
-diff --git a/lustre_compat/fs/crypto/hooks.c b/lustre_compat/fs/crypto/hooks.c
-index c0e76ed..da046f6 100644
---- a/lustre_compat/fs/crypto/hooks.c
-+++ b/lustre_compat/fs/crypto/hooks.c
-@@ -44,8 +44,8 @@ int llcrypt_file_open(struct inode *inode, struct file *filp)
- 	if (IS_ENCRYPTED(d_inode(dir)) &&
- 	    !llcrypt_has_permitted_context(d_inode(dir), inode)) {
- 		llcrypt_warn(inode,
--			     "Inconsistent encryption context (parent directory: %lu)",
--			     d_inode(dir)->i_ino);
-+			     "Inconsistent encryption context (parent directory: %llu)",
-+			     (unsigned long long)d_inode(dir)->i_ino);
- 		err = -EPERM;
- 	}
- 	dput(dir);
 diff --git a/lustre_compat/fs/crypto/keyring.c b/lustre_compat/fs/crypto/keyring.c
 index a107c52..05ff690 100644
 --- a/lustre_compat/fs/crypto/keyring.c
@@ -821,55 +278,3 @@ index a107c52..05ff690 100644
  		     sb->s_id, busy_count, master_key_spec_type(&mk->mk_spec),
  		     master_key_spec_len(&mk->mk_spec), (u8 *)&mk->mk_spec.u,
  		     ino, path);
-diff --git a/lustre_compat/fs/crypto/keysetup.c b/lustre_compat/fs/crypto/keysetup.c
-index 6b3641e..b9ed598 100644
---- a/lustre_compat/fs/crypto/keysetup.c
-+++ b/lustre_compat/fs/crypto/keysetup.c
-@@ -85,8 +85,8 @@ select_encryption_mode(const union llcrypt_policy *policy,
- 	if (S_ISDIR(inode->i_mode) || S_ISLNK(inode->i_mode))
- 		return &available_modes[llcrypt_policy_fnames_mode(policy)];
- 
--	WARN_ONCE(1, "llcrypt: filesystem tried to load encryption info for inode %lu, which is not encryptable (file type %d)\n",
--		  inode->i_ino, (inode->i_mode & S_IFMT));
-+	WARN_ONCE(1, "llcrypt: filesystem tried to load encryption info for inode %llu, which is not encryptable (file type %d)\n",
-+		  (unsigned long long)inode->i_ino, (inode->i_mode & S_IFMT));
- 	return ERR_PTR(-EINVAL);
- }
- 
-diff --git a/lustre_compat/fs/crypto/policy.c b/lustre_compat/fs/crypto/policy.c
-index 0993f40..922b4a4 100644
---- a/lustre_compat/fs/crypto/policy.c
-+++ b/lustre_compat/fs/crypto/policy.c
-@@ -342,8 +342,8 @@ int llcrypt_ioctl_set_policy(struct file *filp, const void __user *arg)
- 	 * encryption-unaware clients.
- 	 */
- 	if (!(lsi->lsi_flags & LSI_FILENAME_ENC)) {
--		CWARN("inode %lu: forcing policy filenames_encryption_mode to null\n",
--		      inode->i_ino);
-+		CWARN("inode %llu: forcing policy filenames_encryption_mode to null\n",
-+		      (unsigned long long)inode->i_ino);
- 		cfs_tty_write_msg("\n\nForcing policy filenames_encryption_mode to null.\n\n");
- 		switch (policy.version) {
- 		case LLCRYPT_POLICY_V1:
-@@ -460,8 +460,8 @@ int llcrypt_ioctl_get_policy_ex(struct file *filp, void __user *uarg)
- 			policy->v1.filenames_encryption_mode =
- 				contents2filenames_encmode(
- 					policy->v1.contents_encryption_mode);
--			CWARN("inode %lu: returning policy filenames_encryption_mode as %d, but is in fact null\n",
--			      inode->i_ino,
-+			CWARN("inode %llu: returning policy filenames_encryption_mode as %d, but is in fact null\n",
-+			      (unsigned long long)inode->i_ino,
- 			      policy->v1.filenames_encryption_mode);
- 		}
- 		break;
-@@ -470,8 +470,8 @@ int llcrypt_ioctl_get_policy_ex(struct file *filp, void __user *uarg)
- 			policy->v2.filenames_encryption_mode =
- 				contents2filenames_encmode(
- 					policy->v2.contents_encryption_mode);
--			CWARN("inode %lu: returning policy filenames_encryption_mode as %d, but is in fact null\n",
--			      inode->i_ino,
-+			CWARN("inode %llu: returning policy filenames_encryption_mode as %d, but is in fact null\n",
-+			      (unsigned long long)inode->i_ino,
- 			      policy->v2.filenames_encryption_mode);
- 		}
- 		break;

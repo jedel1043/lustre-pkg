@@ -8,7 +8,7 @@ Forwarded: no
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/lustre/utils/Makefile.am b/lustre/utils/Makefile.am
-index 7decc6c..c28abb7 100644
+index 782dc82..c23649b 100644
 --- a/lustre/utils/Makefile.am
 +++ b/lustre/utils/Makefile.am
 @@ -133,7 +133,7 @@ liblustreapi_la_LDFLAGS = $(LIBREADLINE) -version-info 1:0:0 \

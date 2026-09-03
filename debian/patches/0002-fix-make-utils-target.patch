@@ -8,7 +8,7 @@ Forwarded: no
  1 file changed, 6 insertions(+), 1 deletion(-)
 
 diff --git a/config/lustre-build.m4 b/config/lustre-build.m4
-index 8613f6e..31f8fd9 100644
+index 65abfd0..024a493 100644
 --- a/config/lustre-build.m4
 +++ b/config/lustre-build.m4
 @@ -270,6 +270,12 @@ AC_ARG_ENABLE([utils],
