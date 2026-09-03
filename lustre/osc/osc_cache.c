@@ -54,7 +54,7 @@ static void osc_unreserve_grant(struct client_obd *cli, unsigned int reserved,
 static inline char *ext_flags(struct osc_extent *ext, char *flags)
 {
 	char *buf = flags;
-	*buf++ = ext->oe_rw ? 'r' : 'w';
+	*buf++ = ext->oe_write ? 'w' : 'r';
 	if (!RB_EMPTY_NODE(&ext->oe_node))
 		*buf++ = 'i';
 	if (ext->oe_sync)
@@ -324,6 +324,7 @@ static struct osc_extent *osc_extent_alloc(struct osc_object *obj)
 	INIT_LIST_HEAD(&ext->oe_pages);
 	init_waitqueue_head(&ext->oe_waitq);
 	ext->oe_dlmlock = NULL;
+	ext->oe_write = WRITE;
 
 	return ext;
 }
@@ -635,7 +636,7 @@ void osc_extent_release(const struct lu_env *env, struct osc_extent *ext,
 			if (osc_extent_merge(env, ext, next_extent(ext)) == 0)
 				grant += cli->cl_grant_extent_tax;
 
-			if (!hp && !ext->oe_rw && ext->oe_dlmlock) {
+			if (!hp && ext->oe_write && ext->oe_dlmlock) {
 				lock_res_and_lock(ext->oe_dlmlock);
 				hp = ldlm_is_cbpending(ext->oe_dlmlock);
 				unlock_res_and_lock(ext->oe_dlmlock);
@@ -902,10 +903,7 @@ int osc_extent_finish(const struct lu_env *env, struct osc_extent *ext,
 	enum cl_req_type crt;
 	ENTRY;
 
-	if (ext->oe_rw == 0)
-		crt = CRT_WRITE;
-	else
-		crt = CRT_READ;
+	crt = ext->oe_write;
 
 	OSC_EXTENT_DUMP(D_CACHE, ext, "extent finished.\n");
 
@@ -1526,8 +1524,10 @@ static int osc_reserve_grant(struct client_obd *cli, unsigned int bytes)
 	return rc;
 }
 
-static void __osc_unreserve_grant(struct client_obd *cli,
-				  unsigned int reserved, unsigned int unused)
+static void osc_unreserve_grant_no_wake(struct client_obd *cli,
+					unsigned int reserved,
+					unsigned int unused)
+__must_hold(&cli->cl_loi_list_lock)
 {
 	/* it's quite normal for us to get more grant than reserved.
 	 * Thinking about a case that two extents merged by adding a new
@@ -1547,8 +1547,9 @@ static void __osc_unreserve_grant(struct client_obd *cli,
 static void osc_unreserve_grant_nolock(struct client_obd *cli,
 				       unsigned int reserved,
 				       unsigned int unused)
+__must_hold(&cli->cl_loi_list_lock)
 {
-	__osc_unreserve_grant(cli, reserved, unused);
+	osc_unreserve_grant_no_wake(cli, reserved, unused);
 	if (unused > 0)
 		osc_wake_cache_waiters(cli);
 }
@@ -1559,6 +1560,51 @@ static void osc_unreserve_grant(struct client_obd *cli,
 	spin_lock(&cli->cl_loi_list_lock);
 	osc_unreserve_grant_nolock(cli, reserved, unused);
 	spin_unlock(&cli->cl_loi_list_lock);
+}
+
+enum osc_dio_reserve_result {
+	OSC_DIO_RESERVED,
+	OSC_DIO_NO_GRANT,
+	OSC_DIO_DIRTY_LIMIT,
+};
+
+/**
+ * osc_reserve_dio_grant() - Reserve grant and dirty pages for non-AIO DIO
+ * @cli: client OBD
+ * @grants: grant bytes to reserve
+ * @page_count: number of pages about to be dirtied
+ *
+ * Check the per-OSC and global dirty page limits, then the server grant. On
+ * success, increment the global dirty page count and reserve the grant. The
+ * caller accounts the per-OSC dirty pages with osc_consume_write_grant().
+ *
+ * Caller must hold cl_loi_list_lock.
+ *
+ * Return:
+ * * %OSC_DIO_RESERVED on success
+ * * %OSC_DIO_NO_GRANT if server grant is insufficient
+ * * %OSC_DIO_DIRTY_LIMIT if a dirty page limit would be exceeded
+ */
+static enum osc_dio_reserve_result
+osc_reserve_dio_grant(struct client_obd *cli, unsigned int grants,
+		      int page_count)
+__must_hold(&cli->cl_loi_list_lock)
+{
+	if (cli->cl_dirty_pages + page_count > cli->cl_dirty_max_pages)
+		return OSC_DIO_DIRTY_LIMIT;
+
+	if (atomic_long_add_return(page_count, &obd_dirty_pages) >
+	    obd_max_dirty_pages) {
+		atomic_long_sub(page_count, &obd_dirty_pages);
+		return OSC_DIO_DIRTY_LIMIT;
+	}
+
+	if (osc_reserve_grant(cli, grants) < 0) {
+		atomic_long_sub(page_count, &obd_dirty_pages);
+		return OSC_DIO_NO_GRANT;
+	}
+
+	return OSC_DIO_RESERVED;
 }
 
 /**
@@ -1629,6 +1675,7 @@ static void osc_exit_cache(struct client_obd *cli, struct osc_async_page *oap)
 static int osc_enter_cache_try(struct client_obd *cli,
 			       struct osc_async_page *oap,
 			       int bytes)
+__must_hold(&cli->cl_loi_list_lock)
 {
 	int rc;
 
@@ -1644,10 +1691,15 @@ static int osc_enter_cache_try(struct client_obd *cli,
 			osc_consume_write_grant(cli, &oap->oap_brw_page);
 			rc = 1;
 			goto out;
-		} else
+		} else {
 			atomic_long_dec(&obd_dirty_pages);
+		}
 	}
-	__osc_unreserve_grant(cli, bytes, bytes);
+	/*
+	 * osc_enter_cache_try() can be called from a waitqueue condition, so
+	 * waking cache waiters here would recurse into the same waitqueue.
+	 */
+	osc_unreserve_grant_no_wake(cli, bytes, bytes);
 
 out:
 	return rc;
@@ -2711,6 +2763,7 @@ int osc_queue_dio_pages(const struct lu_env *env, struct cl_io *io,
 	struct client_obd *cli = osc_cli(obj);
 	struct osc_io *oio = osc_env_io(env);
 	struct osc_async_page *oap;
+	struct cl_sub_dio *sdio;
 	struct osc_extent *ext;
 	struct osc_lock *oscl;
 	struct cl_page *page;
@@ -2720,6 +2773,7 @@ int osc_queue_dio_pages(const struct lu_env *env, struct cl_io *io,
 	int mppr = brw_flags & OBD_BRW_READ ? cli->cl_max_pages_per_rpc_read :
 					      cli->cl_max_pages_per_rpc_write;
 	pgoff_t start = CL_PAGE_EOF;
+	bool wait_sync = false;
 	bool can_merge = true;
 	enum cl_req_type crt;
 	pgoff_t end = 0;
@@ -2727,10 +2781,7 @@ int osc_queue_dio_pages(const struct lu_env *env, struct cl_io *io,
 
 	ENTRY;
 
-	if (brw_flags & OBD_BRW_READ)
-		crt = CRT_READ;
-	else
-		crt = CRT_WRITE;
+	crt = brw_flags & OBD_BRW_READ ? CRT_READ : CRT_WRITE;
 
 	/* we should never have more pages than can fit in an RPC, but if we do
 	 * we must allow sending of a larger RPC
@@ -2757,7 +2808,7 @@ int osc_queue_dio_pages(const struct lu_env *env, struct cl_io *io,
 		RETURN(-ENOMEM);
 	}
 
-	ext->oe_rw = !!(brw_flags & OBD_BRW_READ);
+	ext->oe_write = crt;
 	ext->oe_sync = 1;
 	ext->oe_no_merge = !can_merge;
 	ext->oe_urgent = 1;
@@ -2767,23 +2818,18 @@ int osc_queue_dio_pages(const struct lu_env *env, struct cl_io *io,
 	ext->oe_srvlock = !!(brw_flags & OBD_BRW_SRVLOCK);
 	ext->oe_ndelay = !!(brw_flags & OBD_BRW_NDELAY);
 	ext->oe_dio = true;
-	if (ext->oe_dio) {
-		struct cl_sync_io *anchor;
-		struct cl_page *clpage;
-
-		oap = list_first_entry(list, struct osc_async_page,
-				       oap_pending_item);
-		clpage = oap2cl_page(oap);
-		LASSERT(clpage->cp_type == CPT_TRANSIENT);
-		anchor = clpage->cp_sync_io;
-		ext->oe_csd = anchor->csi_dio_aio;
-	}
+	sdio = container_of(cdp, struct cl_sub_dio, csd_dio_pages);
+	ext->oe_csd = sdio;
 	oscl = oio->oi_write_osclock ? : oio->oi_read_osclock;
 	if (oscl && oscl->ols_dlmlock != NULL)
 		ext->oe_dlmlock = ldlm_lock_get(oscl->ols_dlmlock);
-	if (!ext->oe_rw) { /* direct io write */
+	if (ext->oe_write) { /* direct io write */
+		enum osc_dio_reserve_result reserved;
+		bool is_aio;
 		int grants;
 		int ppc;
+
+		is_aio = sdio->csd_ll_aio->cda_is_aio;
 
 		ppc = 1 << (cli->cl_chunkbits - PAGE_SHIFT);
 		grants = cli->cl_grant_extent_tax;
@@ -2792,7 +2838,26 @@ int osc_queue_dio_pages(const struct lu_env *env, struct cl_io *io,
 
 		CDEBUG(D_CACHE, "requesting %d bytes grant\n", grants);
 		spin_lock(&cli->cl_loi_list_lock);
-		if (osc_reserve_grant(cli, grants) == 0) {
+		/*
+		 * True AIO has its own asynchronous completion contract and
+		 * does not use ci_parallel_dio. Keep its grant accounting
+		 * unchanged; this limit controls regular (non-AIO) DIO.
+		 */
+		if (is_aio)
+			reserved = osc_reserve_grant(cli, grants) == 0 ?
+				   OSC_DIO_RESERVED : OSC_DIO_NO_GRANT;
+		else
+			reserved = osc_reserve_dio_grant(cli, grants,
+							 page_count);
+		/*
+		 * ll_direct_IO() snapshots ci_parallel_dio before entering
+		 * OSC, so that flag cannot make this request synchronous.
+		 * Explicitly wait for each unaccounted regular DIO extent;
+		 * true AIO retains its asynchronous completion contract.
+		 */
+		wait_sync = !is_aio && reserved != OSC_DIO_RESERVED;
+
+		if (reserved == OSC_DIO_RESERVED) {
 			for (i = from_page; i <= to_page; i++) {
 				page = cdp->cdp_cl_pages[i];
 				opg = osc_cl_page_osc(page, obj);
@@ -2801,18 +2866,22 @@ int osc_queue_dio_pages(const struct lu_env *env, struct cl_io *io,
 				osc_consume_write_grant(cli,
 							&oap->oap_brw_page);
 			}
-			atomic_long_add(page_count, &obd_dirty_pages);
+			if (is_aio)
+				atomic_long_add(page_count, &obd_dirty_pages);
+
+			/* Convert the reserved grant to dirty grant. */
 			osc_unreserve_grant_nolock(cli, grants, 0);
 			ext->oe_grants = grants;
 		} else {
-			/* We cannot report ENOSPC correctly if we do parallel
-			 * DIO (async RPC submission), so turn off parallel dio
-			 * if there is not sufficient grant available.  This
-			 * makes individual RPCs synchronous.
-			 */
-			io->ci_parallel_dio = false;
-			CDEBUG(D_CACHE,
-			"not enough grant available, switching to sync for this i/o\n");
+			if (reserved == OSC_DIO_DIRTY_LIMIT)
+				CDEBUG(D_CACHE,
+				       "dirty page limit reached, use sync DIO\n");
+			else if (wait_sync)
+				CDEBUG(D_CACHE,
+				       "not enough grant, use sync DIO\n");
+			else
+				CDEBUG(D_CACHE,
+				       "not enough grant, continue async AIO\n");
 		}
 		spin_unlock(&cli->cl_loi_list_lock);
 		osc_update_next_shrink(cli);
@@ -2823,11 +2892,13 @@ int osc_queue_dio_pages(const struct lu_env *env, struct cl_io *io,
 	ext->oe_mppr = mppr;
 	list_splice_init(list, &ext->oe_pages);
 	ext->oe_layout_version = io->ci_layout_version;
+	if (wait_sync)
+		osc_extent_get(ext);
 
 	osc_object_lock(obj);
 	/* Reuse the initial refcount for RPC, don't drop it */
 	osc_extent_state_set(ext, OES_LOCK_DONE);
-	if (!ext->oe_rw) { /* write */
+	if (ext->oe_write) { /* write */
 		list_add_tail(&ext->oe_link, &obj->oo_urgent_exts);
 		osc_update_pending(obj, OBD_BRW_WRITE, page_count);
 	} else {
@@ -2836,7 +2907,22 @@ int osc_queue_dio_pages(const struct lu_env *env, struct cl_io *io,
 	}
 	osc_object_unlock(obj);
 
-	osc_io_unplug_async(env, cli, obj);
+	if (wait_sync) {
+		int rc;
+
+		osc_io_unplug(env, cli, obj);
+		rc = osc_extent_wait(env, ext, OES_INV);
+		osc_extent_put(env, ext);
+		/*
+		 * RPC completion has already recorded @rc in the DIO sync
+		 * anchor. Returning it here would stop osc_dio_submit() before
+		 * the remaining cdp pages are queued, leaving them counted in
+		 * csi_sync_nr and causing the DIO wait to hang.
+		 */
+		CDEBUG(D_CACHE, "sync DIO extent completed: rc = %d\n", rc);
+	} else {
+		osc_io_unplug_async(env, cli, obj);
+	}
 	RETURN(0);
 }
 
@@ -2858,10 +2944,7 @@ int osc_queue_sync_pages(const struct lu_env *env, struct cl_io *io,
 
 	ENTRY;
 
-	if (brw_flags & OBD_BRW_READ)
-		crt = CRT_READ;
-	else
-		crt = CRT_WRITE;
+	crt = brw_flags & OBD_BRW_READ ? CRT_READ : CRT_WRITE;
 
 	list_for_each_entry(oap, list, oap_pending_item) {
 		struct osc_page *opg = oap2osc_page(oap);
@@ -2890,7 +2973,7 @@ int osc_queue_sync_pages(const struct lu_env *env, struct cl_io *io,
 		RETURN(-ENOMEM);
 	}
 
-	ext->oe_rw = !!(brw_flags & OBD_BRW_READ);
+	ext->oe_write = crt;
 	ext->oe_sync = 1;
 	ext->oe_no_merge = !can_merge;
 	ext->oe_urgent = 1;
@@ -2911,41 +2994,6 @@ int osc_queue_sync_pages(const struct lu_env *env, struct cl_io *io,
 		anchor = clpage->cp_sync_io;
 		ext->oe_csd = anchor->csi_dio_aio;
 	}
-	if (ext->oe_dio && !ext->oe_rw) { /* direct io write */
-		int grants;
-		int ppc;
-
-		ppc = 1 << (cli->cl_chunkbits - PAGE_SHIFT);
-		grants = cli->cl_grant_extent_tax;
-		grants += (1 << cli->cl_chunkbits) *
-			((page_count + ppc - 1) / ppc);
-
-		CDEBUG(D_CACHE, "requesting %d bytes grant\n", grants);
-		spin_lock(&cli->cl_loi_list_lock);
-		if (osc_reserve_grant(cli, grants) == 0 &&
-		    cli->cl_dirty_pages + page_count <
-						    cli->cl_dirty_max_pages) {
-			list_for_each_entry(oap, list, oap_pending_item) {
-				osc_consume_write_grant(cli,
-							&oap->oap_brw_page);
-			}
-			atomic_long_add(page_count, &obd_dirty_pages);
-			osc_unreserve_grant_nolock(cli, grants, 0);
-			ext->oe_grants = grants;
-		} else {
-			/* We cannot report ENOSPC correctly if we do parallel
-			 * DIO (async RPC submission), so turn off parallel dio
-			 * if there is not sufficient grant or dirty pages
-			 * available. This makes individual RPCs synchronous.
-			 */
-			io->ci_parallel_dio = false;
-			CDEBUG(D_CACHE,
-			"not enough grant or dirty pages available, switching to sync for this i/o\n");
-		}
-		spin_unlock(&cli->cl_loi_list_lock);
-		osc_update_next_shrink(cli);
-	}
-
 	ext->oe_is_rdma_only = !!(brw_flags & OBD_BRW_RDMA_ONLY);
 	ext->oe_nr_pages = page_count;
 	ext->oe_mppr = mppr;
@@ -2955,7 +3003,7 @@ int osc_queue_sync_pages(const struct lu_env *env, struct cl_io *io,
 	osc_object_lock(obj);
 	/* Reuse the initial refcount for RPC, don't drop it */
 	osc_extent_state_set(ext, OES_LOCK_DONE);
-	if (!ext->oe_rw) { /* write */
+	if (ext->oe_write) { /* write */
 		if (!ext->oe_srvlock && !ext->oe_dio) {
 			/* The most likely case here is from lack of grants
 			 * so we are either out of quota or out of space.
@@ -3007,7 +3055,8 @@ int osc_queue_sync_pages(const struct lu_env *env, struct cl_io *io,
 		osc_update_pending(obj, OBD_BRW_READ, page_count);
 	}
 
-	OSC_EXTENT_DUMP(D_CACHE, ext, "allocate ext: rw=%d\n", ext->oe_rw);
+	OSC_EXTENT_DUMP(D_CACHE, ext, "allocate ext: write=%d\n",
+			ext->oe_write);
 	osc_object_unlock(obj);
 
 	osc_io_unplug_async(env, cli, obj);
@@ -3275,6 +3324,14 @@ int osc_cache_writeback_range(const struct lu_env *env, struct osc_object *obj,
 	int result = 0;
 
 	ENTRY;
+
+	/* diagnostic: emulate a client that can no longer flush (e.g. evicted):
+	 * fail the writeback and leave the dirty pages in their cached extent.
+	 * Discard must still succeed so the fix path can clean up. See sanity
+	 * test_912.
+	 */
+	if (!discard && CFS_FAIL_CHECK(OBD_FAIL_OSC_NO_FLUSH))
+		RETURN(-EIO);
 
 repeat:
 	osc_object_lock(obj);

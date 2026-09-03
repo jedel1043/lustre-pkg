@@ -1992,6 +1992,17 @@ t32_verify_quota() {
 	return 0
 }
 
+# osd-zfs reports a directory's size from the ZAP's logical extent, which the
+# size recorded in the image predates (LU-15842), so drop that column before
+# comparing.  t32_check() only restores images matching mds1_FSTYPE, so an
+# ldiskfs run compares ldiskfs against ldiskfs and keeps checking it.  Rebuild
+# every record so the two sides stay comparable if ls repads the size field.
+t32_normalize_list() {
+	[[ $mds1_FSTYPE == zfs ]] || { cat; return; }
+
+	awk '{ if ($2 ~ /^d/) $6 = "DIRSIZE"; $1 = $1; print }'
+}
+
 get_project_quota() {
 	local spec=$4
 	local uuid=$3
@@ -2225,7 +2236,7 @@ t32_test() {
 		if [ "$mds1_FSTYPE" == ldiskfs ]; then
 			mopts="loop,$mopts"
 		fi
-		$r $MOUNT_CMD -o $mopts $mdt_dev $tmp/mnt/mdt
+		$r $MOUNT_TGT -o $mopts $mdt_dev $tmp/mnt/mdt
 		$r $LCTL replace_nids $fsname-OST0000 $ostnid || {
 			$r $LCTL dl
 			error_noexit "replace_nids $fsname-OST0000 $ostnid failed"
@@ -2260,7 +2271,7 @@ t32_test() {
 
 	t32_wait_til_devices_gone $node
 
-	$r $MOUNT_CMD -o $mopts $mdt_dev $tmp/mnt/mdt || {
+	$r $MOUNT_TGT -o $mopts $mdt_dev $tmp/mnt/mdt || {
 		$r losetup -a
 		error_noexit "Mounting the MDT"
 		return 1
@@ -2270,7 +2281,7 @@ t32_test() {
 	if $mdt2_is_available; then
 		echo "== mdt2 available =="
 		mopts=mgsnode=$nid,$mopts
-		$r $MOUNT_CMD -o $mopts $mdt2_dev $tmp/mnt/mdt1 || {
+		$r $MOUNT_TGT -o $mopts $mdt2_dev $tmp/mnt/mdt1 || {
 			$r losetup -a
 			error_noexit "Mounting the MDT"
 			return 1
@@ -2307,7 +2318,7 @@ t32_test() {
 		}
 
 		echo "== mount new MDT....$fs2mdsdev =="
-		$r $MOUNT_CMD -o $mopts $fs2mdsdev $tmp/mnt/mdt1 || {
+		$r $MOUNT_TGT -o $mopts $fs2mdsdev $tmp/mnt/mdt1 || {
 			error_noexit "mount mdt1 failed"
 			return 1
 		}
@@ -2383,13 +2394,13 @@ t32_test() {
 		fi
 	fi
 
-	$r $MOUNT_CMD -onomgs -o$mopts $ost_dev $tmp/mnt/ost || {
+	$r $MOUNT_TGT -onomgs -o$mopts $ost_dev $tmp/mnt/ost || {
 		error_noexit "Mounting the OST"
 		return 1
 	}
 
 	if $ost2_is_available; then
-		$r $MOUNT_CMD -onomgs -o$mopts $ost2_dev $tmp/mnt/ost1 || {
+		$r $MOUNT_TGT -onomgs -o$mopts $ost2_dev $tmp/mnt/ost1 || {
 			error_noexit "Mounting the OST2"
 			return 1
 		}
@@ -2667,8 +2678,10 @@ t32_test() {
 			else
 				pushd $tmp/mnt/lustre
 			fi
-			$r cat $list_file | sort -k 6 >$tmp/list.orig
-			BLOCKSIZE=1024 ls -Rni --time-style=+%s | sort -k 6 |
+			$r cat $list_file | t32_normalize_list |
+				sort -k 6 >$tmp/list.orig
+			BLOCKSIZE=1024 ls -Rni --time-style=+%s |
+				t32_normalize_list | sort -k 6 |
 				sed 's/\. / /' >$tmp/list || {
 				error_noexit "ls"
 				return 1
@@ -3189,7 +3202,7 @@ t32_test() {
 		if [ "$mds1_FSTYPE" == ldiskfs ]; then
 			mopts="loop,$mopts"
 		fi
-		$r $MOUNT_CMD -o $mopts $mdt_dev $tmp/mnt/mdt || {
+		$r $MOUNT_TGT -o $mopts $mdt_dev $tmp/mnt/mdt || {
 			error_noexit "Remounting the MDT"
 			return 1
 		}
@@ -3843,8 +3856,8 @@ test_37() {
 	fi
 
 	load_modules
-	mount_op=$(do_facet $SINGLEMDS mount -v -t lustre $opts \
-		$mdsdev_sym $mntpt 2>&1)
+	mount_op=$(do_facet $SINGLEMDS $MOUNT_TGT -v $opts \
+		   $mdsdev_sym $mntpt 2>&1)
 	rc=${PIPESTATUS[0]}
 
 	echo mount_op=$mount_op
@@ -4055,10 +4068,10 @@ test_41c() {
 	#define OBD_FAIL_TGT_MOUNT_RACE 0x716
 	do_facet mds1 "$LCTL set_param fail_loc=0x80000716"
 
-	do_facet mds1 mount -t lustre $mds1dev $mds1mnt $mds1opts &
+	do_facet mds1 $MOUNT_TGT $mds1dev $mds1mnt $mds1opts &
 	local pid=$!
 
-	do_facet mds1 mount -t lustre $mds1dev $mds1mnt $mds1opts
+	do_facet mds1 $MOUNT_TGT $mds1dev $mds1mnt $mds1opts
 	local rc2=$?
 	wait $pid
 	local rc=$?
@@ -4101,10 +4114,10 @@ test_41c() {
 	#define OBD_FAIL_TGT_MOUNT_RACE 0x716
 	do_facet ost1 "$LCTL set_param fail_loc=0x80000716"
 
-	do_facet ost1 mount -t lustre $ost1dev $ost1mnt $ost1opts &
+	do_facet ost1 $MOUNT_TGT $ost1dev $ost1mnt $ost1opts &
 	pid=$!
 
-	do_facet ost1 mount -t lustre $ost1dev $ost1mnt $ost1opts
+	do_facet ost1 $MOUNT_TGT $ost1dev $ost1mnt $ost1opts
 	rc2=$?
 	wait $pid
 	rc=$?
@@ -9216,24 +9229,28 @@ test_103() {
 run_test 103 "rename filesystem name"
 
 test_104a() { # LU-6952
-	local mds_mountopts=$MDS_MOUNT_OPTS
-	local ost_mountopts=$OST_MOUNT_OPTS
-	local mds_mountfsopts=$MDS_MOUNT_FS_OPTS
-	local lctl_ver=$(do_facet $SINGLEMDS $LCTL --version |
-			awk '{ print $2 }')
+	local mount_ver=$(do_facet mds1 $LCTL --version | awk '{ print $2 }')
+	local mount_code=$(version_code $mount_ver)
 
-	[[ $(version_code $lctl_ver) -lt $(version_code 2.9.55) ]] &&
-		skip "this test needs utils above 2.9.55"
+	(( $mount_code >= $(version_code v2_9_57_0-52-gb27652cb44) )) ||
+		skip "needs mount.lustre >= 2.9.57 for option parsing fix"
 
-	# specify "acl" in mount options used by mkfs.lustre
-	if [ -z "$MDS_MOUNT_FS_OPTS" ]; then
-		MDS_MOUNT_FS_OPTS="acl,user_xattr"
+	stack_trap "export MDS_MOUNT_OPTS='$MDS_MOUNT_OPTS'"
+	stack_trap "export OST_MOUNT_OPTS='$OST_MOUNT_OPTS'"
+	stack_trap "export MDS_MOUNT_FS_OPTS='$MDS_MOUNT_FS_OPTS'"
+
+	# mount options saved by mkfs.lustre persistently
+	local mkfs_val=222
+	local mkfs_opt="recovery_time_soft=$mkfs_val"
+	
+	if [[ -z "$MDS_MOUNT_FS_OPTS" ]]; then
+		MDS_MOUNT_FS_OPTS="user_xattr,$mkfs_opt"
 	else
 
-		MDS_MOUNT_FS_OPTS="${MDS_MOUNT_FS_OPTS},acl,user_xattr"
+		MDS_MOUNT_FS_OPTS+=",$mkfs_opt"
 	fi
 
-	echo "mountfsopt: $MDS_MOUNT_FS_OPTS"
+	echo "mkfs.lustre --mountfsopts: $MDS_MOUNT_FS_OPTS"
 
 	#reformat/remount the MDT to apply the MDT_MOUNT_FS_OPT options
 	formatall
@@ -9241,29 +9258,33 @@ test_104a() { # LU-6952
 		start_mgs
 	fi
 
-	if [ -z "$MDS_MOUNT_OPTS" ]; then
-		MDS_MOUNT_OPTS="-o noacl"
+	# mount options specified for one mount.lustre call
+	local mount_val=188
+	local mount_opt="recovery_time_soft=$mount_val"
+	if [[ -z "$MDS_MOUNT_OPTS" ]]; then
+		MDS_MOUNT_OPTS="$mount_opt"
 	else
-		MDS_MOUNT_OPTS="${MDS_MOUNT_OPTS},noacl"
-	fi
 
-	for num in $(seq $MDSCOUNT); do
+		MDS_MOUNT_OPTS+=",$mount_opt"
+	fi
+	echo "mount opts: $MDS_MOUNT_OPTS"
+
+	for ((num = 1; num <= $MDSCOUNT; num++)); do
 		start mds$num $(mdsdevname $num) $MDS_MOUNT_OPTS ||
-			error "Failed to start MDS"
+			error "Failed to start mds$num"
 	done
 
-	for num in $(seq $OSTCOUNT); do
+	for ((num = 1; num <= $OSTCOUNT; num++)); do
 		start ost$num $(ostdevname $num) $OST_MOUNT_OPTS ||
-			error "Failed to start OST"
+			error "Failed to start ost$num"
 	done
 
 	mount_client $MOUNT
-	setfacl -m "d:$RUNAS_ID:rwx" $MOUNT &&
-		error "ACL is applied when FS is mounted with noacl."
-
-	MDS_MOUNT_OPTS=$mds_mountopts
-	OST_MOUNT_OPTS=$ost_mountopts
-	MDS_MOUNT_FS_OPTS=$mds_mountfsopts
+	local param=mdt.$FSNAME-MDT0000.recovery_time_soft
+	local found=$(do_facet mds1 "$LCTL get_param -n $param")
+	(( $found == $mount_val )) ||
+		error "found $param=$found (mkfs=$mkfs_val), wanted $mount_val"
+	echo "found wanted $param=$found"
 }
 run_test 104a "Make sure user defined options are reflected in mount"
 
@@ -10771,8 +10792,8 @@ test_123ag() { # LU-15142
 	local orig_val
 
 	remote_mgs_nodsh && skip "remote MGS with nodsh"
-	(( $MGS_VERSION >= $(version_code 2.14.55) )) ||
-		skip "Need server version least 2.14.55"
+	(( $MGS_VERSION >= $(version_code v2_14_55-123-g2a5b50d207) )) ||
+		skip "Need MGS >= 2.14.55.123 to skip deleted params"
 
 	[ -d $MOUNT/.lustre ] || setup
 
@@ -12292,6 +12313,9 @@ test_155() {
 	touch $DIR/$tdir/$tfile
 	local seq1=$($LFS getstripe --yaml $DIR/$tdir/$tfile |
 		     awk -F ':' '/l_fid:/ {print $2}' | tr -d [:blank:])
+	local idx=$($LFS getstripe --yaml $DIR/$tdir/$tfile |
+		     awk '/l_ost_idx:/ {print $3}')
+	(( $idx != 0 )) && skip_env "couldn't create on ost1"
 
 	stopall
 	setupall
@@ -12300,6 +12324,9 @@ test_155() {
 	touch $DIR/$tdir/${tfile}2
 	local seq2=$($LFS getstripe --yaml $DIR/$tdir/${tfile}2 |
 		     awk -F ':' '/l_fid:/ {print $2}' | tr -d [:blank:])
+	idx=$($LFS getstripe --yaml $DIR/$tdir/${tfile}2 |
+		     awk '/l_ost_idx:/ {print $3}')
+	(( $idx != 0 )) && skip_env "couldn't create on ost1 (2)"
 
 	(( seq2 == seq1 + 1 )) || error "gap in seq: old $seq1 new $seq2"
 }

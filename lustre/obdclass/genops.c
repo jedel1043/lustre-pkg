@@ -586,27 +586,6 @@ struct obd_device *class_name2obd(const char *name)
 }
 EXPORT_SYMBOL(class_name2obd);
 
-int class_uuid2dev(struct obd_uuid *uuid)
-{
-	struct obd_device *obd = NULL;
-	unsigned long dev_no = 0;
-	int ret;
-
-	obd_device_lock();
-	obd_device_for_each(dev_no, obd) {
-		if (obd_uuid_equals(uuid, &obd->obd_uuid)) {
-			LASSERT(obd->obd_magic == OBD_DEVICE_MAGIC);
-			ret = obd->obd_minor;
-			obd_device_unlock();
-			return ret;
-		}
-	}
-	obd_device_unlock();
-
-	return -1;
-}
-EXPORT_SYMBOL(class_uuid2dev);
-
 struct obd_device *class_uuid2obd(struct obd_uuid *uuid)
 {
 	struct obd_device *obd = NULL;
@@ -2433,8 +2412,13 @@ __u16 obd_get_mod_rpc_slot(struct client_obd *cli, __u32 opc)
 	/* find a free tag */
 	i = find_first_zero_bit(cli->cl_mod_tag_bitmap,
 				max + 1);
-	LASSERT(i < OBD_MAX_RIF_MAX);
-	LASSERT(!test_and_set_bit(i, cli->cl_mod_tag_bitmap));
+	if (i >= OBD_MAX_RIF_MAX)
+		LASSERTF(0, "%s: no free modify RPC tag below %u, max %u\n",
+			 cli->cl_import->imp_obd->obd_name, OBD_MAX_RIF_MAX,
+			 max);
+	else if (test_and_set_bit(i, cli->cl_mod_tag_bitmap))
+		LASSERTF(0, "%s: modify RPC tag %u already in use\n",
+			 cli->cl_import->imp_obd->obd_name, i + 1);
 	spin_unlock_irq(&cli->cl_mod_rpcs_waitq.lock);
 	/* tag 0 is reserved for non-modify RPCs */
 
@@ -2465,8 +2449,13 @@ void obd_put_mod_rpc_slot(struct client_obd *cli, __u32 opc, __u16 tag)
 	if (close_req)
 		cli->cl_close_rpcs_in_flight--;
 	/* release the tag in the bitmap */
-	LASSERT(tag - 1 < OBD_MAX_RIF_MAX);
-	LASSERT(test_and_clear_bit(tag - 1, cli->cl_mod_tag_bitmap) != 0);
+	if (tag - 1 >= OBD_MAX_RIF_MAX)
+		LASSERTF(0, "%s: modify RPC tag %u above %u\n",
+			 cli->cl_import->imp_obd->obd_name, tag,
+			 OBD_MAX_RIF_MAX);
+	else if (!test_and_clear_bit(tag - 1, cli->cl_mod_tag_bitmap))
+		LASSERTF(0, "%s: modify RPC tag %u already released\n",
+			 cli->cl_import->imp_obd->obd_name, tag);
 	__wake_up_locked_key(&cli->cl_mod_rpcs_waitq, TASK_NORMAL,
 			     (void *)close_req);
 	spin_unlock_irq(&cli->cl_mod_rpcs_waitq.lock);

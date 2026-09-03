@@ -872,19 +872,13 @@ struct ptlrpc_body_v2 {
 #define OCD_HAS_FLAG2(ocd, flag2) (OCD_HAS_FLAG(ocd, FLAGS2) && \
 	 !!((ocd)->ocd_connect_flags2 & OBD_CONNECT2_##flag2))
 
-#ifdef HAVE_LRU_RESIZE_SUPPORT
-#define LRU_RESIZE_CONNECT_FLAG OBD_CONNECT_LRU_RESIZE
-#else
-#define LRU_RESIZE_CONNECT_FLAG 0
-#endif
-
 #define MDT_CONNECT_SUPPORTED  (OBD_CONNECT_RDONLY | OBD_CONNECT_VERSION | \
 				OBD_CONNECT_ACL | OBD_CONNECT_XATTR | \
 				OBD_CONNECT_IBITS | OBD_CONNECT_NODEVOH | \
 				OBD_CONNECT_ATTRFID | OBD_CONNECT_CANCELSET | \
 				OBD_CONNECT_AT | OBD_CONNECT_BRW_SIZE | \
 				OBD_CONNECT_MDS_MDS | OBD_CONNECT_FID | \
-				LRU_RESIZE_CONNECT_FLAG | OBD_CONNECT_VBR | \
+				OBD_CONNECT_LRU_RESIZE | OBD_CONNECT_VBR | \
 				OBD_CONNECT_LOV_V3 | OBD_CONNECT_FULL20 | \
 				OBD_CONNECT_64BITHASH | OBD_CONNECT_JOBSTATS | \
 				OBD_CONNECT_EINPROGRESS | \
@@ -934,7 +928,7 @@ struct ptlrpc_body_v2 {
 #define OST_CONNECT_SUPPORTED  (OBD_CONNECT_SRVLOCK | OBD_CONNECT_GRANT | \
 				OBD_CONNECT_VERSION | OBD_CONNECT_INDEX | \
 				OBD_CONNECT_BRW_SIZE | OBD_CONNECT_CANCELSET | \
-				OBD_CONNECT_AT | LRU_RESIZE_CONNECT_FLAG | \
+				OBD_CONNECT_AT | OBD_CONNECT_LRU_RESIZE | \
 				OBD_CONNECT_CKSUM | OBD_CONNECT_VBR | \
 				OBD_CONNECT_MDS | OBD_CONNECT_SKIP_ORPHAN | \
 				OBD_CONNECT_GRANT_SHRINK | OBD_CONNECT_FULL20 |\
@@ -1995,9 +1989,25 @@ struct mdt_body {
 	__u64	mbo_dom_size; /* size of DOM component */
 	__u64	mbo_dom_blocks; /* blocks consumed by DOM component */
 	__u64	mbo_btime;
-	__u64	mbo_padding_9; /* also fix lustre_swab_mdt_body */
+	__u64	mbo_xattr_absent; /* MBO_XA_* bitmask of absent xattrs */
 	__u64	mbo_padding_10;
 }; /* 216 */
+
+/* Bit numbers for mbo_xattr_absent: each bit indicates a system
+ * xattr was looked up on the MDS and confirmed absent on the inode.
+ */
+enum mdt_xattr_negative {
+	MBO_XA_SEC_SELINUX	= 0, /* security.selinux */
+	MBO_XA_SEC_SMACK	= 1, /* security.SMACK64 */
+};
+
+#define MBO_XA_KNOWN ((1ULL << MBO_XA_SEC_SELINUX) | \
+		      (1ULL << MBO_XA_SEC_SMACK))
+
+#define MBO_XA_NAMES {						\
+	[MBO_XA_SEC_SELINUX] = XATTR_SECURITY_PREFIX "selinux",	\
+	[MBO_XA_SEC_SMACK]   = XATTR_SECURITY_PREFIX "SMACK64",	\
+}
 
 struct mdt_ioepoch {
 	struct lustre_handle mio_open_handle;

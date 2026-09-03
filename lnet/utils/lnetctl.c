@@ -56,6 +56,7 @@ static int jt_del_peer_nid(int argc, char **argv);
 static int jt_set_max_intf(int argc, char **argv);
 static int jt_set_discovery(int argc, char **argv);
 static int jt_set_drop_asym_route(int argc, char **argv);
+static int jt_set_latency_stats(int argc, char **argv);
 static int jt_list_peer(int argc, char **argv);
 static int jt_add_udsp(int argc, char **argv);
 static int jt_del_udsp(int argc, char **argv);
@@ -93,6 +94,7 @@ static int jt_setup_mrrouting(int argc, char **argv);
 static int jt_setup_sysctl(int argc, char **argv);
 static int jt_calc_cpt_of_nid(int argc, char **argv);
 static int jt_show_peer_debug_info(int argc, char **argv);
+static int yaml_lnet_stats(const char *key, int value, int flags, FILE *fp);
 
 command_t cmd_list[] = {
 	{"lnet", jt_lnet, 0, "lnet {configure | unconfigure} [--all|--large]"},
@@ -102,6 +104,7 @@ command_t cmd_list[] = {
 	{"set", jt_set, 0, "set {tiny_buffers | small_buffers | large_buffers"
 			   " | routing | numa_range | max_interfaces"
 			   " | discovery | drop_asym_route | retry_count"
+			   " | latency_stats"
 			   " | transaction_timeout | health_sensitivity"
 			   " | recovery_interval | router_sensitivity"
 			   " | response_tracking | recovery_limit}"},
@@ -235,6 +238,10 @@ command_t set_cmds[] = {
 	 "drop/accept asymmetrical route messages\n"
 	 "\t0 - accept asymmetrical route messages (default)\n"
 	 "\t1 - drop asymmetrical route messages\n"},
+	{"latency_stats", jt_set_latency_stats, 0,
+	 "enable/disable per-operation latency statistics\n"
+	 "\t0 - disable latency statistics\n"
+	 "\t1 - enable latency statistics (default)\n"},
 	{"retry_count", jt_set_retry_count, 0, "number of retries\n"
 	 "\t0 - turn of retries\n"
 	 "\t>0 - number of retries\n"},
@@ -701,11 +708,13 @@ static int jt_reset_stats(int argc, char **argv)
 	if (rc)
 		return rc;
 
-	rc = lustre_lnet_reset_stats(-1, &err_rc);
-	if (rc != LUSTRE_CFG_RC_NO_ERR)
-		cYAML_print_tree2file(stderr, err_rc);
-
-	cYAML_free_tree(err_rc);
+	rc = yaml_lnet_stats("reset", 1, 0, stdout);
+	if (rc == -EOPNOTSUPP) {
+		rc = lustre_lnet_reset_stats(-1, &err_rc);
+		if (rc != LUSTRE_CFG_RC_NO_ERR)
+			cYAML_print_tree2file(stderr, err_rc);
+		cYAML_free_tree(err_rc);
+	}
 
 	return rc;
 }
@@ -815,6 +824,35 @@ static int jt_set_drop_asym_route(int argc, char **argv)
 	}
 
 	rc = lustre_lnet_config_drop_asym_route(value, -1, &err_rc);
+	if (rc != LUSTRE_CFG_RC_NO_ERR)
+		cYAML_print_tree2file(stderr, err_rc);
+
+	cYAML_free_tree(err_rc);
+
+	return rc;
+}
+
+static int jt_set_latency_stats(int argc, char **argv)
+{
+	long value;
+	int rc;
+	struct cYAML *err_rc = NULL;
+
+	rc = check_cmd(set_cmds, "set", "latency_stats", 2, argc, argv);
+	if (rc)
+		return rc;
+
+	rc = parse_long(argv[1], &value);
+	if (rc != 0) {
+		cYAML_build_error(-1, -1, "parser", "set",
+				  "cannot parse latency_stats value",
+				  &err_rc);
+		cYAML_print_tree2file(stderr, err_rc);
+		cYAML_free_tree(err_rc);
+		return -1;
+	}
+
+	rc = lustre_lnet_config_latency_stats(value, -1, &err_rc);
 	if (rc != LUSTRE_CFG_RC_NO_ERR)
 		cYAML_print_tree2file(stderr, err_rc);
 
@@ -1281,6 +1319,209 @@ free_reply:
 		rc = -EINVAL;
 	}
 
+	yaml_parser_cleanup(&reply);
+	nl_socket_free(sk);
+
+	return rc == 1 ? 0 : rc;
+}
+
+/*
+ * Report whether the LNet Netlink family advertises @group. Uses a private
+ * socket because the resolver's cache pickup would otherwise run on the
+ * callbacks that the reply parser installs.
+ */
+static bool lnet_genl_group_exists(const char *group)
+{
+	struct nl_sock *ctrl;
+	bool exists = false;
+
+	ctrl = nl_socket_alloc();
+	if (!ctrl)
+		return false;
+
+	if (genl_connect(ctrl) == 0)
+		exists = genl_ctrl_resolve_grp(ctrl, LNET_GENL_NAME,
+					       group) >= 0;
+
+	nl_socket_free(ctrl);
+
+	return exists;
+}
+
+/*
+ * Drive the LNET_CMD_STATS Netlink command. With NLM_F_DUMP and no key the
+ * kernel returns the global statistics as YAML on @fp. Otherwise the request
+ * carries a single {key: value} pair, used to reset the statistics.
+ */
+static int yaml_lnet_stats(const char *key, int value, int flags, FILE *fp)
+{
+	struct nl_sock *sk = NULL;
+	const char *msg = NULL;
+	yaml_emitter_t output;
+	yaml_parser_t reply;
+	yaml_event_t event;
+	int rc;
+
+	/* A module without LNET_CMD_STATS has no "stats" multicast group
+	 * either, and the emitter reports the missing group as a plain writer
+	 * error that a genuine emitter failure cannot be told apart from.
+	 * Check for the group first so the caller can use the ioctl.
+	 */
+	if (!lnet_genl_group_exists("stats"))
+		return -EOPNOTSUPP;
+
+	/* Create Netlink emitter to send request to kernel */
+	sk = nl_socket_alloc();
+	if (!sk)
+		return -EOPNOTSUPP;
+
+	/* Setup parser to receive Netlink packets */
+	rc = yaml_parser_initialize(&reply);
+	if (rc == 0) {
+		nl_socket_free(sk);
+		return -EOPNOTSUPP;
+	}
+
+	rc = yaml_parser_set_input_netlink(&reply, sk, false);
+	if (rc == 0) {
+		msg = yaml_parser_get_reader_error(&reply);
+		goto free_reply;
+	}
+
+	/* Create Netlink emitter to send request to kernel */
+	rc = yaml_emitter_initialize(&output);
+	if (rc == 0) {
+		msg = "failed to initialize emitter";
+		goto free_reply;
+	}
+
+	rc = yaml_emitter_set_output_netlink(&output, sk, LNET_GENL_NAME,
+					     LNET_GENL_VERSION, LNET_CMD_STATS,
+					     flags);
+	if (rc == 0)
+		goto emitter_error;
+
+	yaml_emitter_open(&output);
+	yaml_document_start_event_initialize(&event, NULL, NULL, NULL, 0);
+	rc = yaml_emitter_emit(&output, &event);
+	if (rc == 0)
+		goto emitter_error;
+
+	yaml_mapping_start_event_initialize(&event, NULL,
+					    (yaml_char_t *)YAML_MAP_TAG,
+					    1, YAML_ANY_MAPPING_STYLE);
+	rc = yaml_emitter_emit(&output, &event);
+	if (rc == 0)
+		goto emitter_error;
+
+	yaml_scalar_event_initialize(&event, NULL,
+				     (yaml_char_t *)YAML_STR_TAG,
+				     (yaml_char_t *)"stats",
+				     strlen("stats"), 1, 0,
+				     YAML_PLAIN_SCALAR_STYLE);
+	rc = yaml_emitter_emit(&output, &event);
+	if (rc == 0)
+		goto emitter_error;
+
+	if (key) {
+		char valstr[INT_STRING_LEN];
+
+		yaml_mapping_start_event_initialize(&event, NULL,
+						    (yaml_char_t *)YAML_MAP_TAG,
+						    1, YAML_ANY_MAPPING_STYLE);
+		rc = yaml_emitter_emit(&output, &event);
+		if (rc == 0)
+			goto emitter_error;
+
+		yaml_scalar_event_initialize(&event, NULL,
+					     (yaml_char_t *)YAML_STR_TAG,
+					     (yaml_char_t *)key,
+					     strlen(key), 1, 0,
+					     YAML_PLAIN_SCALAR_STYLE);
+		rc = yaml_emitter_emit(&output, &event);
+		if (rc == 0)
+			goto emitter_error;
+
+		snprintf(valstr, sizeof(valstr), "%d", value);
+		yaml_scalar_event_initialize(&event, NULL,
+					     (yaml_char_t *)YAML_INT_TAG,
+					     (yaml_char_t *)valstr,
+					     strlen(valstr), 1, 0,
+					     YAML_PLAIN_SCALAR_STYLE);
+		rc = yaml_emitter_emit(&output, &event);
+		if (rc == 0)
+			goto emitter_error;
+
+		yaml_mapping_end_event_initialize(&event);
+		rc = yaml_emitter_emit(&output, &event);
+		if (rc == 0)
+			goto emitter_error;
+	} else {
+		yaml_scalar_event_initialize(&event, NULL,
+					     (yaml_char_t *)YAML_STR_TAG,
+					     (yaml_char_t *)"",
+					     strlen(""), 1, 0,
+					     YAML_PLAIN_SCALAR_STYLE);
+		rc = yaml_emitter_emit(&output, &event);
+		if (rc == 0)
+			goto emitter_error;
+	}
+
+	yaml_mapping_end_event_initialize(&event);
+	rc = yaml_emitter_emit(&output, &event);
+	if (rc == 0)
+		goto emitter_error;
+
+	yaml_document_end_event_initialize(&event, 0);
+	rc = yaml_emitter_emit(&output, &event);
+	if (rc == 0)
+		goto emitter_error;
+
+	rc = yaml_emitter_close(&output);
+emitter_error:
+	if (rc == 0) {
+		yaml_emitter_log_error(&output, stderr);
+		rc = -EINVAL;
+	} else {
+		yaml_document_t errmsg;
+
+		rc = yaml_parser_load(&reply, &errmsg);
+		if (rc == 1 && (flags & NLM_F_DUMP)) {
+			yaml_emitter_t debug;
+
+			rc = yaml_emitter_initialize(&debug);
+			if (rc == 1) {
+				yaml_emitter_set_indent(&debug,
+							LNET_DEFAULT_INDENT);
+				yaml_emitter_set_output_file(&debug, fp);
+				rc = yaml_emitter_dump(&debug, &errmsg);
+			}
+			yaml_emitter_delete(&debug);
+		} else {
+			msg = yaml_parser_get_reader_error(&reply);
+		}
+		yaml_document_delete(&errmsg);
+	}
+	yaml_emitter_cleanup(&output);
+free_reply:
+	if (rc == 0) {
+		if (!msg)
+			msg = yaml_parser_get_reader_error(&reply);
+		/* The reply can parse and still fail to render, which leaves
+		 * the parser with no error to report.
+		 */
+		if (!msg)
+			msg = "failed to render statistics";
+		/* errno is set by yaml_parser_get_reader_error(). Report the
+		 * kernel's error verbatim so callers can tell a module without
+		 * LNET_CMD_STATS from a genuine failure.
+		 */
+		rc = errno < 0 ? errno : -EINVAL;
+		if (rc != -EOPNOTSUPP)
+			yaml_lnet_print_error(flags & NLM_F_DUMP ? NLM_F_DUMP
+								: -1,
+					      "stats", msg);
+	}
 	yaml_parser_cleanup(&reply);
 	nl_socket_free(sk);
 
@@ -2229,7 +2470,7 @@ static int yaml_lnet_config_ni(char *net_id, char *ip2net,
 		/* Use NI addresses instead of interface */
 		if (strchr(intf->intf_name, '@') ||
 		    (strcmp(intf->intf_name, "<?>") == 0 &&
--                    flags == NLM_F_REPLACE)) {
+		     flags == NLM_F_REPLACE)) {
 			yaml_scalar_event_initialize(&event, NULL,
 						     (yaml_char_t *)YAML_STR_TAG,
 						     (yaml_char_t *)"nid",
@@ -2418,6 +2659,7 @@ free_reply:
 	return rc == 1 ? 0 : rc;
 }
 
+#ifdef HAVE_KFILND
 static int kfi_intflist2cxi(struct list_head *nw_intflist)
 {
 	struct lnet_dlc_intf_descr *intf;
@@ -2433,6 +2675,7 @@ static int kfi_intflist2cxi(struct list_head *nw_intflist)
 	}
 	return LUSTRE_CFG_RC_NO_ERR;
 }
+#endif
 
 static int jt_add_ni(int argc, char **argv)
 {
@@ -3924,6 +4167,12 @@ static int jt_show_stats(int argc, char **argv)
 	if (rc)
 		return rc;
 
+	rc = yaml_lnet_stats(NULL, 0, NLM_F_DUMP, stdout);
+	if (rc <= 0) {
+		if (rc != -EOPNOTSUPP)
+			return rc;
+	}
+
 	rc = lustre_lnet_show_stats(-1, &show_rc, &err_rc);
 
 	if (rc != LUSTRE_CFG_RC_NO_ERR)
@@ -4011,6 +4260,12 @@ static int jt_show_global(int argc, char **argv)
 	}
 
 	rc = lustre_lnet_show_drop_asym_route(-1, &show_rc, &err_rc);
+	if (rc != LUSTRE_CFG_RC_NO_ERR) {
+		cYAML_print_tree2file(stderr, err_rc);
+		goto out;
+	}
+
+	rc = lustre_lnet_show_latency_stats(-1, &show_rc, &err_rc);
 	if (rc != LUSTRE_CFG_RC_NO_ERR) {
 		cYAML_print_tree2file(stderr, err_rc);
 		goto out;
@@ -4269,6 +4524,14 @@ static int yaml_import_global_settings(char *key, unsigned long value,
 			rc = lustre_lnet_show_drop_asym_route(-1, &show_rc,
 							      &err_rc);
 		}
+	} else if (strcmp("latency_stats", key) == 0) {
+		if (cmd == 'a') {
+			rc = lustre_lnet_config_latency_stats(value, -1,
+							      &err_rc);
+		} else if (cmd == 's') {
+			rc = lustre_lnet_show_latency_stats(-1, &show_rc,
+							    &err_rc);
+		}
 	} else if (strcmp("retry_count", key) == 0) {
 		if (cmd == 'a') {
 			rc = lustre_lnet_config_retry_count(value, -1,
@@ -4350,6 +4613,7 @@ static char *global_params[] = {
 	"max_intf",
 	"discovery",
 	"drop_asym_route",
+	"latency_stats",
 	"retry_count",
 	"transaction_timeout",
 	"health_sensitivity",
@@ -5848,6 +6112,13 @@ show_others:
 	}
 
 	rc = lustre_lnet_show_drop_asym_route(-1, &show_rc, &err_rc);
+	if (rc != LUSTRE_CFG_RC_NO_ERR) {
+		cYAML_print_tree2file(f, err_rc);
+		cYAML_free_tree(err_rc);
+		err_rc = NULL;
+	}
+
+	rc = lustre_lnet_show_latency_stats(-1, &show_rc, &err_rc);
 	if (rc != LUSTRE_CFG_RC_NO_ERR) {
 		cYAML_print_tree2file(f, err_rc);
 		cYAML_free_tree(err_rc);

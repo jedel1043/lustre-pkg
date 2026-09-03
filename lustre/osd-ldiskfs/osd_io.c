@@ -22,9 +22,10 @@
 #include <linux/types.h>
 /* prerequisite for linux/xattr.h */
 #include <linux/fs.h>
+#include <lustre_compat/linux/bio.h>
 #include <linux/mm.h>
 #include <linux/swap.h>
-#include <linux/pagevec.h>
+#include <lustre_compat/linux/folio_batch.h>
 #include <linux/blk_types.h>
 
 /*
@@ -408,7 +409,8 @@ static int osd_do_bio(struct osd_device *osd, struct inode *inode,
 	struct block_device *bdev = sb->s_bdev;
 	struct bio *bio = NULL;
 	int bio_start_page_idx = 0;
-	struct page *page;
+	struct folio *folio;
+	unsigned int lnb_offset;
 	unsigned int page_offset;
 	sector_t sector;
 	int nblocks;
@@ -443,8 +445,9 @@ static int osd_do_bio(struct osd_device *osd, struct inode *inode,
 		 * "blocks_left_page" is reduced), and the last page may
 		 * skip some blocks at the end (limited by "count").
 		 */
-		page = lnbs[page_idx]->lnb_page;
+		folio = lnbs[page_idx]->lnb_folio;
 		LASSERT(page_idx < iobuf->dr_npages);
+		lnb_offset = lnb_pgno(lnbs[page_idx]) << PAGE_SHIFT;
 
 		i = block_idx % blocks_per_page;
 		blocks_left_page = blocks_per_page - i;
@@ -471,7 +474,7 @@ static int osd_do_bio(struct osd_device *osd, struct inode *inode,
 					 page_idx, block_idx, i,
 					 (unsigned long long)start_blocks,
 					 (unsigned long long)count, npages);
-				addr = kmap_local_page(page);
+				addr = lnb_kmap_local(lnbs[page_idx]);
 				memset(addr + page_offset, 0, blocksize);
 				kunmap_local(addr);
 				continue;
@@ -487,8 +490,8 @@ static int osd_do_bio(struct osd_device *osd, struct inode *inode,
 				nblocks++;
 
 			if (bio && can_be_merged(bio, sector) &&
-			    bio_add_page(bio, page, blocksize * nblocks,
-					 page_offset) != 0)
+			    bio_add_folio(bio, folio, blocksize * nblocks,
+					  lnb_offset + page_offset) != 0)
 				continue;       /* added this frag OK */
 
 			rc = osd_submit_bio(osd, iobuf, bio);
@@ -497,13 +500,12 @@ static int osd_do_bio(struct osd_device *osd, struct inode *inode,
 
 			bio_start_page_idx = page_idx;
 			/* allocate new bio */
-			bio = cfs_bio_alloc(bdev,
-					    min_t(unsigned short, BIO_MAX_VECS,
-						  (block_idx_end - block_idx +
-						   blocks_left_page - 1)),
-					    iobuf->dr_rw ? REQ_OP_WRITE
-							 : REQ_OP_READ,
-					    GFP_NOIO);
+			bio = bio_alloc(bdev,
+					min_t(unsigned short, BIO_MAX_VECS,
+					      (block_idx_end - block_idx +
+					       blocks_left_page - 1)),
+					iobuf->dr_rw ? REQ_OP_WRITE
+						     : REQ_OP_READ, GFP_NOIO);
 			if (!bio) {
 				rc = -ENOMEM;
 				CERROR("%s: cannot allocate bio %u pages: rc = %d\n",
@@ -516,8 +518,8 @@ static int osd_do_bio(struct osd_device *osd, struct inode *inode,
 			if (rc)
 				goto out;
 
-			rc = bio_add_page(bio, page,
-					  blocksize * nblocks, page_offset);
+			rc = bio_add_folio(bio, folio, blocksize * nblocks,
+					   lnb_offset + page_offset);
 			LASSERT(rc != 0);
 		}
 	}
@@ -577,7 +579,8 @@ static int osd_map_remote_to_local(loff_t offset, ssize_t len, int *nrpages,
 		lnb->lnb_len = plen;
 		/* lnb->lnb_flags = rnb->rnb_flags; */
 		lnb->lnb_flags = 0;
-		lnb->lnb_page = NULL;
+		lnb->lnb_folio = NULL;
+		lnb->lnb_fpgno = 0;
 		lnb->lnb_rc = 0;
 		lnb->lnb_guard_rpc = 0;
 		lnb->lnb_guard_disk = 0;
@@ -595,8 +598,9 @@ static int osd_map_remote_to_local(loff_t offset, ssize_t len, int *nrpages,
 	RETURN(rc);
 }
 
-static struct page *osd_get_page(const struct lu_env *env, struct dt_object *dt,
-				 loff_t offset, gfp_t gfp_mask, bool cache)
+static struct folio *osd_get_folio(const struct lu_env *env,
+				  struct dt_object *dt, loff_t offset,
+				  gfp_t gfp_mask, bool cache)
 {
 	struct osd_thread_info *oti = osd_oti_get(env);
 	struct inode *inode = osd_dt_obj(dt)->oo_inode;
@@ -613,11 +617,11 @@ static struct page *osd_get_page(const struct lu_env *env, struct dt_object *dt,
 		if (!IS_ERR_OR_NULL(folio)) {
 			LASSERT(!folio_test_private_2(folio));
 			folio_wait_writeback(folio);
-			return fpgptr(folio);
 		} else {
-			lprocfs_counter_add(d->od_stats, LPROC_OSD_NO_PAGE, 1);
-			return NULL;
+			lprocfs_counter_add(d->od_stats, LPROC_OSD_NO_FOLIO, 1);
+			folio = NULL;
 		}
+		return folio;
 	}
 
 	if (inode->i_mapping->nrpages) {
@@ -627,7 +631,7 @@ static struct page *osd_get_page(const struct lu_env *env, struct dt_object *dt,
 					FGP_LOCK, gfp_mask);
 		if (!IS_ERR_OR_NULL(folio)) {
 			folio_wait_writeback(folio);
-			return fpgptr(folio);
+			return folio;
 		}
 	}
 
@@ -648,7 +652,7 @@ static struct page *osd_get_page(const struct lu_env *env, struct dt_object *dt,
 	folio->index = offset >> PAGE_SHIFT;
 	oti->oti_dio_pages_used++;
 
-	return fpgptr(folio);
+	return folio;
 }
 
 /*
@@ -695,25 +699,26 @@ static int osd_bufs_put(const struct lu_env *env, struct dt_object *dt,
 	ll_folio_batch_init(&fbatch);
 
 	for (i = 0; i < npages; i++) {
-		struct page *page = lnb[i].lnb_page;
+		struct folio *folio = lnb[i].lnb_folio;
 
-		if (page == NULL)
+		if (folio == NULL)
 			continue;
 
 		/* if the page isn't cached, then reset uptodate
 		 * to prevent reuse
 		 */
-		if (PagePrivate2(page)) {
+		if (folio_test_private_2(folio)) {
 			oti->oti_dio_pages_used--;
 			lnb[i].lnb_dio = 0;
 		} else {
 			if (lnb[i].lnb_locked)
-				unlock_page(page);
-			if (folio_batch_add_page(&fbatch, page) == 0)
+				folio_unlock(folio);
+			if (folio_batch_add(&fbatch, folio) == 0)
 				folio_batch_release(&fbatch);
 		}
 
-		lnb[i].lnb_page = NULL;
+		lnb[i].lnb_folio = NULL;
+		lnb[i].lnb_fpgno = 0;
 	}
 
 	LASSERTF(oti->oti_dio_pages_used == 0, "%d\n", oti->oti_dio_pages_used);
@@ -819,15 +824,18 @@ bypass_checks:
 	gfp_mask = rw & DT_BUFS_TYPE_LOCAL ? (GFP_NOFS | __GFP_HIGHMEM) :
 					     GFP_HIGHUSER;
 	for (i = 0; i < npages; i++, lnb++) {
-		lnb->lnb_page = osd_get_page(env, dt, lnb->lnb_file_offset,
-					     gfp_mask, cache);
-		if (lnb->lnb_page == NULL)
+		lnb->lnb_folio = osd_get_folio(env, dt, lnb->lnb_file_offset,
+					      gfp_mask, cache);
+		if (lnb->lnb_folio == NULL)
 			GOTO(cleanup, rc = -ENOMEM);
 
+		/* FUTURE: deal with multi-order folios */
+		LASSERT(folio_nr_pages(lnb->lnb_folio) == 1);
+		lnb->lnb_fpgno = 0;
 		lnb->lnb_locked = 1;
 		lnb->lnb_dio = !!cache;
 		if (cache)
-			mark_page_accessed(lnb->lnb_page);
+			folio_mark_accessed(lnb->lnb_folio);
 	}
 
 #if 0
@@ -943,7 +951,7 @@ static int osd_ldiskfs_map_inode_pages(struct inode *inode,
 {
 	int blocks_per_page = PAGE_SIZE >> inode->i_blkbits;
 	int rc = 0, i = 0, mapped_index = 0;
-	struct page *fp = NULL;
+	struct folio *fp = NULL;
 	int clen = 0;
 	pgoff_t max_page_index;
 	handle_t *handle = NULL;
@@ -959,8 +967,8 @@ static int osd_ldiskfs_map_inode_pages(struct inode *inode,
 
 	max_page_index = inode->i_sb->s_maxbytes >> PAGE_SHIFT;
 
-	CDEBUG(D_OTHER, "inode %lu: map %d pages from %lu\n",
-		inode->i_ino, pages, folio_index_page((*lnbs)->lnb_page));
+	CDEBUG(D_OTHER, "inode %llu: map %d pages from %lu\n",
+	       (u64)inode->i_ino, pages, (*lnbs)->lnb_folio->index);
 
 	if (osd->od_extents_dense)
 		compressed = iobuf->dr_lnbs[0]->lnb_flags & OBD_BRW_COMPRESSED;
@@ -988,24 +996,23 @@ static int osd_ldiskfs_map_inode_pages(struct inode *inode,
 		ktime_t time;
 
 		if (fp == NULL) { /* start new extent */
-			fp = (*lnbs)->lnb_page;
+			fp = (*lnbs)->lnb_folio;
 			lnbs++;
 			clen = 1;
 			iobuf->dr_lextents++;
 			if (++i != pages)
 				continue;
-		} else if (folio_index_page(fp) + clen ==
-			   folio_index_page((*lnbs)->lnb_page)) {
+		} else if (fp->index + clen == (*lnbs)->lnb_folio->index) {
 			/* continue the extent */
 			lnbs++;
 			clen++;
 			if (++i != pages)
 				continue;
 		}
-		if (folio_index_page(fp) + clen > max_page_index)
+		if (fp->index + clen > max_page_index)
 			GOTO(cleanup, rc = -EFBIG);
 		/* process found extent */
-		map.m_lblk = folio_index_page(fp) * blocks_per_page;
+		map.m_lblk = fp->index * blocks_per_page;
 		map.m_len = blen = clen * blocks_per_page;
 
 		/*
@@ -1018,8 +1025,7 @@ static int osd_ldiskfs_map_inode_pages(struct inode *inode,
 		if (iobuf->dr_start_pg_wblks > 0) {
 			total = previous_total = start_blocks =
 				iobuf->dr_start_pg_wblks;
-			map.m_lblk = folio_index_page(fp) * blocks_per_page +
-				total;
+			map.m_lblk = fp->index * blocks_per_page + total;
 			map.m_len = blen - total;
 			iobuf->dr_start_pg_wblks = 0;
 		}
@@ -1134,8 +1140,7 @@ cont_map:
 			 */
 			osd_decay_extent_bytes(osd,
 				(total - previous_total) << inode->i_blkbits);
-			map.m_lblk = folio_index_page(fp) * blocks_per_page +
-				     total;
+			map.m_lblk = fp->index * blocks_per_page + total;
 			map.m_len = blen - total;
 			previous_total = total;
 			goto cont_map;
@@ -1194,17 +1199,18 @@ static int osd_write_prep(const struct lu_env *env, struct dt_object *dt,
 		 * we'll set it uptodate once bulk is done. otherwise
 		 * subsequent reads can access non-stable data
 		 */
-		ClearPageUptodate(lnb[i].lnb_page);
+		folio_clear_uptodate(lnb[i].lnb_folio);
 
 		if (lnb[i].lnb_len == PAGE_SIZE)
 			continue;
 
-		if (maxidx >= folio_index_page(lnb[i].lnb_page)) {
+		if (maxidx >= lnb[i].lnb_folio->index) {
 			osd_iobuf_add_page(iobuf, &lnb[i]);
 		} else {
 			long off;
-			char *p = kmap_local_page(lnb[i].lnb_page);
+			char *p;
 
+			p = lnb_kmap_local(&lnb[i]);
 			off = lnb[i].lnb_page_offset;
 			if (off)
 				memset(p, 0, off);
@@ -1217,7 +1223,7 @@ static int osd_write_prep(const struct lu_env *env, struct dt_object *dt,
 	}
 	end = ktime_get();
 	timediff = ktime_us_delta(end, start);
-	lprocfs_counter_add(osd->od_stats, LPROC_OSD_GET_PAGE, timediff);
+	lprocfs_counter_add(osd->od_stats, LPROC_OSD_GET_FOLIO, timediff);
 
 	if (iobuf->dr_npages) {
 		rc = osd_ldiskfs_map_inode_pages(inode, iobuf, osd, 0,
@@ -1294,7 +1300,7 @@ static int osd_declare_write_commit(const struct lu_env *env,
 	int			rc = 0;
 	int			credits = 0;
 	long long		quota_space = 0;
-	struct ldiskfs_map_blocks map;
+	struct ldiskfs_map_blocks map = { 0 };
 	enum osd_quota_local_flags local_flags = 0;
 	enum osd_qid_declare_flags declare_flags = OSD_QID_BLK;
 	unsigned int		extent_bytes;
@@ -1438,8 +1444,8 @@ static int osd_declare_write_commit(const struct lu_env *env,
 		credits += dirty_groups;
 
 	CDEBUG(D_INODE,
-	       "%s: inode #%lu extent_bytes %u extents %d credits %d\n",
-	       osd_ino2name(inode), inode->i_ino, extent_bytes, extents,
+	       "%s: inode #%llu extent_bytes %u extents %d credits %d\n",
+	       osd_ino2name(inode), (u64)inode->i_ino, extent_bytes, extents,
 	       credits);
 
 out_declare:
@@ -1502,9 +1508,9 @@ static int osd_write_commit(const struct lu_env *env, struct dt_object *dt,
 		if (lnb[i].lnb_rc) { /* ENOSPC, network RPC error, etc. */
 			CDEBUG(D_INODE, "Skipping [%d] == %d\n", i,
 			       lnb[i].lnb_rc);
-			LASSERT(lnb[i].lnb_page);
+			LASSERT(lnb[i].lnb_folio);
 			generic_error_remove_folio(inode->i_mapping,
-						   page_folio(lnb[i].lnb_page));
+						   lnb[i].lnb_folio);
 			continue;
 		}
 
@@ -1514,17 +1520,17 @@ static int osd_write_commit(const struct lu_env *env, struct dt_object *dt,
 		if (!(lnb[i].lnb_flags & OBD_BRW_MAPPED))
 			check_credits = 1;
 
-		LASSERT(PageLocked(lnb[i].lnb_page));
-		LASSERT(!PageWriteback(lnb[i].lnb_page));
+		LASSERT(folio_test_locked(lnb[i].lnb_folio));
+		LASSERT(!folio_test_writeback(lnb[i].lnb_folio));
 
 		/*
 		 * Since write and truncate are serialized by dd_sem, even
 		 * partial-page truncate should not leave dirty pages in the
 		 * page cache.
 		 */
-		LASSERT(!PageDirty(lnb[i].lnb_page));
+		LASSERT(!folio_test_dirty(lnb[i].lnb_folio));
 
-		SetPageUptodate(lnb[i].lnb_page);
+		folio_mark_uptodate(lnb[i].lnb_folio);
 
 		osd_iobuf_add_page(iobuf, &lnb[i]);
 	}
@@ -1551,12 +1557,12 @@ static int osd_write_commit(const struct lu_env *env, struct dt_object *dt,
 	if (unlikely(rc != 0 && !thandle->th_restart_tran)) {
 		/* if write fails, we should drop pages from the cache */
 		for (i = 0; i < npages; i++) {
-			if (lnb[i].lnb_page == NULL)
+			if (lnb[i].lnb_folio == NULL)
 				continue;
-			if (!PagePrivate2(lnb[i].lnb_page)) {
-				LASSERT(PageLocked(lnb[i].lnb_page));
+			if (!folio_test_private_2(lnb[i].lnb_folio)) {
+				LASSERT(folio_test_locked(lnb[i].lnb_folio));
 				generic_error_remove_folio(inode->i_mapping,
-						page_folio(lnb[i].lnb_page));
+							   lnb[i].lnb_folio);
 			}
 		}
 	}
@@ -1600,11 +1606,11 @@ static int osd_read_prep(const struct lu_env *env, struct dt_object *dt,
 
 		/* Bypass disk read if fail_loc is set properly */
 		if (CFS_FAIL_CHECK_QUIET(OBD_FAIL_OST_FAKE_RW))
-			SetPageUptodate(lnb[i].lnb_page);
+			folio_mark_uptodate(lnb[i].lnb_folio);
 
-		if (PageUptodate(lnb[i].lnb_page)) {
+		if (folio_test_uptodate(lnb[i].lnb_folio)) {
 			cache_hits++;
-			unlock_page(lnb[i].lnb_page);
+			folio_unlock(lnb[i].lnb_folio);
 		} else {
 			cache_misses++;
 			osd_iobuf_add_page(iobuf, &lnb[i]);
@@ -1619,7 +1625,7 @@ static int osd_read_prep(const struct lu_env *env, struct dt_object *dt,
 	}
 	end = ktime_get();
 	timediff = ktime_us_delta(end, start);
-	lprocfs_counter_add(osd->od_stats, LPROC_OSD_GET_PAGE, timediff);
+	lprocfs_counter_add(osd->od_stats, LPROC_OSD_GET_FOLIO, timediff);
 
 	if (cache_hits != 0)
 		lprocfs_counter_add(osd->od_stats, LPROC_OSD_CACHE_HIT,
@@ -1641,10 +1647,11 @@ static int osd_read_prep(const struct lu_env *env, struct dt_object *dt,
 
 		/* early release to let others read data during the bulk */
 		for (i = 0; i < iobuf->dr_npages; i++) {
-			struct page *page = iobuf->dr_lnbs[i]->lnb_page;
-			LASSERT(PageLocked(page));
-			if (!PagePrivate2(page))
-				unlock_page(page);
+			struct folio *folio = iobuf->dr_lnbs[i]->lnb_folio;
+
+			LASSERT(folio_test_locked(folio));
+			if (!folio_test_private_2(folio))
+				folio_unlock(folio);
 		}
 	}
 
@@ -1709,9 +1716,9 @@ int osd_ldiskfs_read(struct inode *inode, void *buf, int size, loff_t *offs)
 		csize = min(blocksize - boffs, size);
 		bh = __ldiskfs_bread(NULL, inode, block, 0);
 		if (IS_ERR(bh)) {
-			CERROR("%s: can't read %u@%llu on ino %lu: rc = %ld\n",
-			       osd_ino2name(inode), csize, *offs, inode->i_ino,
-			       PTR_ERR(bh));
+			CERROR("%s: can't read %u@%llu on ino %llu: rc = %ld\n",
+			       osd_ino2name(inode), csize, *offs,
+			       (u64)inode->i_ino, PTR_ERR(bh));
 			return PTR_ERR(bh);
 		}
 
@@ -2532,8 +2539,8 @@ static int osd_fallocate_preallocate(const struct lu_env *env,
 	LASSERT(osd_invariant(obj));
 	LASSERT(inode != NULL);
 
-	CDEBUG(D_INODE, "fallocate: inode #%lu: start %llu end %llu mode %d\n",
-	       inode->i_ino, *start, end, mode);
+	CDEBUG(D_INODE, "fallocate: inode #%llu: start %llu end %llu mode %d\n",
+	       (u64)inode->i_ino, *start, end, mode);
 
 	dquot_initialize(inode);
 
@@ -2580,8 +2587,8 @@ static int osd_fallocate_preallocate(const struct lu_env *env,
 		rc = ldiskfs_map_blocks(handle, inode, &map, flags);
 		if (rc <= 0) {
 			CDEBUG(D_INODE,
-			       "inode #%lu: block %u: len %u: ldiskfs_map_blocks returned %d\n",
-			       inode->i_ino, map.m_lblk, map.m_len, rc);
+			       "inode #%llu: block %u: len %u: ldiskfs_map_blocks returned %d\n",
+			       (u64)inode->i_ino, map.m_lblk, map.m_len, rc);
 			ldiskfs_mark_inode_dirty(handle, inode);
 			break;
 		}
@@ -2923,7 +2930,7 @@ static loff_t osd_lseek(const struct lu_env *env, struct dt_object *dt,
 		RETURN(PTR_ERR(file));
 
 	result = file->f_op->llseek(file, offset, whence);
-	compat_security_file_free(file);
+	security_file_free(file);
 	/*
 	 * If 'offset' is beyond end of object file then treat it as not error
 	 * but valid case for SEEK_HOLE and return 'offset' as result.
@@ -3147,7 +3154,7 @@ static int osd_execute_fallocate(const struct lu_env *env,
 	old_size = i_size_read(inode);
 	file->f_mode |= FMODE_64BITHASH;
 	rc = file->f_op->fallocate(file, mode, start, end - start);
-	compat_security_file_free(file);
+	security_file_free(file);
 	/* simulate ldiskfs failing after it already zeroed part of the range */
 	if (rc == 0 && CFS_FAIL_CHECK(OBD_FAIL_OSD_FALLOCATE_ERR))
 		rc = -EIO;

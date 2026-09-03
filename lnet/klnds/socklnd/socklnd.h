@@ -29,8 +29,11 @@
 #include <linux/list.h>
 #include <linux/mm.h>
 #include <linux/module.h>
+#include <lustre_compat/linux/net.h>
 #include <linux/pagemap.h>
 #include <linux/refcount.h>
+#include <linux/sched.h>
+#include <linux/sched/mm.h>
 #include <linux/stat.h>
 #include <linux/string.h>
 #include <linux/syscalls.h>
@@ -314,6 +317,7 @@ struct ksock_conn {
 	u8			ksnc_rx_started;	/* started receiving a msg */
 	u8			ksnc_rx_ready;		/* data ready to read */
 	u8			ksnc_rx_scheduled;	/* being progressed */
+	u8			ksnc_rx_discard;	/* drop rx payload */
 	u8			ksnc_rx_state;		/* what is being read */
 	int			ksnc_rx_nob_left;	/* # bytes to next hdr/body */
 	struct iov_iter		ksnc_rx_to;		/* copy destination */

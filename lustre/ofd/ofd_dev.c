@@ -189,7 +189,7 @@ static int ofd_stack_init(const struct lu_env *env,
 	LASSERT(d);
 	m->ofd_osd = lu2dt_dev(d);
 	if (m->ofd_osd->dd_rdonly)
-		ofd_obd(m)->obd_read_only = 1;
+		set_bit(OBDF_READ_ONLY, ofd_obd(m)->obd_flags);
 
 	snprintf(info->fti_u.name, sizeof(info->fti_u.name),
 		 "%s-osd", lustre_cfg_string(cfg, 0));
@@ -2505,15 +2505,17 @@ static int ofd_quotactl(struct tgt_session_info *tsi)
 
 	if (oqctl->qc_cmd == LUSTRE_Q_ITEROQUOTA)
 		rc = lquota_iter_change_qid(nodemap, oqctl);
-	nodemap_putref(nodemap);
-	if (rc)
+	if (rc) {
+		nodemap_putref(nodemap);
 		RETURN(rc);
+	}
 
 	if (oqctl->qc_id != id)
 		swap(oqctl->qc_id, id);
 
 	rc = lquotactl_slv(tsi->tsi_env, tsi->tsi_tgt->lut_bottom, nodemap,
 			   oqctl, buffer);
+	nodemap_putref(nodemap);
 
 	ofd_counter_incr(tsi->tsi_exp, LPROC_OFD_STATS_QUOTACTL,
 			 tsi->tsi_jobid, ktime_us_delta(ktime_get(), kstart));

@@ -36,6 +36,7 @@ export JOBID_VAR=${JOBID_VAR:-"procname_uid"}  # or "existing" or "disable"
 
 #export PDSH="pdsh -S -Rssh -w"
 export MOUNT_CMD=${MOUNT_CMD:-"mount -t lustre"}
+export MOUNT_TGT=${MOUNT_TGT:-"mount -t lustre_tgt"}
 export UMOUNT=${UMOUNT:-"umount -d"}
 
 # A switch to enable kptr less restrictively
@@ -167,7 +168,11 @@ reset_lustre() {
 }
 
 setup_if_needed() {
-	! ${do_setup} && return
+	if ! ${do_setup}; then
+		is_mounted $MOUNT && init_facets_vars
+		return 0
+	fi
+
 	nfs_client_mode && return
 	AUSTER_CLEANUP=false
 
@@ -1039,9 +1044,7 @@ load_lnet() {
 	# that obviously has nothing to do with this Lustre run
 	# Disable automatic memory scanning to avoid perf hit.
 	if [[ -w $KMEMLEAK ]] ; then
-		local kmemleak_out=$(echo scan=off > $KMEMLEAK 2>&1 || true)
-
-		if [[ "$kmemleak_out" =~ "Device or resource busy" ]]; then
+		if ! echo scan=off > $KMEMLEAK 2>&1; then
 			echo "kmemleak disabled"
 			export KMEMLEAK=disabled
 		else
@@ -1207,16 +1210,17 @@ load_modules_local() {
 	rm -f $OGDB/ogdb-$HOSTNAME
 	$LCTL modules > $OGDB/ogdb-$HOSTNAME
 
-	# 'mount' doesn't look in $PATH, just sbin
+	# 'mount' doesn't look in $PATH, it hard-codes /sbin/mount.$FSTYPE
 	local mount_lustre=$LUSTRE/utils/mount.lustre
-	if [ -f $mount_lustre ]; then
-		local sbin_mount=$(readlink -f /sbin)/mount.lustre
+	local sbin_mount=$(readlink -f /sbin)/${mount_lustre//*\//}
+	if [[ -f $mount_lustre ]]; then
 		if grep -qw "$sbin_mount" /proc/mounts; then
 			cmp -s $mount_lustre $sbin_mount || umount $sbin_mount
 		fi
 		if ! grep -qw "$sbin_mount" /proc/mounts; then
-			[ ! -f "$sbin_mount" ] && touch "$sbin_mount"
-			if [ ! -s "$sbin_mount" -a -w "$sbin_mount" ]; then
+			ls -l $sbin_mount $mount_lustre || true
+			[[ -f "$sbin_mount" ]] || touch "$sbin_mount" || continue
+			if [[ ! -s "$sbin_mount" && -w "$sbin_mount" ]]; then
 				cat <<- EOF > "$sbin_mount"
 				#!/usr/bin/bash
 				#STUB MARK
@@ -1227,11 +1231,26 @@ load_modules_local() {
 				EOF
 				chmod a+x $sbin_mount
 			fi
+			echo "mount --bind $mount_lustre $sbin_mount"
 			mount --bind $mount_lustre $sbin_mount ||
 				error "can't bind $mount_lustre to $sbin_mount"
 			# ignore errors to symlink .libs for read-only /sbin
-			[[ -e /sbin/.libs ]] ||
-				ln -sf $LUSTRE/utils/.libs /sbin/.libs || true
+			[[ ! -w /sbin || -e /sbin/.libs ]] ||
+				ln -svf $LUSTRE/utils/.libs /sbin/.libs || true
+		fi
+	fi
+
+	# /sbin/mount.lustre symlink may not be created in a read-only root fs
+	if [[ $MOUNT_TGT =~ lustre_tgt ]]; then
+		sbin_mount=$(readlink -f /sbin)/mount.lustre_tgt
+		if [[ ! -e $sbin_mount ]]; then
+			if [[ ! -w /usr/sbin ]]; then
+				echo "/usr/sbin/ not writable for $sbin_mount"
+				MOUNT_TGT=$MOUNT_CMD
+			elif ! ln -svf mount.lustre ${sbin_mount}; then
+				echo "cannot create $sbin_mount symlink"
+				MOUNT_TGT=$MOUNT_CMD
+			fi
 		fi
 	fi
 }
@@ -1325,11 +1344,17 @@ unload_modules() {
 	local sbin_mount=$(readlink -f /sbin)/mount.lustre
 	if grep -qe "$sbin_mount " /proc/mounts; then
 		umount $sbin_mount || true
-		[ -s $sbin_mount ] && ! grep -q "STUB MARK" $sbin_mount ||
+		[[ -s $sbin_mount ]] && ! grep -q "STUB MARK" $sbin_mount ||
+			rm -f $sbin_mount
+	fi
+	sbin_mount=$(readlink -f /sbin)/mount.lustre_tgt
+	if grep -qe "$sbin_mount " /proc/mounts; then
+		umount $sbin_mount || true
+		[[ -s $sbin_mount ]] && ! grep -q "STUB MARK" $sbin_mount ||
 			rm -f $sbin_mount
 	fi
 
-	[ -L /sbin/.libs ] && rm /sbin/.libs
+	[[ -L /sbin/.libs ]] && rm /sbin/.libs
 
 	[[ $rc -eq 0 ]] && echo "modules unloaded."
 
@@ -2663,7 +2688,7 @@ mount_facet() {
 
 		case $fstype in
 		wbcfs)
-			echo "Start ${facet}: $MOUNT_CMD -v lustre-wbcfs $mntpt"
+			echo "Start ${facet}: $MOUNT_TGT -v lustre-wbcfs $mntpt"
 
 			export OSD_WBC_FSNAME="$FSNAME"
 			export OSD_WBC_INDEX="$index"
@@ -2695,12 +2720,12 @@ mount_facet() {
 				 OSD_WBC_MGS_NID=$OSD_WBC_MGS_NID \
 				 OSD_WBC_PRIMARY_MDT=$OSD_WBC_PRIMARY_MDT \
 				 OSD_WBC_FSNAME=$OSD_WBC_FSNAME \
-				 $MOUNT_CMD -v lustre-wbcfs $mntpt"
+				 $MOUNT_TGT -v lustre-wbcfs $mntpt"
 			;;
 		*)
-			echo "Start ${facet}: $MOUNT_CMD $opts $dm_dev $mntpt"
+			echo "Start ${facet}: $MOUNT_TGT $opts $dm_dev $mntpt"
 			do_facet ${facet} \
-				"mkdir -p $mntpt; $MOUNT_CMD $opts $dm_dev $mntpt"
+				"mkdir -p $mntpt; $MOUNT_TGT $opts $dm_dev $mntpt"
 		esac
 
 		RC=${PIPESTATUS[0]}
@@ -6558,7 +6583,10 @@ set_pools_quota () {
 
 do_check_and_setup_lustre() {
 	# If auster does not want us to setup, then don't.
-	! ${do_setup} && return
+	if ! ${do_setup}; then
+		is_mounted $MOUNT && init_facets_vars
+		return 0
+	fi
 
 	log "=== $TESTSUITE: start setup $(date +'%H:%M:%S (%s)') ==="
 
@@ -12483,27 +12511,51 @@ function unlinkmany() {
 function check_fallocate_supported()
 {
 	local facet=${1:-ost1}
-	local supported="FALLOCATE_SUPPORTED_$facet"
+	local op=${2:-alloc}
+	# Each operation get its own cached result based on the $op
+	local supported="FALLOCATE_SUPPORTED_${facet}_${op}"
 	local fstype="${facet}_FSTYPE"
+	local version="${facet^^}_VERSION"
+	local fa_mode="osd-${!fstype}.$(facet_svc $facet).fallocate_zero_blocks"
+	local mode=$(do_facet $facet $LCTL get_param -n $fa_mode 2>/dev/null |
+		     head -n 1)
 
 	if [[ -n "${!supported}" ]]; then
 		echo "${!supported}"
 		return 0
 	fi
+
 	if [[ -z "${!fstype}" ]]; then
 		eval export $fstype=$(facet_fstype $facet)
 	fi
-	if [[ "${!fstype}" != "ldiskfs" ]]; then
+
+	# Applies to all $op
+	if [[ $facet =~ mds ]] &&
+	   ((${!version} < $(version_code v2_14_53-10-g163870a))); then
+		echo "need MDS >= 2.14.53.10 for fallocate $op" 1>&2
+		return 1
+	fi
+
+	if [[ "$op" == "alloc" && "${!fstype}" != "ldiskfs" ]]; then
 		echo "fallocate on ${!fstype} doesn't consume space" 1>&2
 		return 1
 	fi
 
-	local fa_mode="osd-ldiskfs.$(facet_svc $facet).fallocate_zero_blocks"
-	local mode=$(do_facet $facet $LCTL get_param -n $fa_mode 2>/dev/null |
-		     head -n 1)
-	! [[ "$facet" =~ "mds" ]] || # older MDS doesn't support fallocate
-		(( MDS1_VERSION >= $(version_code v2_14_53-10-g163870abfb) )) ||
-			mode=""
+	if [[ "$op" == "punch" ]]; then
+		if [[ $facet =~ ost ]] &&
+		   ((${!version} < $(version_code v2_14_51-78-gcb037f30))); then
+			echo "need OST >= 2.14.51.78 for fallocate $op" 1>&2
+			return 1
+		fi
+
+		# Check for $op feature when fstype=zfs
+		if [[ "${!fstype}" == "zfs" ]]; then
+			if [[ -z "$mode" ]]; then
+				echo "fallocate not supported on $facet for $op" 1>&2
+				return 1
+			fi
+		fi
+	fi
 
 	if [[ -z "$mode" ]]; then
 		echo "fallocate not supported on $facet" 1>&2
@@ -12512,6 +12564,7 @@ function check_fallocate_supported()
 	eval export $supported="$mode"
 
 	echo ${!supported}
+
 	return 0
 }
 
@@ -12521,16 +12574,32 @@ function check_fallocate_or_skip()
 {
 	local facet=$1
 
-	check_fallocate_supported $1 || skip "fallocate not supported"
+	check_fallocate_supported $1 $2 || skip "fallocate not supported"
 }
+
 
 # Check if fallocate supported on OSTs, enable if unset, default mode=0
 # Optionally pass the OST fallocate mode (0=unwritten extents, 1=zero extents)
+#
+# For ZFS OST default fallocate mode is 2. Which is punch only support.
+# Other valid options are -1(Disabled) 1/0 (Not supported).
 function check_set_fallocate()
 {
 	local new_mode="$1"
-	local fa_mode="osd-ldiskfs.*.fallocate_zero_blocks"
-	local old_mode="$(check_fallocate_supported)"
+	local fa_mode_ldiskfs="osd-ldiskfs.*.fallocate_zero_blocks"
+	local fa_mode_zfs="osd-zfs.*.fallocate_zero_blocks"
+	local op=alloc
+	local old_mode
+	local fa_mode
+
+	if [[ "$ost1_FSTYPE" = "zfs" || "$mds1_FSTYPE" = "zfs" ]]; then
+		fa_mode=$fa_mode_zfs
+		op=punch # zfs only have punch for now.
+	else
+		fa_mode=$fa_mode_ldiskfs
+	fi
+
+	old_mode="$(check_fallocate_supported ost1 $op)"
 
 	[[ -n "$old_mode" ]] || { echo "fallocate not supported"; return 1; }
 	[[ -z "$new_mode" && "$old_mode" != "-1" ]] &&
@@ -12782,6 +12851,20 @@ force_new_seq_ost() {
 	consume_precreations $dir $mfacet $OSTIDX
 	do_facet $mfacet $LCTL set_param \
 		osp.$mdtosc_proc.prealloc_force_new_seq=0
+
+	# wait upto lod.*.qos_maxage to precreate to happen
+	# so OST is ready for new creations
+	local delay=$(do_facet $mfacet $LCTL get_param -n lod.*$FSNAME*.qos_maxage |
+		      awk '{ print $1 + 5; exit; }')
+	local i
+	for ((i = 0; i < delay; i++)); do
+		local last=$(do_facet $mfacet $LCTL \
+			get_param -n osp.$mdtosc_proc.prealloc_last_id)
+		local next=$(do_facet $mfacet $LCTL \
+			get_param -n osp.$mdtosc_proc.prealloc_next_id)
+		(( last - next > 2 )) && break
+		sleep 1
+	done
 }
 
 force_new_seq() {

@@ -477,7 +477,7 @@ struct osd_thandle {
 	struct list_head	ot_declare_list;
 };
 
-/**
+/*
  * Basic transaction credit op
  */
 enum dt_txn_op {
@@ -510,8 +510,8 @@ struct osd_obj_declare {
 enum {
         LPROC_OSD_READ_BYTES    = 0,
         LPROC_OSD_WRITE_BYTES   = 1,
-        LPROC_OSD_GET_PAGE      = 2,
-        LPROC_OSD_NO_PAGE       = 3,
+        LPROC_OSD_GET_FOLIO     = 2,
+        LPROC_OSD_NO_FOLIO      = 3,
         LPROC_OSD_CACHE_ACCESS  = 4,
         LPROC_OSD_CACHE_HIT     = 5,
         LPROC_OSD_CACHE_MISS    = 6,
@@ -526,7 +526,7 @@ enum {
 };
 #endif
 
-/**
+/*
  * Storage representation for fids.
  *
  * Variable size, first byte contains the length of the whole record.
@@ -545,7 +545,7 @@ struct osd_it_ea_dirent {
 	char		oied_name[];
 } __attribute__((packed));
 
-/**
+/*
  * as osd_it_ea_dirent (in memory dirent struct for osd) is greater
  * than lu_dirent struct. osd readdir reads less number of dirent than
  * required for mdd dir page. so buffer size need to be increased so that
@@ -554,7 +554,7 @@ struct osd_it_ea_dirent {
 
 #define OSD_IT_EA_BUFSIZE       (PAGE_SIZE + PAGE_SIZE/4)
 
-/**
+/*
  * This is iterator's in-memory data structure in interoperability
  * mode (i.e. iterator over ldiskfs style directory)
  */
@@ -573,7 +573,7 @@ struct osd_it_ea {
 	struct dentry		oie_dentry;
 };
 
-/**
+/*
  * Iterator's in-memory data structure for IAM mode.
  */
 struct osd_it_iam {
@@ -587,7 +587,7 @@ struct osd_quota_leaf {
 	uint		oql_blk;
 };
 
-/**
+/*
  * Iterator's in-memory data structure for quota file.
  */
 struct osd_it_quota {
@@ -950,7 +950,6 @@ static inline char *osd_oid_name(char *name, size_t name_size,
 
 #ifdef CONFIG_PROC_FS
 /* osd_lproc.c */
-extern struct lprocfs_vars lprocfs_osd_obd_vars[];
 int osd_procfs_init(struct osd_device *osd, const char *name);
 void osd_procfs_fini(struct osd_device *osd);
 void osd_brw_stats_update(struct osd_device *osd, struct osd_iobuf *iobuf);
@@ -1257,9 +1256,9 @@ static inline const char *osd_ino2name(const struct inode *inode)
 }
 
 /**
- * Put the osd object once done with it.
- *
- * \param obj osd object that needs to be put
+ * osd_object_put() - Put the osd object once done with it.
+ * @env: Lustre execution environment
+ * @obj: osd object that needs to be put
  */
 static inline void osd_object_put(const struct lu_env *env,
 				  struct osd_object *obj)
@@ -1318,7 +1317,7 @@ static inline struct osd_thread_info *osd_oti_get(const struct lu_env *env)
 
 extern const struct dt_body_operations osd_body_ops_new;
 
-/**
+/*
  * IAM Iterator
  */
 static inline
@@ -1522,7 +1521,7 @@ static inline void osd_trans_exec_check(const struct lu_env *env,
 	}
 }
 
-/**
+/*
  * Helper function to pack the fid, ldiskfs stores fid in packed format.
  */
 static inline
@@ -1553,7 +1552,7 @@ int osd_fid_unpack(struct lu_fid *fid, const struct osd_fid_pack *pack)
 	return result;
 }
 
-/**
+/*
  * Quota/Accounting handling
  */
 extern const struct dt_index_operations osd_acct_index_ops;
@@ -1594,7 +1593,7 @@ static inline bool is_remote_parent_ino(struct osd_device *o, unsigned long ino)
 	return ino == o->od_mdt_map->omm_remote_parent->d_inode->i_ino;
 }
 
-/**
+/*
  * ext4_bread/ldiskfs_bread has either 5 or 4 parameters. The error
  * return code has been removed and integrated into the pointer in the
  * kernel 3.18.

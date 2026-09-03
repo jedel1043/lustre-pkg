@@ -15,13 +15,16 @@
  */
 
 #define DEBUG_SUBSYSTEM S_OSD
+#include <linux/types.h>
+#include <linux/fs.h>
+#include <linux/falloc.h>
 
-#include <obd_support.h>
-#include <lustre_net.h>
 #include <obd.h>
 #include <obd_class.h>
-#include <lustre_disk.h>
+#include <lustre_net.h>
 #include <lustre_fid.h>
+#include <obd_support.h>
+#include <lustre_disk.h>
 #include <lustre_quota.h>
 
 #include "osd_internal.h"
@@ -147,37 +150,38 @@ static inline ssize_t osd_read_no_record(const struct lu_env *env,
 	return __osd_read(env, dt, buf, pos, &size);
 }
 
-static struct page *osd_dio_page_get(const struct lu_env *env)
+static struct folio *osd_dio_get_folio(const struct lu_env *env)
 {
-	struct osd_thread_info  *oti = osd_oti_get(env);
-	struct page *page;
+	struct osd_thread_info *oti = osd_oti_get(env);
+	struct folio *folio;
 	int cur;
 
-	if (unlikely(!oti->oti_dio_pages)) {
-		OBD_ALLOC_PTR_ARRAY_LARGE(oti->oti_dio_pages,
+	if (unlikely(!oti->oti_dio_folios)) {
+		OBD_ALLOC_PTR_ARRAY_LARGE(oti->oti_dio_folios,
 					  PTLRPC_MAX_BRW_PAGES);
-		if (!oti->oti_dio_pages)
-			return ERR_PTR(-ENOMEM);
+		if (!oti->oti_dio_folios)
+			RETURN(ERR_PTR(-ENOMEM));
 	}
 
-	LASSERT(oti->oti_dio_pages);
+	LASSERT(oti->oti_dio_folios);
 	cur = oti->oti_dio_pages_used;
-	page = oti->oti_dio_pages[cur];
+	folio = oti->oti_dio_folios[cur];
 
-	if (unlikely(!page)) {
+	if (IS_ERR_OR_NULL(folio)) {
 		LASSERT(cur < PTLRPC_MAX_BRW_PAGES);
-		page = alloc_page(GFP_NOFS | __GFP_HIGHMEM);
-		CDEBUG(D_MALLOC, "alloc page %px\n", page);
-		LASSERT(page);
-		oti->oti_dio_pages[cur] = page;
-		SetPagePrivate2(page);
+		folio = folio_alloc(GFP_NOFS | __GFP_HIGHMEM, 0);
+		if (!folio)
+			RETURN(ERR_PTR(-ENOMEM));
+		CDEBUG(D_MALLOC, "alloc folio %px\n", folio);
+		oti->oti_dio_folios[cur] = folio;
+		folio_set_private_2(folio);
 	}
 	oti->oti_dio_pages_used++;
 
-	RETURN(page);
+	RETURN(folio);
 }
 
-static void osd_dio_page_put(const struct lu_env *env)
+static void osd_dio_put_folio(const struct lu_env *env)
 {
 	struct osd_thread_info  *oti = osd_oti_get(env);
 	oti->oti_dio_pages_used--;
@@ -192,15 +196,15 @@ static int osd_zfs_fake_lnb(const struct lu_env *env,
 	while (len > 0) {
 		int poff = offset & (PAGE_SIZE - 1);
 		int plen = PAGE_SIZE - poff;
-		struct page *page;
+		struct folio *folio;
 
 		if (nrpages >= maxlnb) {
 			break;
 		}
 
-		page = osd_dio_page_get(env);
-		if (IS_ERR(page)) {
-			nrpages = PTR_ERR(page);
+		folio = osd_dio_get_folio(env);
+		if (IS_ERR(folio)) {
+			nrpages = PTR_ERR(folio);
 			break;
 		}
 
@@ -216,7 +220,10 @@ static int osd_zfs_fake_lnb(const struct lu_env *env,
 		lnb->lnb_guard_disk = 0;
 		lnb->lnb_locked = 0;
 
-		lnb->lnb_page = page;
+		/* osd_dio_get_folio() should only ever allocate order 0 */
+		LASSERT(folio_nr_pages(folio) == 1);
+		lnb->lnb_folio = folio;
+		lnb->lnb_fpgno = 0;
 		lnb->lnb_dio = 1;
 
 		LASSERTF(plen <= len, "plen %u, len %lld\n", plen,
@@ -446,7 +453,7 @@ out:
  *      instead I use the lowest bit of the address so that:
  *        arc buffer:  .lnb_data = abuf          (arc we loan for write)
  *        dbuf buffer: .lnb_data = dbuf | 1      (dbuf we get for read)
- *        copy buffer: .lnb_page->mapping = obj (page we allocate for write)
+ *        copy buffer: .lnb_folio->mapping = obj (page we allocate for write)
  *
  *      bzzz, to blame
  */
@@ -463,17 +470,17 @@ static int osd_bufs_put(const struct lu_env *env, struct dt_object *dt,
 	LASSERT(obj->oo_dn);
 
 	for (i = 0; i < npages; i++) {
-		if (lnb[i].lnb_page == NULL)
+		if (lnb[i].lnb_folio == NULL)
 			continue;
 		if (lnb[i].lnb_dio) {
-			osd_dio_page_put(env);
+			osd_dio_put_folio(env);
 			lnb[i].lnb_dio = 0;
 			goto next;
 		}
-		if (lnb[i].lnb_page->mapping == (void *)obj) {
+		if (lnb[i].lnb_folio->mapping == (void *)obj) {
 			/* this is anonymous page allocated for copy-write */
-			lnb[i].lnb_page->mapping = NULL;
-			__free_page(lnb[i].lnb_page);
+			lnb[i].lnb_folio->mapping = NULL;
+			folio_put(lnb[i].lnb_folio);
 			atomic_dec(&osd->od_zerocopy_alloc);
 		} else {
 			/* see comment in osd_bufs_get_read() */
@@ -490,14 +497,17 @@ static int osd_bufs_put(const struct lu_env *env, struct dt_object *dt,
 				/* these references to pages must be invalidated
 				 * to prevent access in osd_bufs_put()
 				 */
-				for (j = 0; j < apages; j++)
-					lnb[i + j].lnb_page = NULL;
+				for (j = 0; j < apages; j++) {
+					lnb[i + j].lnb_folio = NULL;
+					lnb[i + j].lnb_fpgno = 0;
+				}
 				dmu_return_arcbuf(lnb[i].lnb_data);
 				atomic_dec(&osd->od_zerocopy_loan);
 			}
 		}
 next:
-		lnb[i].lnb_page = NULL;
+		lnb[i].lnb_folio = NULL;
+		lnb[i].lnb_fpgno = 0;
 		lnb[i].lnb_data = NULL;
 	}
 
@@ -506,12 +516,18 @@ next:
 	return 0;
 }
 
-static inline struct page *kmem_to_page(void *addr)
+static inline struct folio *kmem_to_folio(void *addr, u32 *pgno)
 {
+	struct page *p;
+	struct folio *f;
+
 	if (is_vmalloc_addr(addr))
-		return vmalloc_to_page(addr);
+		p = vmalloc_to_page(addr);
 	else
-		return virt_to_page(addr);
+		p = virt_to_page(addr);
+	f = page_folio(p);
+	*pgno = folio_page_idx(f, p);
+	return f;
 }
 
 /**
@@ -591,6 +607,8 @@ static int osd_bufs_get_read(const struct lu_env *env, struct osd_object *obj,
 			dbf = (void *) ((unsigned long)dbp[i] | 1);
 
 			while (tocpy > 0) {
+				u32 pgno = 0;
+
 				if (unlikely(npages >= maxlnb))
 					GOTO(err, rc = -EOVERFLOW);
 
@@ -602,8 +620,9 @@ static int osd_bufs_get_read(const struct lu_env *env, struct osd_object *obj,
 				lnb->lnb_file_offset = off;
 				lnb->lnb_page_offset = bufoff & ~PAGE_MASK;
 				lnb->lnb_len = thispage;
-				lnb->lnb_page = kmem_to_page(dbp[i]->db_data +
-							     bufoff);
+				lnb->lnb_folio = kmem_to_folio(dbp[i]->db_data +
+							       bufoff, &pgno);
+				lnb->lnb_fpgno = pgno;
 				/* mark just a single slot: we need this
 				 * reference to dbuf to be released once
 				 */
@@ -695,6 +714,8 @@ static int osd_bufs_get_write(const struct lu_env *env, struct osd_object *obj,
 			 * local niobufs for ptlrpc's bulks
 			 */
 			while (sz_in_block > 0) {
+				u32 pgno = 0;
+
 				plen = min_t(int, sz_in_block, PAGE_SIZE);
 
 				if (unlikely(npages >= maxlnb))
@@ -710,9 +731,11 @@ static int osd_bufs_get_write(const struct lu_env *env, struct osd_object *obj,
 					lnb[i].lnb_data = NULL;
 
 				/* this one is not supposed to fail */
-				lnb[i].lnb_page = kmem_to_page(abuf->b_data +
-							off_in_block);
-				LASSERT(lnb[i].lnb_page);
+				lnb[i].lnb_folio = kmem_to_folio(abuf->b_data +
+								 off_in_block,
+								 &pgno);
+				LASSERT(lnb[i].lnb_folio);
+				lnb[i].lnb_fpgno = pgno;
 
 				lprocfs_counter_add(osd->od_stats,
 						LPROC_OSD_ZEROCOPY_IO, 1);
@@ -748,12 +771,13 @@ static int osd_bufs_get_write(const struct lu_env *env, struct osd_object *obj,
 				lnb[i].lnb_rc = 0;
 				lnb[i].lnb_data = NULL;
 
-				lnb[i].lnb_page = alloc_page(OSD_GFP_IO);
-				if (unlikely(lnb[i].lnb_page == NULL))
+				lnb[i].lnb_fpgno = 0;
+				lnb[i].lnb_folio = folio_alloc(OSD_GFP_IO, 0);
+				if (!lnb[i].lnb_folio)
 					GOTO(out_err, rc = -ENOMEM);
 
-				LASSERT(lnb[i].lnb_page->mapping == NULL);
-				lnb[i].lnb_page->mapping = (void *)obj;
+				LASSERT(lnb[i].lnb_folio->mapping == NULL);
+				lnb[i].lnb_folio->mapping = (void *)obj;
 
 				atomic_inc(&osd->od_zerocopy_alloc);
 				lprocfs_counter_add(osd->od_stats,
@@ -1126,16 +1150,17 @@ static int osd_write_commit(const struct lu_env *env, struct dt_object *dt,
 
 		if (new_size < lnb[i].lnb_file_offset + lnb[i].lnb_len)
 			new_size = lnb[i].lnb_file_offset + lnb[i].lnb_len;
-		if (lnb[i].lnb_page == NULL)
+		if (lnb[i].lnb_folio == NULL)
 			continue;
 
-		if (lnb[i].lnb_page->mapping == (void *)obj) {
-			void *addr = kmap(lnb[i].lnb_page);
+		if (lnb[i].lnb_folio->mapping == (void *)obj) {
+			void *addr;
 
+			addr = ll_lnb_kmap_local(&lnb[i]);
 			osd_dmu_write(osd, obj->oo_dn, lnb[i].lnb_file_offset,
 				      lnb[i].lnb_len, addr +
 				      lnb[i].lnb_page_offset, oh->ot_tx);
-			kunmap(kmap_to_page(addr));
+			ll_kunmap_local(addr);
 			iosize += lnb[i].lnb_len;
 			abufsz = lnb[i].lnb_len; /* to drop cache below */
 		} else if (lnb[i].lnb_data) {
@@ -1154,8 +1179,10 @@ static int osd_write_commit(const struct lu_env *env, struct dt_object *dt,
 			/* these references to pages must be invalidated
 			 * to prevent access in osd_bufs_put()
 			 */
-			for (j = 0; j < apages; j++)
-				lnb[i + j].lnb_page = NULL;
+			for (j = 0; j < apages; j++) {
+				lnb[i + j].lnb_folio = NULL;
+				lnb[i + j].lnb_fpgno = 0;
+			}
 			ll_dmu_assign_arcbuf_by_dbuf(&obj->oo_dn->dn_bonus->db,
 						     lnb[i].lnb_file_offset,
 						     lnb[i].lnb_data,
@@ -1384,6 +1411,170 @@ static int osd_declare_punch(const struct lu_env *env, struct dt_object *dt,
 				 0, oh, NULL, OSD_QID_BLK));
 }
 
+/* Get rounded range for LUSTRE_ENCRYPT_FL */
+static void osd_fallocate_range(struct osd_object *obj, __u64 start, __u64 end,
+				__u64 *new_start, __u64 *new_len,
+				__u64 *new_fsize)
+{
+	__u64 fdsize;
+
+	read_lock(&obj->oo_attr_lock);
+	/* New final filesize */
+	*new_fsize = fdsize = obj->oo_attr.la_size;
+
+	/* Encryption rounding - start */
+	if (obj->oo_lma_flags & LUSTRE_ENCRYPT_FL &&
+	    start & ~LUSTRE_ENCRYPTION_MASK) {
+		start = (start & LUSTRE_ENCRYPTION_MASK) +
+			 LUSTRE_ENCRYPTION_UNIT_SIZE;
+	}
+
+	/* Encryption rounding - end */
+	if (obj->oo_lma_flags & LUSTRE_ENCRYPT_FL)
+		end = end & LUSTRE_ENCRYPTION_MASK;
+
+	/* New final start */
+	*new_start = start;
+
+	/* New final len */
+	if (end == OBD_OBJECT_EOF || end >= fdsize)
+		*new_len = DMU_OBJECT_END;
+	/* avoid 'end' less than '*new_start' and wrapping to very large val */
+	else if (end <= *new_start)
+		*new_len = 0;
+	else
+		*new_len = end - *new_start;
+	read_unlock(&obj->oo_attr_lock);
+}
+
+/*
+ * osd_declare_falloate() - Prepare fallocate operation
+ * @env: Lustre environment
+ * @dt: object to be written
+ * @attr: Pointer to struct attribute
+ * @start: Start range (bytes)
+ * @end: End range (bytes)
+ * @mode: Fallocate mode flags (FALLOC_FL_PUNCH_HOLE)
+ * @th: Transaction handle
+ * @error_code: unused currently
+ *
+ * Return:
+ * * %0 on success
+ * * %negative error code on failure
+ */
+static int osd_declare_fallocate(const struct lu_env *env,
+				 struct dt_object *dt, struct lu_attr *attr,
+				 __u64 start, __u64 end, int mode,
+				 struct thandle *th,
+				 enum dt_fallocate_error_t *error_code)
+{
+	struct osd_object *obj = osd_dt_obj(dt);
+	struct osd_device *osd = osd_obj2dev(obj);
+	__u64 nstart, nlen, nfdsize = 0;
+	struct osd_thandle *oh;
+	int rc;
+
+	ENTRY;
+
+	LASSERT(th);
+	oh = container_of(th, struct osd_thandle, ot_super);
+
+	/* fallocate is disabled or alloc is not supported. Setting value of 0
+	 * or 1 will always return -EOPNOTSUPP. Please refer man page for more
+	 * details.
+	 */
+	if (osd->od_fallocate_zero_blocks <= 1) {
+		CDEBUG(D_INODE,
+		       "%s: ZB <= 1 start=%lld end=%lld mode=%x osd-fmode=%d\n",
+		       osd->od_svname, (long long)start, (long long)end,
+		       mode, osd->od_fallocate_zero_blocks);
+		RETURN(-EOPNOTSUPP);
+	}
+
+	/* Only PUNCH_HOLE(KEEP_SIZE) is supported now */
+	if (mode != (FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE)) {
+		CDEBUG(D_INODE,
+		       "%s: MODE start=%lld end=%lld mode=%x osd-fmode=%d\n",
+		       osd->od_svname, (long long)start, (long long)end,
+		       mode, osd->od_fallocate_zero_blocks);
+		RETURN(-EOPNOTSUPP);
+	}
+
+	/* Get rounded range for LUSTRE_ENCRYPT_FL */
+	osd_fallocate_range(obj, start, end, &nstart, &nlen, &nfdsize);
+
+	/* Only hold/reserve if we are really freeing */
+	if (nstart < nfdsize) {
+		dmu_tx_mark_netfree(oh->ot_tx);
+		dmu_tx_hold_free(oh->ot_tx, obj->oo_dn->dn_object, nstart,
+				 nlen);
+	}
+
+	CDEBUG(D_INODE,
+	       "%s: Declare fallocate start %lld end %lld, mode %x size %lld osd-fmode %d dnode %llu\n",
+	       osd->od_svname, (long long)nstart, (long long)end, mode,
+	       (long long)nfdsize, osd->od_fallocate_zero_blocks,
+	       obj->oo_dn->dn_object);
+
+	rc = osd_declare_quota(env, osd, obj->oo_attr.la_uid,
+			       obj->oo_attr.la_gid, obj->oo_attr.la_projid,
+			       0, oh, NULL, OSD_QID_BLK);
+
+	RETURN(rc);
+}
+
+/*
+ * osd_fallocate() - Implement actual fallocate operation
+ * @env: Lustre environment
+ * @dt: object to be written
+ * @start: Start range (bytes)
+ * @end: End range (bytes)
+ * @mode: Fallocate mode flags (FALLOC_FL_PUNCH_HOLE)
+ * @th: Transaction handle
+ *
+ * Return:
+ * * %0 on success
+ * * %negative error code on failure
+ */
+static int osd_fallocate(const struct lu_env *env, struct dt_object *dt,
+			 __u64 *start, __u64 end, int mode, struct thandle *th)
+{
+	struct osd_object *obj = osd_dt_obj(dt);
+	struct osd_device *osd = osd_obj2dev(obj);
+	__u64 nstart, nlen, nfdsize = 0;
+	struct osd_thandle *oh;
+	int rc = 0;
+
+	ENTRY;
+
+	LASSERT(dt_object_exists(dt));
+	LASSERT(osd_invariant(obj));
+	LASSERT(th);
+
+	/* Get rounded range for LUSTRE_ENCRYPT_FL */
+	osd_fallocate_range(obj, *start, end, &nstart, &nlen, &nfdsize);
+
+	CDEBUG(D_INODE,
+	       "%s: fallocate start=%lld end=%lld, mode %x size %lld dnode %llu\n",
+	       osd->od_svname, (long long)nstart, (long long)end, mode,
+	       (long long)nfdsize, obj->oo_dn->dn_object);
+
+	oh = container_of(th, struct osd_thandle, ot_super);
+
+	down_read(&obj->oo_guard);
+	if (obj->oo_destroyed)
+		GOTO(out, rc = -ENOENT);
+
+	if (nstart < nfdsize && nlen != 0)
+		rc = -dmu_free_range(osd->od_os, obj->oo_dn->dn_object, nstart,
+				     nlen, oh->ot_tx);
+	else
+		rc = 0; /* This is beyond EOF or empty range therefore no-op */
+out:
+	up_read(&obj->oo_guard);
+	RETURN(rc);
+}
+
 static loff_t osd_lseek(const struct lu_env *env, struct dt_object *dt,
 			loff_t offset, int whence)
 {
@@ -1461,6 +1652,8 @@ const struct dt_body_operations osd_body_ops = {
 	.dbo_read_prep			= osd_read_prep,
 	.dbo_declare_punch		= osd_declare_punch,
 	.dbo_punch			= osd_punch,
+	.dbo_declare_fallocate		= osd_declare_fallocate,
+	.dbo_fallocate			= osd_fallocate,
 	.dbo_lseek			= osd_lseek,
 };
 

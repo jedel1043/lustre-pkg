@@ -810,7 +810,7 @@ static void put_pages_back(struct page_collection *pc)
 		put_pages_back_on_all_cpus(pc);
 }
 
-#ifdef LNET_DUMP_ON_PANIC
+#ifdef CONFIG_LNET_DUMP_ON_PANIC
 void cfs_trace_debug_print(void)
 {
 	struct page_collection pc;
@@ -874,7 +874,7 @@ void cfs_trace_debug_print(void)
 	}
 	up_write(&cfs_tracefile_sem);
 }
-#endif /* LNET_DUMP_ON_PANIC */
+#endif /* CONFIG_LNET_DUMP_ON_PANIC */
 
 int cfs_tracefile_dump_all_pages(char *filename)
 {
@@ -1079,7 +1079,7 @@ int cfs_trace_set_debug_mb(int mb)
 	int i;
 	int j;
 	unsigned long pages;
-	unsigned long total_mb = (compat_totalram_pages() >> (20 - PAGE_SHIFT));
+	unsigned long total_mb = (totalram_pages() >> (20 - PAGE_SHIFT));
 	unsigned long limit = max_t(unsigned long, 512, (total_mb * 4) / 5);
 	struct cfs_trace_cpu_data *tcd;
 

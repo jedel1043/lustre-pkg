@@ -207,6 +207,7 @@ struct srpc_bulk {
 	int			bk_len;  /* len of bulk data */
 	struct lnet_handle_md	bk_mdh;
 	int			bk_sink; /* sink/source */
+	int			bk_discard; /* discard received data? */
 	int			bk_alloc; /* # allocated iov */
 	int			bk_niov; /* # iov in bk_iovs */
 	struct bio_vec		bk_iovs[];
@@ -246,6 +247,7 @@ struct srpc_server_rpc {
 	struct srpc_bulk       *srpc_bulk;
 
 	unsigned int	srpc_aborted; /* being given up */
+	unsigned int	srpc_completed; /* completion sentinel */
 	int		srpc_status;
 	void		(*srpc_done)(struct srpc_server_rpc *);
 };
@@ -395,6 +397,10 @@ struct sfw_session {
 	struct list_head	sn_batches;	/* list of batches */
 	char			sn_name[LST_NAME_SIZE];
 	refcount_t		sn_refcount;
+	/* pinned against the reaper while fw_lock is dropped
+	 * mid-teardown, protected by fw_lock
+	 */
+	unsigned int		sn_busy;
 	atomic_t		sn_brw_errors;
 	atomic_t		sn_ping_errors;
 	ktime_t			sn_started;

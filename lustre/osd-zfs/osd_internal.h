@@ -39,7 +39,7 @@
 #include <sys/dmu_objset.h>
 #include <lustre_scrub.h>
 
-/**
+/*
  * By design including kmem.h overrides the Linux slab interfaces to provide
  * the Illumos kmem cache interfaces.  To override this and gain access to
  * the Linux interfaces these preprocessor macros must be undefined.
@@ -89,7 +89,7 @@ extern const struct dt_body_operations osd_body_scrub_ops;
 extern const struct dt_body_operations osd_body_ops;
 extern struct kmem_cache *osd_object_kmem;
 
-/**
+/*
  * Iterator's in-memory data structure for quota file.
  */
 struct osd_it_quota {
@@ -127,7 +127,7 @@ struct luz_direntry {
 	struct lu_fid		lzd_fid;
 } __attribute__((packed));
 
-/**
+/*
  * Iterator's in-memory data structure for ZAPs
  *
  * ZFS does not store . and .. on a disk, instead they are
@@ -268,7 +268,7 @@ struct osd_thread_info {
 	uint64_t		oti_lastid_oid;
 
 	/* just for fake RW now */
-	struct page		**oti_dio_pages;
+	struct folio		**oti_dio_folios;
 	int			oti_dio_pages_used;
 };
 
@@ -367,6 +367,12 @@ struct osd_device {
 	guid_t			 od_uuid;
 
 	atomic_t		 od_connects;
+	/* od_fallocate_zero_blocks = -1 : Disable all fallocate operations
+	 * od_fallocate_zero_blocks =  0 : Not supported
+	 * od_fallocate_zero_blocks =  1 : Not supported
+	 * od_fallocate_zero_blocks =  2 : Punch enable
+	 */
+	int			 od_fallocate_zero_blocks;
 	int			 od_index;
 	struct lu_site		 od_site;
 
@@ -551,9 +557,9 @@ static inline int osd_invariant(const struct osd_object *obj)
 }
 
 /**
- * Put the osd object once done with it.
- *
- * \param obj osd object that needs to be put
+ * osd_object_put() - Put the osd object once done with it.
+ * @env: Lustre execution environment
+ * @obj: osd object that needs to be put
  */
 static inline void osd_object_put(const struct lu_env *env,
 				  struct osd_object *obj)
@@ -606,8 +612,8 @@ static inline struct osd_oi *osd_fid2oi(struct osd_device *osd,
 enum {
 	LPROC_OSD_READ_BYTES = 0,
 	LPROC_OSD_WRITE_BYTES = 1,
-	LPROC_OSD_GET_PAGE = 2,
-	LPROC_OSD_NO_PAGE = 3,
+	LPROC_OSD_GET_FOLIO = 2,
+	LPROC_OSD_NO_FOLIO = 3,
 	LPROC_OSD_CACHE_ACCESS = 4,
 	LPROC_OSD_CACHE_HIT = 5,
 	LPROC_OSD_CACHE_MISS = 6,
@@ -619,8 +625,6 @@ enum {
 
 extern struct kmem_cache *osd_zapit_cachep;
 /* osd_lproc.c */
-extern struct lprocfs_vars lprocfs_osd_obd_vars[];
-
 int osd_procfs_init(struct osd_device *osd, const char *name);
 void osd_procfs_fini(struct osd_device *osd);
 
@@ -720,7 +724,7 @@ int osd_oii_lookup(struct osd_device *dev, const struct lu_fid *fid,
 int osd_last_seq_get(const struct lu_env *env, struct dt_device *dt,
 		     __u64 *seq);
 
-/**
+/*
  * Basic transaction credit op
  */
 enum dt_txn_op {

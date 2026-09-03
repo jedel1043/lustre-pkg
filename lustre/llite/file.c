@@ -481,7 +481,7 @@ int ll_file_release(struct inode *inode, struct file *file)
 	lfd = file->private_data;
 	LASSERT(lfd != NULL);
 
-	/* The last ref on @file, maybe not the the owner pid of statahead,
+	/* The last ref on @file, maybe not the owner pid of statahead,
 	 * because parent and child process can share the same file handle.
 	 */
 	if (S_ISDIR(inode->i_mode) &&
@@ -720,7 +720,7 @@ void ll_dir_finish_open(struct inode *inode, struct ptlrpc_request *req)
 	int is_hash64;
 	struct lu_dirpage *dp;
 	int rc = 0;
-	unsigned long   offset;
+	unsigned long offset;
 	__u64 hash;
 	gfp_t gfp;
 
@@ -2569,12 +2569,13 @@ static ssize_t ll_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
  * All writes here are within one page, so exclusion is handled by the page
  * lock on the vm page.  We do not do tiny writes for writes which touch
  * multiple pages because it's very unlikely multiple sequential pages are
- * are already dirty.
+ * already dirty.
  *
  * We limit these to < PAGE_SIZE because PAGE_SIZE writes are relatively common
  * and are unlikely to be to already dirty pages.
  *
- * Attribute updates are important here, we do them in ll_tiny_write_end.
+ * Attribute updates are important here: ll_tiny_write_end() updates the
+ * OSC-layer attributes, and they are merged into the inode below.
  */
 static ssize_t ll_do_tiny_write(struct kiocb *iocb, struct iov_iter *iter)
 {
@@ -2609,6 +2610,15 @@ static ssize_t ll_do_tiny_write(struct kiocb *iocb, struct iov_iter *iter)
 		result = 0;
 
 	if (result > 0) {
+		struct lu_env *env;
+		__u16 refcheck;
+
+		env = cl_env_get(&refcheck);
+		if (!IS_ERR(env)) {
+			ll_merge_attr(env, inode);
+			cl_env_put(env, &refcheck);
+		}
+
 		ll_heat_add(inode, CIT_WRITE, result);
 		set_bit(LLIF_DATA_MODIFIED, &ll_i2info(inode)->lli_flags);
 	}
@@ -3823,6 +3833,7 @@ static int ll_hsm_data_version_sync(struct inode *inode, __u64 data_version)
 	struct obd_export *exp = ll_i2mdexp(inode);
 	struct md_op_data *op_data;
 	int rc;
+
 	ENTRY;
 
 	if (!data_version)
@@ -6144,7 +6155,7 @@ static int ll_inode_revalidate_fini(struct inode *inode, int rc)
 			return 0;
 
 		/* This path cannot be hit for regular files unless in
-		 * case of obscure races, so no need to to validate
+		 * case of obscure races, so no need to validate
 		 * size.
 		 */
 		if (!S_ISREG(inode->i_mode) && !S_ISDIR(inode->i_mode))
@@ -6705,6 +6716,11 @@ int ll_inode_permission(struct mnt_idmap *idmap, struct inode *inode, int mask)
 #else
 # define ll_file_operations_splice_write
 #endif
+#ifdef HAVE_SIMPLE_NOSETLEASE
+# define ll_file_operations_setlease .setlease = simple_nosetlease,
+#else
+# define ll_file_operations_setlease
+#endif
 
 #define declare_ll_file_operations(name, op_splice_read, op_flock)	\
 static const struct file_operations ll_file_operations_ ## name = {	\
@@ -6717,6 +6733,7 @@ static const struct file_operations ll_file_operations_ ## name = {	\
 	.llseek		= ll_file_seek,					\
 	.splice_read	= op_splice_read,				\
 	ll_file_operations_splice_write					\
+	ll_file_operations_setlease					\
 	.fsync		= ll_fsync,					\
 	.flush		= ll_flush,					\
 	.flock		= op_flock,					\

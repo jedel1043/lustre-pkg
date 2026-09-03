@@ -420,11 +420,11 @@ static ssize_t max_read_ahead_mb_store(struct kobject *kobj,
 	int rc;
 
 	rc = sysfs_memparse_total(buffer, count, &ra_max_mb,
-				  compat_totalram_pages() << PAGE_SHIFT, "MiB");
+				  totalram_pages() << PAGE_SHIFT, "MiB");
 	if (rc == -ERANGE) {
 		CERROR("%s: cannot set max_read_ahead_mb=%llu > totalram=%luMB: rc = %d\n",
 		       sbi->ll_fsname, ra_max_mb >> 20,
-		       PAGES_TO_MiB(compat_totalram_pages()), rc);
+		       PAGES_TO_MiB(totalram_pages()), rc);
 		return rc;
 	}
 	if (rc)
@@ -433,11 +433,11 @@ static ssize_t max_read_ahead_mb_store(struct kobject *kobj,
 	pages_number = round_up(ra_max_mb, 1024 * 1024) >> PAGE_SHIFT;
 	CDEBUG(D_INFO, "%s: set max_read_ahead_mb=%llu (%llu pages)\n",
 	       sbi->ll_fsname, PAGES_TO_MiB(pages_number), pages_number);
-	if (pages_number > compat_totalram_pages() / 2) {
+	if (pages_number > totalram_pages() / 2) {
 		CWARN("%s: limit max_read_ahead_mb=%llu to totalram/2=%luMB\n",
 		       sbi->ll_fsname, PAGES_TO_MiB(pages_number),
-		       PAGES_TO_MiB(compat_totalram_pages() / 2));
-		pages_number = compat_totalram_pages() / 2;
+		       PAGES_TO_MiB(totalram_pages() / 2));
+		pages_number = totalram_pages() / 2;
 	}
 
 	spin_lock(&sbi->ll_lock);
@@ -470,11 +470,11 @@ static ssize_t max_read_ahead_per_file_mb_store(struct kobject *kobj,
 	int rc;
 
 	rc = sysfs_memparse_total(buffer, count, &ra_max_file_mb,
-				  compat_totalram_pages() << PAGE_SHIFT, "MiB");
+				  totalram_pages() << PAGE_SHIFT, "MiB");
 	if (rc == -ERANGE) {
 		CERROR("%s: cannot set max_read_ahead_per_file_mb=%llu > totalram=%luMB: rc = %d\n",
 		       sbi->ll_fsname, ra_max_file_mb >> 20,
-		       PAGES_TO_MiB(compat_totalram_pages()), rc);
+		       PAGES_TO_MiB(totalram_pages()), rc);
 		return rc;
 	}
 	if (rc)
@@ -516,13 +516,13 @@ static ssize_t max_read_ahead_whole_mb_store(struct kobject *kobj,
 	u64 max_limit;
 	int rc;
 
-	max_limit = compat_totalram_pages() << PAGE_SHIFT;
+	max_limit = totalram_pages() << PAGE_SHIFT;
 	rc = sysfs_memparse_total(buffer, count, &ra_max_whole_mb, max_limit,
 				  "MiB");
 	if (rc == -ERANGE) {
 		CERROR("%s: cannot set max_read_ahead_whole_mb=%llu > totalram=%luMB: rc = %d\n",
 		       sbi->ll_fsname, ra_max_whole_mb >> 20,
-		       PAGES_TO_MiB(compat_totalram_pages()), rc);
+		       PAGES_TO_MiB(totalram_pages()), rc);
 		return rc;
 	}
 	if (rc)
@@ -611,11 +611,11 @@ static ssize_t ll_max_cached_mb_seq_write(struct file *file,
 	kernbuf[count] = '\0';
 	ptr = lprocfs_find_named_value(kernbuf, "max_cached_mb:", &count);
 	rc = sysfs_memparse_total(ptr, count, &value,
-				  compat_totalram_pages() << PAGE_SHIFT, "MiB");
+				  totalram_pages() << PAGE_SHIFT, "MiB");
 	if (rc == -ERANGE) {
 		CERROR("%s: cannot set max_cached_mb=%llu MB more than %lu MB: rc = %d\n",
 		       sbi->ll_fsname, value >> 20,
-		       PAGES_TO_MiB(compat_totalram_pages()), rc);
+		       PAGES_TO_MiB(totalram_pages()), rc);
 		RETURN(rc);
 	}
 	if (rc)
@@ -881,14 +881,49 @@ static ssize_t pcc_async_affinity_store(struct kobject *kobj,
 }
 LUSTRE_RW_ATTR(pcc_async_affinity);
 
-static ssize_t pcc_mode_show(struct kobject *kobj, struct attribute *attr,
-			      char *buffer)
+static ssize_t
+pcc_attach_thread_max_show(struct kobject *kobj, struct attribute *attr,
+			       char *buffer)
 {
 	struct ll_sb_info *sbi = container_of(kobj, struct ll_sb_info,
 					      ll_kset.kobj);
 	struct pcc_super *super = &sbi->ll_pcc_super;
 
-	return sprintf(buffer, "0%o\n", super->pccs_mode);
+	return scnprintf(buffer, PAGE_SIZE, "%u\n",
+			 super->pccs_attach_thread_max);
+}
+
+static ssize_t
+pcc_attach_thread_max_store(struct kobject *kobj, struct attribute *attr,
+				const char *buffer, size_t count)
+{
+	struct ll_sb_info *sbi = container_of(kobj, struct ll_sb_info,
+					      ll_kset.kobj);
+	struct pcc_super *super = &sbi->ll_pcc_super;
+	unsigned int val;
+	int rc;
+
+	rc = kstrtouint(buffer, 0, &val);
+	if (rc)
+		return rc;
+
+	if (val < 1 || val > PCC_ATTACH_THREAD_MAX_MAX)
+		return -EOVERFLOW;
+
+	super->pccs_attach_thread_max = val;
+
+	return count;
+}
+LUSTRE_RW_ATTR(pcc_attach_thread_max);
+
+static ssize_t pcc_mode_show(struct kobject *kobj, struct attribute *attr,
+			     char *buffer)
+{
+	struct ll_sb_info *sbi = container_of(kobj, struct ll_sb_info,
+					      ll_kset.kobj);
+	struct pcc_super *super = &sbi->ll_pcc_super;
+
+	return scnprintf(buffer, PAGE_SIZE, "0%o\n", super->pccs_mode);
 
 }
 
@@ -905,7 +940,7 @@ static ssize_t pcc_mode_store(struct kobject *kobj, struct attribute *attr,
 	if (rc)
 		return rc;
 
-	if (mode & ~S_IRWXUGO)
+	if (mode & ~0777)
 		return -EINVAL;
 
 	super->pccs_mode = mode;
@@ -1098,8 +1133,8 @@ static ssize_t statahead_running_max_store(struct kobject *kobj,
 		return count;
 	}
 
-	CERROR("Bad statahead_running_max value %lu. Valid values "
-	       "are in the range [0, %d]\n", val, LL_SA_RUNNING_MAX);
+	CERROR("Bad statahead_running_max value %lu. Valid values are in the range [0, %d]\n",
+	       val, LL_SA_RUNNING_MAX);
 
 	return -ERANGE;
 }
@@ -1901,8 +1936,8 @@ read_ahead_async_file_threshold_mb_store(struct kobject *kobj,
 	pages_number = MiB_TO_PAGES(pages_number);
 	max_ra_per_file = sbi->ll_ra_info.ra_max_pages_per_file;
 	if (pages_number < 0 || pages_number > max_ra_per_file) {
-		CERROR("%s: can't set read_ahead_async_file_threshold_mb=%lu > "
-		       "max_read_readahead_per_file_mb=%lu\n", sbi->ll_fsname,
+		CERROR("%s: can't set read_ahead_async_file_threshold_mb=%lu > max_read_readahead_per_file_mb=%lu\n",
+		       sbi->ll_fsname,
 		       PAGES_TO_MiB(pages_number),
 		       PAGES_TO_MiB(max_ra_per_file));
 		return -ERANGE;
@@ -2672,6 +2707,7 @@ static struct attribute *llite_attrs[] = {
 	&lustre_attr_opencache_max_ms.attr,
 	&lustre_attr_parallel_dio.attr,
 	&lustre_attr_pcc_async_threshold.attr,
+	&lustre_attr_pcc_attach_thread_max.attr,
 	&lustre_attr_pcc_mode.attr,
 	&lustre_attr_pcc_async_affinity.attr,
 	&lustre_attr_read_ahead_async_file_threshold_mb.attr,
@@ -2963,8 +2999,8 @@ static void ll_display_extents_info(struct ll_rw_extents_info *rw_extents,
 		read_cum += r;
 		write_cum += w;
 		end = 1 << (i + LL_HIST_START - units);
-		seq_printf(seq, "%4lu%c - %4lu%c%c: %14lu %4u %4u  | "
-			   "%14lu %4u %4u\n", start, *unitp, end, *unitp,
+		seq_printf(seq, "%4lu%c - %4lu%c%c: %14lu %4u %4u  | %14lu %4u %4u\n",
+			   start, *unitp, end, *unitp,
 			   (i == LL_HIST_MAX - 1) ? '+' : ' ',
 			   r, pct(r, read_tot), pct(read_cum, read_tot),
 			   w, pct(w, write_tot), pct(write_cum, write_tot));

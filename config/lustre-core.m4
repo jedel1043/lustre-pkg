@@ -149,64 +149,6 @@ AS_IF([test "x$enable_pinger" != xno], [
 ]) # LC_CONFIG_PINGER
 
 #
-# LC_CONFIG_CHECKSUM
-#
-# do checksum of bulk data between client and OST
-#
-AC_DEFUN([LC_CONFIG_CHECKSUM], [
-AC_MSG_CHECKING([whether to enable data checksum support])
-AC_ARG_ENABLE([checksum],
-	AS_HELP_STRING([--disable-checksum],
-		[disable data checksum support]),
-	[], [enable_checksum="yes"])
-AC_MSG_RESULT([$enable_checksum])
-AS_IF([test "x$enable_checksum" != xno], [
-	AC_DEFINE(CONFIG_ENABLE_CHECKSUM, 1, [do data checksums])
-	AC_SUBST(ENABLE_CHECKSUM, yes)
-], [
-	AC_SUBST(ENABLE_CHECKSUM, no)
-])
-]) # LC_CONFIG_CHECKSUM
-
-#
-# LC_CONFIG_FLOCK
-#
-# enable distributed flock by default
-#
-AC_DEFUN([LC_CONFIG_FLOCK], [
-AC_MSG_CHECKING([whether to enable flock by default])
-AC_ARG_ENABLE([flock],
-	AS_HELP_STRING([--disable-flock],
-		[disable flock by default]),
-	[], [enable_flock="yes"])
-AC_MSG_RESULT([$enable_flock])
-AS_IF([test "x$enable_flock" != xno], [
-	AC_DEFINE(CONFIG_ENABLE_FLOCK, 1, [enable flock by default])
-	AC_SUBST(ENABLE_FLOCK, yes)
-], [
-	AC_SUBST(ENABLE_FLOCK, no)
-])
-]) # LC_CONFIG_FLOCK
-
-#
-# LC_CONFIG_LRU_RESIZE
-#
-AC_DEFUN([LC_CONFIG_LRU_RESIZE], [
-AC_MSG_CHECKING([whether to enable lru self-adjusting])
-AC_ARG_ENABLE([lru_resize],
-	AS_HELP_STRING([--enable-lru-resize],
-		[enable lru resize support]),
-	[], [enable_lru_resize="yes"])
-AC_MSG_RESULT([$enable_lru_resize])
-AS_IF([test "x$enable_lru_resize" != xno], [
-	AC_DEFINE(HAVE_LRU_RESIZE_SUPPORT, 1, [Enable lru resize support])
-	AC_SUBST(ENABLE_LRU_RESIZE, yes)
-], [
-	AC_SUBST(ENABLE_LRU_RESIZE, no)
-])
-]) # LC_CONFIG_LRU_RESIZE
-
-#
 # LC_CONFIG_QUOTA
 #
 # Quota support. The kernel must support CONFIG_QUOTA.
@@ -265,9 +207,11 @@ AC_ARG_ENABLE([gss_keyring],
 			enable_gss_keyring="$enable_gss"])])
 AC_MSG_RESULT([$enable_gss_keyring])
 AS_IF([test "x$enable_gss_keyring" != xno], [
-	LB_CHECK_CONFIG_IM([KEYS], [], [
-		gss_keyring_conf_test="fail"
-		AC_MSG_WARN([GSS keyring backend requires that CONFIG_KEYS be enabled in your kernel.])])
+	AS_IF([test x$enable_modules != xno], [
+		LB_CHECK_CONFIG_IM([KEYS], [], [
+			gss_keyring_conf_test="fail"
+			AC_MSG_WARN([GSS keyring backend requires that CONFIG_KEYS be enabled in your kernel.])])
+	])
 
 	AC_CHECK_LIB([keyutils], [keyctl_search], [], [
 		gss_keyring_conf_test="fail"
@@ -352,9 +296,11 @@ AC_SUBST(TEST_DIR)
 AS_IF([test "x$enable_gss" != xno], [
 	LC_CONFIG_GSS_KEYRING
 
-	sunrpc_required=$enable_gss
-	LC_CONFIG_SUNRPC
-	sunrpc_required="no"
+	AS_IF([test x$enable_modules != xno], [
+		sunrpc_required=$enable_gss
+		LC_CONFIG_SUNRPC
+		sunrpc_required="no"
+	])
 
 	require_krb5=$enable_gss
 	AC_KERBEROS_V5
@@ -791,6 +737,11 @@ AC_DEFUN([LC_SRC_HAVE_KTHREAD_USE_MM], [
 AC_DEFUN([LC_HAVE_KTHREAD_USE_MM], [
 	LB2_MSG_LINUX_TEST_RESULT([if have kthread_use_mm], [kthread_use_mm], [
 		AC_DEFINE(HAVE_KTHREAD_USE_MM, 1, ['kthread_use_mm' exists])
+	],[
+		AC_DEFINE([kthread_use_mm(mm)], [use_mm(mm)],
+			[use_mm() -> kthread_use_mm()])
+		AC_DEFINE([kthread_unuse_mm(mm)], [unuse_mm(mm)],
+			[unuse_mm() -> kthread_unuse_mm()])
 	])
 ]) # LC_HAVE_KTHREAD_USE_MM
 
@@ -1221,6 +1172,10 @@ AC_DEFUN([LC_HAVE_FAULT_IN_IOV_ITER_READABLE], [
 	[fault_in_iov_iter_readable], [
 		AC_DEFINE(HAVE_FAULT_IN_IOV_ITER_READABLE, 1,
 			['fault_in_iov_iter_readable' exists])
+	],[
+		AC_DEFINE([fault_in_iov_iter_readable(iter, count)],
+			  [iov_iter_fault_in_readable(iter, count)],
+			  [iov_iter_fault_in_readable()->fault_in_iov_iter_readable()])
 	])
 ]) # LC_HAVE_FAULT_IN_IOV_ITER_READABLE
 
@@ -1405,7 +1360,11 @@ AC_DEFUN([LC_HAVE_WB_STAT_MOD], [
 #
 AC_DEFUN([LC_SRC_HAVE_FOLIO_BATCH], [
 	LB2_LINUX_TEST_SRC([struct_folio_batch_exists], [
-		#include <linux/pagevec.h>
+		#if __has_include (<linux/folio_batch.h>)
+		# include <linux/folio_batch.h>
+		#else
+		# include <linux/pagevec.h>
+		#endif
 	],[
 		struct folio_batch fbatch __attribute__ ((unused));
 
@@ -1980,6 +1939,27 @@ LB_CHECK_EXPORT([add_to_page_cache_locked], [mm/filemap.c],
 ]) # LC_HAVE_ADD_TO_PAGE_CACHE_LOCKED
 
 #
+# LC_HAVE_DEBUGFS_LOOKUP_AND_REMOVE
+#
+# Linux commit v6.0-rc2-12-gdec9b2f1e045
+#   debugfs: introduce debugfs_lookup_and_remove()
+#
+AC_DEFUN([LC_SRC_HAVE_DEBUGFS_LOOKUP_AND_REMOVE], [
+	LB2_LINUX_TEST_SRC([debugfs_lookup_and_remove], [
+		#include <linux/debugfs.h>
+	],[
+		debugfs_lookup_and_remove(NULL, NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_DEBUGFS_LOOKUP_AND_REMOVE], [
+	LB2_MSG_LINUX_TEST_RESULT([if 'debugfs_lookup_and_remove()' is available],
+	[debugfs_lookup_and_remove], [
+		AC_DEFINE([HAVE_DEBUGFS_LOOKUP_AND_REMOVE], 1,
+			[debugfs_lookup_and_remove() is available])
+	])
+]) # LC_HAVE_DEBUGFS_LOOKUP_AND_REMOVE
+
+#
 # LC_HAVE_FILEMAP_GET_FOLIOS_CONTIG
 #
 # Linux commit v6.0-rc3-94-g35b471467f88
@@ -2209,7 +2189,11 @@ AC_DEFUN([LC_HAVE_LOCKS_LOCK_FILE_WAIT_IN_FILELOCK], [
 #
 AC_DEFUN([LC_SRC_HAVE_FOLIO_BATCH_REINIT], [
 	LB2_LINUX_TEST_SRC([folio_batch_reinit_exists], [
-		#include <linux/pagevec.h>
+		#if __has_include (<linux/folio_batch.h>)
+		# include <linux/folio_batch.h>
+		#else
+		# include <linux/pagevec.h>
+		#endif
 	],[
 		struct folio_batch fbatch __attribute__ ((unused));
 
@@ -2301,13 +2285,8 @@ AC_DEFUN([LC_SRC_HAVE_CLASS_CREATE_MODULE_ARG], [
 AC_DEFUN([LC_HAVE_CLASS_CREATE_MODULE_ARG], [
 	LB2_MSG_LINUX_TEST_RESULT([if 'class_create' does not have module arg],
 	[class_create_without_module_arg], [
-		AC_DEFINE([ll_class_create(name)],
-			  [class_create((name))],
-			  ['class_create' does not have module arg])
-	],[
-		AC_DEFINE([ll_class_create(name)],
-			  [class_create(THIS_MODULE, (name))],
-			  ['class_create' expects module arg])
+		AC_DEFINE([HAVE_CLASS_CREATE_NO_ARG], 1,
+			['class_create' does not have module arg])
 	])
 ]) # LC_HAVE_CLASS_CREATE_MODULE_ARG
 
@@ -2428,7 +2407,11 @@ AC_DEFUN([LC_HAVE_SG_SET_FOLIO], [
 #
 AC_DEFUN([LC_SRC_HAVE_STRUCT_PAGEVEC], [
 	LB2_LINUX_TEST_SRC([struct_pagevec_exists], [
-		#include <linux/pagevec.h>
+		#if __has_include (<linux/folio_batch.h>)
+		# include <linux/folio_batch.h>
+		#else
+		# include <linux/pagevec.h>
+		#endif
 	],[
 		struct pagevec *pvec = NULL;
 		(void)pvec;
@@ -3717,6 +3700,63 @@ AC_DEFUN([LC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER],[
 	])
 ]) # LC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER
 
+# LC_HAVE_SIMPLE_NOSETLEASE
+#
+# Linux commit v6.19-rc5-31-g2b10994be716
+#   filelock: default to returning -EINVAL when ->setlease operation is NULL
+# Linux commit v6.19-rc5-32-g51e49111c00b
+#   fs: remove simple_nosetlease()
+#
+# Up to v6.19 an unset ->setlease means generic_setlease() and leases are
+# granted, so a filesystem that wants none of them has to point ->setlease
+# at simple_nosetlease(). From v7.0 an unset ->setlease is itself the way
+# to refuse leases and simple_nosetlease() no longer exists.
+#
+AC_DEFUN([LC_SRC_HAVE_SIMPLE_NOSETLEASE], [
+	LB2_LINUX_TEST_SRC([simple_nosetlease], [
+		#include <linux/fs.h>
+	],[
+		const struct file_operations fops = {
+			.setlease = simple_nosetlease,
+		};
+		(void)fops;
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_SIMPLE_NOSETLEASE], [
+	LB2_MSG_LINUX_TEST_RESULT([if simple_nosetlease() is available],
+	[simple_nosetlease], [
+		AC_DEFINE(HAVE_SIMPLE_NOSETLEASE, 1,
+			[simple_nosetlease() is available])
+	])
+]) # LC_HAVE_SIMPLE_NOSETLEASE
+
+#
+# LC_HAVE_DCACHE_ANON_UNION_D_ALIAS
+#
+# Linux commit v7.0-rc6-4-g14a51045e10d3
+#  get rid of busy-waiting in shrink_dcache_tree()
+# anonymized the union containing d_alias
+#
+AC_DEFUN([LC_SRC_HAVE_DCACHE_ANON_UNION_D_ALIAS],[
+	LB2_LINUX_TEST_SRC([dentry_d_alias_anonymized], [
+		#include <linux/dcache.h>
+	],[
+		struct dentry *dentry = NULL;
+
+		hlist_del_init(&dentry->d_alias);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_DCACHE_ANON_UNION_D_ALIAS],[
+	LB2_MSG_LINUX_TEST_RESULT([if dentry union with d_alias is anonymized],
+	[dentry_d_alias_anonymized], [
+		AC_DEFINE(DENTRY_D_ALIAS, d_alias,
+			  [union with d_alias is anonymous])
+	], [
+		AC_DEFINE([DENTRY_D_ALIAS], [d_u.d_alias],
+			  [d_u union needed to access d_alias])
+	])
+]) # LC_HAVE_DCACHE_ANON_UNION_D_ALIAS
+
 #
 # LC_PROG_LINUX
 #
@@ -3818,6 +3858,7 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	LC_SRC_REGISTER_SHRINKER_FORMAT_NAMED
 	LC_SRC_HAVE_VFS_SETXATTR_NON_CONST_VALUE
 	LC_SRC_HAVE_IOV_ITER_GET_PAGES_ALLOC2
+	LC_SRC_HAVE_DEBUGFS_LOOKUP_AND_REMOVE
 	LC_SRC_HAVE_USER_BACKED_ITER
 
 	# 6.1
@@ -3928,6 +3969,10 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 
 	# 7.0
 	LC_SRC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER
+	LC_SRC_HAVE_SIMPLE_NOSETLEASE
+
+	# 7.1
+	LC_SRC_HAVE_DCACHE_ANON_UNION_D_ALIAS
 ])
 
 AC_DEFUN([LC_PROG_LINUX_RESULTS], [
@@ -4040,6 +4085,7 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 	LC_REGISTER_SHRINKER_FORMAT_NAMED
 	LC_HAVE_VFS_SETXATTR_NON_CONST_VALUE
 	LC_HAVE_IOV_ITER_GET_PAGES_ALLOC2
+	LC_HAVE_DEBUGFS_LOOKUP_AND_REMOVE
 	LC_HAVE_USER_BACKED_ITER
 
 	# 6.1
@@ -4151,6 +4197,10 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 
 	# 7.0
 	LC_HAVE_POSIX_ACL_TO_XATTR_ALLOC_BUFFER
+	LC_HAVE_SIMPLE_NOSETLEASE
+
+	# 7.1
+	LC_HAVE_DCACHE_ANON_UNION_D_ALIAS
 ])
 
 #
@@ -4163,9 +4213,6 @@ AC_DEFUN([LC_PROG_LINUX], [
 ==============================================================================])
 
 	LC_CONFIG_PINGER
-	LC_CONFIG_CHECKSUM
-	LC_CONFIG_FLOCK
-	LC_CONFIG_LRU_RESIZE
 	LC_CONFIG_GSS
 
 	LC_GLIBC_SUPPORT_FHANDLES

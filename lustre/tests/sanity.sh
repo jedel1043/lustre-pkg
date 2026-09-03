@@ -1088,6 +1088,30 @@ test_23d() {
 }
 run_test 23d "file offset is correct after appending writes"
 
+# LU-20253 tiny writes must update the cached inode size
+test_23e() {
+	local file=$DIR/$tfile
+	local size
+
+	statx_supported || skip_env "Test must be statx() syscall supported"
+
+	# the first write dirties the page via the normal write path,
+	# which merges the size into the inode
+	dd if=/dev/zero of=$file bs=128 count=1 conv=notrunc ||
+		error "first write failed"
+	# the page is now dirty, so a second sub-page write takes the
+	# tiny write path (ll_do_tiny_write)
+	dd if=/dev/zero of=$file bs=128 count=1 seek=1 conv=notrunc ||
+		error "second write failed"
+
+	# cached-always statx does not trigger a glimpse, so it reports
+	# i_size as seen by in-kernel users (e.g. overlayfs)
+	size=$($STATX --cached=always -c %s $file)
+	(( size == 256 )) ||
+		error "cached size after tiny write is $size, expected 256"
+}
+run_test 23e "tiny write updates the size seen by cached statx"
+
 # rename sanity
 test_24a() {
 	echo '-- same directory rename'
@@ -13519,6 +13543,7 @@ test_101m()
 	local size
 	local iosz
 
+	check_fallocate_or_skip ost1 alloc # Probe for feature support
 	check_set_fallocate_or_skip
 	stack_trap "rm -f $file" EXIT
 
@@ -16171,6 +16196,104 @@ test_119r() {
 }
 run_test 119r "Test error handling in unaligned DIO user copy"
 
+test_119s() {
+	# A full-size bulk write whose object offset is not aligned to the
+	# client page size is carved into a different number of MDs by a
+	# large-page client and a 4KiB-page server. The server's bulk GET is
+	# then dropped by the client as "too big" and the write hangs. This
+	# only reproduces with a client page larger than the server's. A
+	# large-page server hits a separate, pre-existing bulk-descriptor
+	# sizing gap, so the test needs a 4KiB-page OST.
+	remote_ost_nodsh && skip "remote OST with nodsh"
+	unaligned_dio_or_skip
+	(( PAGE_SIZE > 4096 )) ||
+		skip "need client page size larger than the server's"
+	(( $(do_facet ost1 getconf PAGE_SIZE) == 4096 )) ||
+		skip "server-side large-page bulk not handled; need 4KiB OST"
+	(( OST1_VERSION >= $(version_code 2.9.52) )) ||
+		skip "need OST brw_size=16M support"
+
+	local tf=$DIR/$tdir/$tfile
+	local goal=$((16 * 1024 * 1024))	# one full max-size RPC
+	local bsize=$((PAGE_SIZE / 2))		# 4KiB-aligned, not page-aligned
+	local blocks=$((goal / bsize))		# single write() of $goal bytes
+	local want=$((goal + bsize))		# offset is one $bsize block in
+	local pages=$((goal / PAGE_SIZE))
+	local mark="ncp-bulk-md-$RANDOM-$$"
+	local brw_size="obdfilter.*.brw_size"
+	local osts=$(osts_nodes)
+	local p="$TMP/$TESTSUITE-$TESTNAME.parameters"
+	local orig_mb=$(do_facet ost1 $LCTL get_param -n $brw_size | head -n1)
+	local saved mp pid reproduced=0 i
+
+	# The client caps its RPC size at what the OST advertises, so the OST
+	# must serve 16MiB bulk before the client can build a 16MiB RPC. Raise
+	# brw_size on every OST and remount so the larger size is renegotiated.
+	if (( orig_mb < 16 )); then
+		save_lustre_params $(get_facets OST) "$brw_size" > $p
+		stack_trap "restore_lustre_params < $p; \
+			    remount_client $MOUNT || true; rm -f $p"
+		do_nodes $osts $LCTL set_param -n $brw_size=16M ||
+			error "set 16MB brw_size failed"
+		remount_client $MOUNT || error "remount_client failed"
+	fi
+
+	# Force the write into one 16MiB RPC so the bulk reaches the page count
+	# where the client and server MD segmentation diverge. The client can
+	# only be raised to 16MiB once the OST advertises it (done above).
+	saved=$($LCTL get_param -n osc.*.max_pages_per_rpc | head -n1)
+	stack_trap "$LCTL set_param osc.*.max_pages_per_rpc=$saved"
+	$LCTL set_param osc.*.max_pages_per_rpc=16M ||
+		skip "cannot set max_pages_per_rpc=16M"
+	for mp in $($LCTL get_param -n osc.*.max_pages_per_rpc); do
+		(( mp == pages )) || skip "RPC size capped below 16MiB"
+	done
+
+	test_mkdir -p $DIR/$tdir
+	$LFS setstripe -c 1 -i 0 $tf || error "setstripe failed"
+	stack_trap "rm -f $tf"
+
+	$LCTL mark "$mark" || error "$LCTL mark failed"
+
+	# On a buggy build the write hangs in D state and never returns, so poll
+	# the console for the oversize-match drop rather than block on it.
+	$DIRECTIO write $tf 1 $blocks $bsize &> /dev/null &
+	pid=$!
+	for ((i = 0; i < 60; i++)); do
+		if dmesg | sed -n "/$mark/,\$p" |
+		   grep -q "lnet_try_match_md.*too big"; then
+			reproduced=1
+			break
+		fi
+		kill -0 $pid 2>/dev/null || break
+		sleep 1
+	done
+
+	if (( reproduced )); then
+		# do not leave a wedged OSC behind for the rest of the suite
+		$LCTL set_param osc.*OST0000*.active=0 2>/dev/null
+		$LCTL set_param osc.*OST0000*.active=1 2>/dev/null
+		kill -9 $pid 2>/dev/null
+		error "bulk MD mismatch: server GET dropped as too big"
+	fi
+
+	# The drop never appeared. If the write is still running it is wedged
+	# for another reason; kill it rather than block the suite on a D-state
+	# process with no timeout.
+	if kill -0 $pid 2>/dev/null; then
+		$LCTL set_param osc.*OST0000*.active=0 2>/dev/null
+		$LCTL set_param osc.*OST0000*.active=1 2>/dev/null
+		kill -9 $pid 2>/dev/null
+		error "DIO write still running after 60s, no oversize drop"
+	fi
+
+	wait $pid || error "unaligned full-size DIO write failed"
+
+	local sz=$(stat -c %s $tf)
+	(( sz == want )) || error "file size $sz != $want"
+}
+run_test 119s "full-size unaligned DIO packs matching bulk MDs"
+
 test_120a() {
 	[ $PARALLEL == "yes" ] && skip "skip parallel run"
 	remote_mds_nodsh && skip "remote MDS with nodsh"
@@ -16202,8 +16325,10 @@ test_120a() {
 	       awk '/ldlm_cancel/ {print $2}')
 	blk2=$($LCTL get_param -n ldlm.services.ldlm_cbd.stats |
 	       awk '/ldlm_bl_callback/ {print $2}')
-	(( $can1 == $can2 )) || error "$((can2-can1)) cancel RPC occured."
-	(( $blk1 == $blk2 )) || error "$((blk2-blk1)) blocking RPC occured."
+	(( ${can1:-0} == ${can2:-0} )) ||
+		error "$((can2-can1)) cancel RPC occured."
+	(( ${blk1:-0} == ${blk2:-0} )) ||
+		error "$((blk2-blk1)) blocking RPC occured."
 }
 run_test 120a "Early Lock Cancel: mkdir test"
 
@@ -16229,8 +16354,10 @@ test_120b() {
 	       awk '/ldlm_cancel/ {print $2}')
 	blk2=$($LCTL get_param -n ldlm.services.ldlm_cbd.stats |
 	       awk '/ldlm_bl_callback/ {print $2}')
-	(( $can1 == $can2 )) || error "$((can2-can1)) cancel RPC occured."
-	(( $blk1 == $blk2 )) || error "$((blk2-blk1)) blocking RPC occured."
+	(( ${can1:-0} == ${can2:-0} )) ||
+		error "$((can2-can1)) cancel RPC occured."
+	(( ${blk1:-0} == ${blk2:-0} )) ||
+		error "$((blk2-blk1)) blocking RPC occured."
 }
 run_test 120b "Early Lock Cancel: create test"
 
@@ -16259,8 +16386,10 @@ test_120c() {
 	       awk '/ldlm_cancel/ {print $2}')
 	blk2=$($LCTL get_param -n ldlm.services.ldlm_cbd.stats |
 	       awk '/ldlm_bl_callback/ {print $2}')
-	(( $can1 == $can2 )) || error "$((can2-can1)) cancel RPC occured."
-	(( $blk1 == $blk2 )) || error "$((blk2-blk1)) blocking RPC occured."
+	(( ${can1:-0} == ${can2:-0} )) ||
+		error "$((can2-can1)) cancel RPC occured."
+	(( ${blk1:-0} == ${blk2:-0} )) ||
+		error "$((blk2-blk1)) blocking RPC occured."
 }
 run_test 120c "Early Lock Cancel: link test"
 
@@ -16287,8 +16416,10 @@ test_120d() {
 	       awk '/ldlm_cancel/ {print $2}')
 	blk2=$($LCTL get_param -n ldlm.services.ldlm_cbd.stats |
 	       awk '/ldlm_bl_callback/ {print $2}')
-	(( $can1 == $can2 )) || error "$((can2-can1)) cancel RPC occured."
-	(( $blk1 == $blk2 )) || error "$((blk2-blk1)) blocking RPC occured."
+	(( ${can1:-0} == ${can2:-0} )) ||
+		error "$((can2-can1)) cancel RPC occured."
+	(( ${blk1:-0} == ${blk2:-0} )) ||
+		error "$((blk2-blk1)) blocking RPC occured."
 }
 run_test 120d "Early Lock Cancel: setattr test"
 
@@ -16327,8 +16458,10 @@ test_120e() {
 	       awk '/ldlm_cancel/ {print $2}')
 	blk2=$($LCTL get_param -n ldlm.services.ldlm_cbd.stats |
 	       awk '/ldlm_bl_callback/ {print $2}')
-	(( $can1 == $can2 )) || error "$((can2 - can1)) cancel RPC occured"
-	(( $blk1 == $blk2 )) || error "$((blk2 - blk1)) blocking RPC occured"
+	(( ${can1:-0} == ${can2:-0} )) ||
+		error "$((can2 - can1)) cancel RPC occured"
+	(( ${blk1:-0} == ${blk2:-0} )) ||
+		error "$((blk2 - blk1)) blocking RPC occured"
 }
 run_test 120e "Early Lock Cancel: unlink test"
 
@@ -16366,8 +16499,10 @@ test_120f() {
 	       awk '/ldlm_cancel/ {print $2}')
 	blk2=$($LCTL get_param -n ldlm.services.ldlm_cbd.stats |
 	       awk '/ldlm_bl_callback/ {print $2}')
-	(( $can1 == $can2 )) || error "$((can2-can1)) cancel RPC occured."
-	(( $blk1 == $blk2 )) || error "$((blk2-blk1)) blocking RPC occured."
+	(( ${can1:-0} == ${can2:-0} )) ||
+		error "$((can2-can1)) cancel RPC occured."
+	(( ${blk1:-0} == ${blk2:-0} )) ||
+		error "$((blk2-blk1)) blocking RPC occured."
 }
 run_test 120f "Early Lock Cancel: rename test"
 
@@ -19337,6 +19472,7 @@ test_150b() {
 run_test 150b "Verify fallocate (prealloc) functionality"
 
 test_150bb() {
+	check_fallocate_or_skip ost1 alloc # Probe for feature support
 	check_set_fallocate_or_skip
 
 	touch $DIR/$tfile
@@ -19361,6 +19497,7 @@ test_150bb() {
 run_test 150bb "Verify fallocate modes both zero space"
 
 test_150c() {
+	check_fallocate_or_skip ost1 alloc # Probe for feature support
 	check_set_fallocate_or_skip
 	local striping="-c2"
 
@@ -19393,6 +19530,7 @@ test_150c() {
 run_test 150c "Verify fallocate Size and Blocks"
 
 test_150d() {
+	check_fallocate_or_skip ost1 alloc # Probe for feature support
 	check_set_fallocate_or_skip
 	local striping="-c2"
 
@@ -19412,6 +19550,7 @@ test_150d() {
 run_test 150d "Verify fallocate Size and Blocks - Non zero start"
 
 test_150e() {
+	check_fallocate_or_skip ost1 alloc # Probe for feature support
 	check_set_fallocate_or_skip
 
 	echo "df before:"
@@ -19467,16 +19606,16 @@ test_150f() {
 	local want_blocks_before=40 # 512 sized blocks
 	local want_blocks_after=24  # 512 sized blocks
 	local length=$(((want_blocks_before - want_blocks_after) * 512))
+	local subtest_file=$DIR/${tfile}_st1
+	# Variable used only for subtest runs
+	local subtest_size
+	local subtest_blks
 
-	[[ $OST1_VERSION -ge $(version_code 2.14.0) ]] ||
-		skip "need at least 2.14.0 for fallocate punch"
+	check_fallocate_or_skip ost1 punch
+	stack_trap "rm -f $DIR/$tfile*; wait_delete_completed"
 
-	if [ "$ost1_FSTYPE" = "zfs" ] || [ "$mds1_FSTYPE" = "zfs" ]; then
-		skip "LU-14160: punch mode is not implemented on OSD ZFS"
-	fi
-
-	check_set_fallocate_or_skip
-	stack_trap "rm -f $DIR/$tfile; wait_delete_completed"
+	# For ZFS OST case, make sure fallocate (punch) mode is set to 2 (enable)
+	[[ "$ost1_FSTYPE" == "zfs" ]] && check_set_fallocate 2
 
 	[[ "x$DOM" == "xyes" ]] &&
 		$LFS setstripe -E1M -L mdt -E eof $DIR/$tfile
@@ -19492,10 +19631,20 @@ test_150f() {
 	size=$(stat -c '%s' $DIR/$tfile)
 	blocks=$(stat -c '%b' $DIR/$tfile)
 
+	#
 	# Verify punch worked.
-	(( blocks == want_blocks_after )) ||
-		error "punch failed: blocks $blocks != $want_blocks_after"
+	#
+	# Note 1: Below verification is not valid for ZFS. ZFS adds extra dnode
+	# calculation overhead and therefore would fail the check. The check
+	# below is only valid for ldiskfs, which just reports blocks used.
+	# Subtest 2, however, verifies that the blocks does get reduced.
+	if [[ "$ost1_FSTYPE" != "zfs" ]]; then
+		(( blocks == want_blocks_after )) ||
+			error "punch failed: blocks $blocks != $want_blocks_after"
+	fi
 
+	# Our best effort in this testcase is to verify "size". Which should
+	# be same for both ZFS and ldiskfs
 	(( size == want_size_before )) ||
 		error "punch failed: size $size != $want_size_before"
 
@@ -19513,18 +19662,27 @@ test_150f() {
 	yes 'A' | dd of=$DIR/$tfile bs=4096 count=5 ||
 		error "dd failed for bs 4096 and count 5"
 
-	# Punch range less than block size will have no change in block count
-	want_blocks_after=40  # 512 sized blocks
-
 	# Punch overlaps two blocks and less than blocksize
 	out=$(fallocate -p --offset 4000 -l 3000 $DIR/$tfile 2>&1) ||
 		skip_eopnotsupp "$out|fallocate: offset 4000 length 3000"
+
+	# Flush writes to ensure valid blocks. Need to be more thorough for
+	# ZFS, since blocks are not allocated/returned to client immediately.
+	sync_all_data
+	for (( i=1; i <= OSTCOUNT; i++ )); do
+		wait_zfs_commit "ost${i}"
+	done
+	cancel_lru_locks osc
+
 	size=$(stat -c '%s' $DIR/$tfile)
 	blocks=$(stat -c '%b' $DIR/$tfile)
 
-	# Verify punch worked.
-	(( blocks == want_blocks_after )) ||
-		error "punch failed: blocks $blocks != $want_blocks_after"
+	# Verify punch worked (only for ldiskfs). Please see "Note 1" above.
+	if [[ "$ost1_FSTYPE" != "zfs" ]]; then
+		want_blocks_after=40  # 512 sized blocks
+		(( blocks == want_blocks_after )) ||
+			error "punch failed: blocks $blocks != $want_blocks_after"
+	fi
 
 	(( size == want_size_before )) ||
 		error "punch failed: size $size != $want_size_before"
@@ -19535,6 +19693,40 @@ test_150f() {
 	cksum=($(md5sum $DIR/$tfile))
 	[[ "${cksum[0]}" == "$expect" ]] ||
 		error "unexpected MD5SUM after punch: ${cksum[0]}"
+
+	# Subtest 2
+	echo "Mostly for ZFS. Verify fallocate -p: Reduces blocks"
+	dd if=/dev/urandom of=$subtest_file bs=1M count=2 ||
+		error "dd failed for bs 1M and count 2"
+
+	# Reflect changes immediately to client
+	cancel_lru_locks
+
+	subtest_size=$(stat -c '%s' $subtest_file)
+	subtest_blks=$(stat -c '%b' $subtest_file)
+
+	out=$(fallocate -p -o0 -l2M $subtest_file 2>&1) ||
+		skip_eopnotsupp "$out|fallocate: offset 0 and length 2M"
+
+	# Flush writes to ensure valid blocks. Need to be more thorough for
+	# ZFS, since blocks are not allocated/returned to client immediately.
+	sync_all_data
+	for (( i=1; i <= OSTCOUNT; i++ )); do
+		wait_zfs_commit "ost${i}"
+	done
+	cancel_lru_locks osc
+
+	# collect client blocks and size
+	size=$(stat -c '%s' $subtest_file)
+	blocks=$(stat -c '%b' $subtest_file)
+
+	# This is heuristic. Blocks in ZFS will never reach 0, due to dnode
+	# overhead and therefore direct comparison cannot be done. But should
+	# reduce to single digit for full file punch.
+	(( size == subtest_size )) ||
+		error "fallocate -p failed: size $size != $subtest_size"
+	(( blocks != subtest_blks && blocks < 10 )) ||
+		error "fallocate -p failed: blocks $blocks sub_blks $subtest_blks"
 }
 run_test 150f "Verify fallocate punch functionality"
 
@@ -19546,14 +19738,11 @@ test_150g() {
 	local size_after
 	local BS=4096 # Block size in bytes
 
-	[[ $OST1_VERSION -ge $(version_code 2.14.0) ]] ||
-		skip "need at least 2.14.0 for fallocate punch"
+	(( $OST1_VERSION >= $(version_code v2_14_51-78-gcb037f305c) )) ||
+		skip "need at least 2.14.51.78 for fallocate punch"
 
-	if [ "$ost1_FSTYPE" = "zfs" ] || [ "$mds1_FSTYPE" = "zfs" ]; then
-		skip "LU-14160: punch mode is not implemented on OSD ZFS"
-	fi
-
-	check_set_fallocate_or_skip
+	check_set_fallocate_or_skip # Enable fallocate then probe
+	check_fallocate_or_skip ost1 alloc # Probe for feature support
 	stack_trap "rm -f $DIR/$tfile; wait_delete_completed"
 
 	if [[ "x$DOM" == "xyes" ]]; then
@@ -19634,6 +19823,7 @@ test_150h() {
 	local file=$DIR/$tfile
 	local size
 
+	check_fallocate_or_skip ost1 alloc # Probe for feature support
 	check_set_fallocate_or_skip
 	statx_supported || skip_env "Test must be statx() syscall supported"
 
@@ -27959,6 +28149,7 @@ test_253() {
 	[ $PARALLEL == "yes" ] && skip "skip parallel run"
 	remote_mds_nodsh && skip "remote MDS with nodsh"
 	remote_mgs_nodsh && skip "remote MGS with nodsh"
+	check_fallocate_or_skip ost1 alloc # Probe for feature support
 	check_set_fallocate_or_skip
 
 	local ostidx=0
@@ -32137,6 +32328,231 @@ test_398u() { # LU-19536
 }
 run_test 398u "DIO pool ENOMEM triggers drain and retry"
 
+cleanup_398v() {
+	local params=$1
+	local rc=0
+
+	[[ -e "$params" ]] || return 0
+	restore_lustre_params < "$params" ||
+		{ error_noexit "cannot restore OSC parameters"; rc=1; }
+	rm -f "$params" ||
+		{ error_noexit "cannot remove $params"; rc=1; }
+
+	return $rc
+}
+
+client_grant_398v() {
+	local osc=$1
+	local values
+
+	values=$($LCTL get_param -n "$osc.cur_grant_bytes" \
+		"$osc.cur_dirty_grant_bytes" "$osc.cur_lost_grant_bytes") ||
+		return 1
+	calc_sum <<< "$values"
+}
+
+server_grant_398v() {
+	local values
+
+	values=$(do_facet ost1 "$LCTL get_param \
+		obdfilter.${FSNAME}-OST0000.tot_granted \
+		obdfilter.${FSNAME}-OST0000.tot_pending \
+		obdfilter.${FSNAME}-OST0000.grant_precreate") ||
+		return 1
+	awk -F= '
+		/tot_granted=/ { total += $2; found++ }
+		/tot_pending=/ { total -= $2; found++ }
+		/grant_precreate=/ { total -= $2; found++ }
+		END {
+			if (found != 3)
+				exit 1
+			printf("%0.0f", total)
+		}
+	' <<< "$values"
+}
+
+test_398v() { # LU-19536
+	[[ $PARALLEL != "yes" ]] || skip "skip parallel run"
+
+	local file=$DIR/$tfile
+	local params=$TMP/$TESTSUITE-$TESTNAME.params
+	local instance
+	local imp
+	local osc
+	local extent_tax
+	local grant
+	local grant_block_size
+	local max_dirty
+	local needed
+	local rpc_bytes
+	local rpc_grant
+	local rpc_pages
+	local client_grant_before
+	local client_grant_after
+	local server_grant_before
+	local server_grant_after
+	local client_grant_change
+	local server_grant_change
+
+	instance=$($LFS getname -i "$DIR") ||
+		error "cannot find client mount instance"
+	imp="$FSNAME-OST0000-osc-$instance"
+	osc="osc.$imp"
+
+	: > "$params" || error "cannot create $params"
+	stack_trap "cleanup_398v '$params'" EXIT
+	save_lustre_params client "$osc.max_pages_per_rpc" >> "$params" ||
+		error "cannot save max_pages_per_rpc"
+	save_lustre_params client "$osc.max_rpcs_in_flight" >> "$params" ||
+		error "cannot save max_rpcs_in_flight"
+	save_lustre_params client "$osc.grant_shrink" >> "$params" ||
+		error "cannot save grant_shrink"
+	save_lustre_params client "$osc.max_dirty_mb" >> "$params" ||
+		error "cannot save max_dirty_mb"
+
+	$LCTL set_param "$osc.max_pages_per_rpc=1M" ||
+		error "cannot set max_pages_per_rpc"
+	$LCTL set_param "$osc.max_rpcs_in_flight=8" ||
+		error "cannot set max_rpcs_in_flight"
+	$LCTL set_param "$osc.grant_shrink=0" ||
+		error "cannot disable grant shrink"
+
+	extent_tax=$(import_param "$imp" grant_extent_tax) ||
+		error "cannot read grant_extent_tax"
+	grant_block_size=$(import_param "$imp" grant_block_size) ||
+		error "cannot read grant_block_size"
+	rpc_pages=$($LCTL get_param -n "$osc.max_pages_per_rpc") ||
+		error "cannot read max_pages_per_rpc"
+	[[ "$extent_tax" =~ ^[0-9]+$ ]] ||
+		error "invalid grant_extent_tax: $extent_tax"
+	[[ "$grant_block_size" =~ ^[0-9]+$ ]] ||
+		error "invalid grant_block_size: $grant_block_size"
+	[[ "$rpc_pages" =~ ^[0-9]+$ ]] ||
+		error "invalid max_pages_per_rpc: $rpc_pages"
+	rpc_bytes=$((rpc_pages * PAGE_SIZE))
+	(( rpc_bytes >= 1024 * 1024 &&
+	   rpc_bytes % (1024 * 1024) == 0 )) ||
+		skip "RPC size $rpc_bytes is not a whole MiB"
+	rpc_grant=$((((rpc_bytes + grant_block_size - 1) /
+		       grant_block_size) * grant_block_size + extent_tax))
+	needed=$rpc_grant
+
+	$LFS setstripe -i 0 -c 1 "$file" || error "setstripe $file"
+	stack_trap "rm -f $file"
+
+	# Connect the import and acquire grant before taking the baseline.
+	dd if=/dev/zero of="$file" bs=$((8 * rpc_bytes)) count=1 \
+		oflag=direct status=none ||
+		error "grant warmup DIO failed"
+	sync || error "sync after grant warmup failed"
+
+	grant=$($LCTL get_param -n "$osc.cur_grant_bytes") ||
+		error "cannot read cur_grant_bytes after warmup"
+	(( grant >= needed )) ||
+		skip "need $needed bytes grant, have $grant"
+
+	rm -f "$file" || error "cannot remove warmup file"
+	$LFS setstripe -i 0 -c 1 "$file" || error "recreate $file"
+
+	# Set this last because client_adjust_max_dirty() may raise it when
+	# max_pages_per_rpc or max_rpcs_in_flight changes.
+	$LCTL set_param "$osc.max_dirty_mb=$((rpc_bytes / 1024 / 1024))" ||
+		error "cannot set max_dirty_mb"
+	max_dirty=$($LCTL get_param -n "$osc.max_dirty_mb") ||
+		error "cannot read max_dirty_mb"
+	[[ "$max_dirty" =~ ^[0-9]+$ ]] ||
+		error "invalid max_dirty_mb: $max_dirty"
+	(( max_dirty == rpc_bytes / 1024 / 1024 )) ||
+		error "max_dirty_mb was adjusted after being set"
+
+	$LCTL set_param "$osc.rpc_stats=clear" ||
+		error "cannot clear OSC RPC statistics"
+
+	# Compare only the grant change caused by this write. An absolute
+	# suite-wide check also includes unrelated clients and idle imports.
+	client_grant_before=$(client_grant_398v "$osc") ||
+		error "cannot read initial client grant"
+	server_grant_before=$(server_grant_398v) ||
+		error "cannot read initial server grant"
+	echo "grant before DIO: client=$client_grant_before" \
+		"server=$server_grant_before" \
+		"delta=$((server_grant_before - client_grant_before))"
+
+	#define OBD_FAIL_OST_BRW_PAUSE_BULK 0x214
+	stack_trap \
+		"do_facet ost1 $LCTL set_param fail_loc=0 fail_val=0"
+	do_facet ost1 $LCTL set_param fail_val=2 fail_loc=0x214 ||
+		error "cannot pause OST bulk completion"
+
+	# Four RPCs would all overlap without dirty-limit fallback.
+	dd if=/dev/zero of="$file" bs=$((4 * rpc_bytes)) count=1 \
+		oflag=direct status=none ||
+		error "DIO write failed"
+	do_facet ost1 $LCTL set_param fail_loc=0 fail_val=0 ||
+		error "cannot clear OST bulk pause"
+
+	client_grant_after=$(client_grant_398v "$osc") ||
+		error "cannot read final client grant"
+	server_grant_after=$(server_grant_398v) ||
+		error "cannot read final server grant"
+	client_grant_change=$((client_grant_before - client_grant_after))
+	server_grant_change=$((server_grant_before - server_grant_after))
+	echo "grant after DIO: client=$client_grant_after" \
+		"server=$server_grant_after" \
+		"delta=$((server_grant_after - client_grant_after))"
+	echo "grant consumed by DIO: client=$client_grant_change" \
+		"server=$server_grant_change"
+	(( client_grant_change == server_grant_change )) ||
+		error "grant change mismatch: client $client_grant_before to $client_grant_after, server $server_grant_before to $server_grant_after"
+
+	local stats
+	local write_rpcs
+	local max_in_flight
+
+	stats=$($LCTL get_param -n "$osc.rpc_stats") ||
+		error "cannot read OSC RPC statistics"
+	echo "$stats"
+	write_rpcs=$(awk '
+		/^pages per rpc/ { section = 1; next }
+		section && NF == 0 { print total + 0; exit }
+		section && $1 ~ /^[0-9]+:$/ { total += $6 }
+	' <<< "$stats")
+	# test_398g documents an occasional unrelated extra OSC write RPC.
+	(( write_rpcs >= 4 && write_rpcs <= 5 )) ||
+		error "expected 4 or 5 write RPCs, saw $write_rpcs"
+
+	max_in_flight=$(awk '
+		/^rpcs in flight/ { section = 1; next }
+		section && NF == 0 { print max + 0; exit }
+		section && $1 ~ /^[0-9]+:$/ && $6 > 0 {
+			value = $1
+			sub(/:$/, "", value)
+			if (value > max)
+				max = value
+		}
+	' <<< "$stats")
+	(( max_in_flight > 0 && max_in_flight < 4 )) ||
+		error "dirty limit allowed $max_in_flight RPCs in flight"
+
+	local bytes
+	local dirty
+	local dirty_grant
+
+	bytes=$(stat -c %s "$file") || error "cannot stat $file"
+	(( bytes == 4 * rpc_bytes )) ||
+		error "file size $bytes != expected $((4 * rpc_bytes))"
+	dirty=$($LCTL get_param -n "$osc.cur_dirty_bytes") ||
+		error "cannot read cur_dirty_bytes"
+	dirty_grant=$($LCTL get_param -n "$osc.cur_dirty_grant_bytes") ||
+		error "cannot read cur_dirty_grant_bytes"
+	(( dirty == 0 && dirty_grant == 0 )) ||
+		error "dirty accounting leaked: bytes=$dirty grant=$dirty_grant"
+
+	# Restore the OSC settings before subsequent tests.
+	cleanup_398v "$params"
+}
+run_test 398v "regular DIO respects max_dirty_mb dirty page limit"
+
 test_fake_rw() {
 	local read_write=$1
 	if [ "$read_write" = "write" ]; then
@@ -35206,6 +35622,7 @@ test_600a() {
 	local pcnt=$((size_mb * 1024 * 1024 / PAGE_SIZE))
 
 	which vmtouch || skip_env "This test needs vmtouch utility"
+	check_fallocate_or_skip ost1 alloc # Probe for feature support
 	check_set_fallocate_or_skip
 	disable_page_cache_shrink
 	enable_mlock_pages_check
@@ -35273,6 +35690,7 @@ test_600b() {
 			      awk '/^max_cached_mb/ { print $2 }')
 
 	which vmtouch || skip_env "This test needs vmtouch utility"
+	check_fallocate_or_skip ost1 alloc # Probe for feature support
 	check_set_fallocate_or_skip
 	disable_page_cache_shrink
 	enable_mlock_pages_check
@@ -35312,6 +35730,7 @@ test_600c() {
 			      awk '/^max_cached_mb/ { print $2 }')
 
 	which vmtouch || skip_env "This test needs vmtouch utility"
+	check_fallocate_or_skip ost1 alloc # Probe for feature support
 	check_set_fallocate_or_skip
 	disable_page_cache_shrink
 	enable_mlock_pages_check
@@ -35411,6 +35830,7 @@ test_600d() {
 			      awk '/^max_cached_mb/ { print $2 }')
 
 	which vmtouch || skip_env "This test needs vmtouch utility"
+	check_fallocate_or_skip ost1 alloc # Probe for feature support
 	check_set_fallocate_or_skip
 	disable_page_cache_shrink
 	enable_mlock_pages_check
@@ -37185,6 +37605,36 @@ test_855() {
 }
 run_test 855 "readdir on open validation"
 
+test_856() {
+	local ostidx=0
+	local param=obdfilter.$(ostname_from_index $ostidx).failure_domain
+	local facet=ost$((ostidx + 1))
+	local domain=55
+
+	(( $OST1_VERSION >= $(version_code 2.17.56) )) ||
+		skip "need OST >= 2.17.56 for os_failure_domain in obd_statfs"
+	(( $CLIENT_VERSION >= $(version_code 2.17.56) )) ||
+		skip "need client >= 2.17.56 for lfs df --output=domain"
+
+	local saved=$(do_facet $facet $LCTL get_param -n $param)
+	stack_trap "do_facet $facet $LCTL set_param -n $param=$saved"
+
+	# test we can get and set the failure_domain on the OST
+	do_facet $facet "$LCTL set_param $param=$domain"
+	local found=$(do_facet $facet $LCTL get_param -n $param)
+	(( $found == $domain )) ||
+		error "Found failure_domain $found, expect $domain"
+
+	# Test it reads back from 'lfs df' (may be cached for a few seconds)
+	wait_update_facet client \
+		"$LFS df --ost=$ostidx --output=domain $MOUNT" "$domain" ||
+	{
+		found=$($LFS df --ost=$ostidx --output=domain $MOUNT)
+		error "'lfs df' found failure-domain $found, expect $domain"
+	}
+}
+run_test 856 "Setting and getting failure_domain"
+
 test_860() {
 	local file=$DIR/$tfile
 	local size
@@ -37572,6 +38022,29 @@ test_911()
 	done
 }
 run_test 911 "Check lfs/lctl --list-commands"
+
+test_912() {
+	$LFS setstripe -c 1 -i 0 $DIR/$tfile || error "setstripe failed"
+
+	# Emulate a client that can no longer flush (e.g. evicted mid-write):
+	# dirty pages are pinned in their cached (OES_CACHE) extent. A small
+	# buffered write is not eagerly flushed, so it stays dirty.
+	#define OBD_FAIL_OSC_NO_FLUSH		0x41a
+	$LCTL set_param -n fail_loc=0x41a
+
+	dd if=/dev/zero of=$DIR/$tfile bs=64k count=1 conv=notrunc ||
+		error "dd failed"
+
+	# The file is still linked, so inode teardown at umount flushes with
+	# CL_FSYNC_LOCAL; that flush fails here. Without the fix this LBUGs in
+	# osc_page_delete() tearing down a page left in a cached extent.
+	umount_client $MOUNT || error "umount failed"
+
+	$LCTL set_param -n fail_loc=0
+	mount_client $MOUNT || error "mount failed"
+	rm -f $DIR/$tfile
+}
+run_test 912 "no LBUG tearing down un-flushable cached pages at umount"
 
 test_920()
 {

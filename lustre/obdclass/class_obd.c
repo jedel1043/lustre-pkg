@@ -406,39 +406,6 @@ out_lcfg:
 		GOTO(out, rc);
 	}
 
-	case OBD_IOC_UUID2DEV: {
-		/* Resolve device uuid, does not change current selected dev */
-		struct obd_uuid uuid;
-		int dev;
-
-		if (!data->ioc_inllen1 || !data->ioc_inlbuf1) {
-			rc = OBD_IOC_ERROR("obdclass", cmd, "no UUID passed",
-					   -EINVAL);
-			GOTO(out, rc);
-		}
-		if (data->ioc_inlbuf1[data->ioc_inllen1 - 1] != 0) {
-			rc = OBD_IOC_ERROR("obdclass", cmd, "unterminated UUID",
-					   -EINVAL);
-			GOTO(out, rc);
-		}
-
-		CDEBUG(D_IOCTL, "device name %s\n", data->ioc_inlbuf1);
-		obd_str2uuid(&uuid, data->ioc_inlbuf1);
-		dev = class_uuid2dev(&uuid);
-		data->ioc_dev = dev;
-		if (dev == -1) {
-			CDEBUG(D_IOCTL, "No device for UUID %s!\n",
-			       data->ioc_inlbuf1);
-			GOTO(out, rc = -EINVAL);
-		}
-
-		CDEBUG(D_IOCTL, "device name %s, dev %d\n", data->ioc_inlbuf1,
-		       dev);
-		if (copy_to_user(uarg, data, sizeof(*data)))
-			rc = -EFAULT;
-		GOTO(out, rc);
-	}
-
 	case OBD_IOC_GETDEVICE: {
 		int index = data->ioc_count;
 		char *status, *str;
@@ -841,10 +808,10 @@ static int __init obdclass_init(void)
 	/* Default the dirty page cache cap to 1/2 of system memory.
 	 * For clients with less memory, a larger fraction is needed
 	 * for other purposes (mostly for BGL). */
-	if (compat_totalram_pages() <= 512 << (20 - PAGE_SHIFT))
-		obd_max_dirty_pages = compat_totalram_pages() / 4;
+	if (totalram_pages() <= 512 << (20 - PAGE_SHIFT))
+		obd_max_dirty_pages = totalram_pages() / 4;
 	else
-		obd_max_dirty_pages = compat_totalram_pages() / 2;
+		obd_max_dirty_pages = totalram_pages() / 2;
 
 	err = obd_init_caches();
 	if (err)

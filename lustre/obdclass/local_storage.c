@@ -712,9 +712,11 @@ struct local_oid_storage *dt_los_find(struct ls_device *ls, __u64 seq)
 void dt_los_put(struct local_oid_storage *los)
 {
 	/* should never happen, only local_oid_storage_fini should
-	 * drop refcount to zero
+	 * drop refcount to zero.
 	 */
-	LASSERT(!refcount_dec_and_test(&los->los_refcount));
+	if (refcount_dec_and_test(&los->los_refcount))
+		LASSERTF(0, "los seq %#llx: refcount reached zero\n",
+			 los->los_seq);
 }
 
 /* after Lustre 2.3 release there may be old file to store last generated FID
@@ -869,7 +871,7 @@ int local_oid_storage_init(const struct lu_env *env, struct dt_device *dev,
 			GOTO(out_los, rc = PTR_ERR(th));
 
 		dti->dti_attr.la_valid = LA_MODE | LA_TYPE;
-		dti->dti_attr.la_mode = S_IFREG | S_IRUGO | S_IWUSR;
+		dti->dti_attr.la_mode = S_IFREG | 0644;
 		dti->dti_dof.dof_type = dt_mode_to_dft(S_IFREG);
 
 		rc = dt_declare_create(env, o, &dti->dti_attr, NULL,

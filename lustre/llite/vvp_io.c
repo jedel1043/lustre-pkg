@@ -19,7 +19,7 @@
 #define DEBUG_SUBSYSTEM S_LLITE
 
 #include <obd.h>
-#include <linux/pagevec.h>
+#include <lustre_compat/linux/folio_batch.h>
 #include <lustre_compat/linux/mm.h>
 #include <linux/memcontrol.h>
 #include <linux/falloc.h>
@@ -860,8 +860,8 @@ static int vvp_io_read_start(const struct lu_env *env,
 		GOTO(out, result);
 
 	LU_OBJECT_HEADER(D_INODE, env, &obj->co_lu,
-			 "Read ino %lu, %zu bytes, offset %lld, size %llu\n",
-			 inode->i_ino, crw_bytes, pos, i_size_read(inode));
+			 "Read ino %llu, %zu bytes, offset %lld, size %llu\n",
+			 (u64)inode->i_ino, crw_bytes, pos, i_size_read(inode));
 
 	/* initialize read-ahead window once per syscall */
 	if (!vio->vui_ra_valid) {
@@ -1005,7 +1005,7 @@ static void vvp_set_batch_dirty(struct folio_batch *fbatch)
 
 	ENTRY;
 
-	BUILD_BUG_ON(PAGEVEC_SIZE > BITS_PER_LONG);
+	BUILD_BUG_ON(FOLIO_BATCH_SIZE > BITS_PER_LONG);
 	LASSERTF(page->mapping,
 		 "mapping must be set. page %px, page->private (cl_page) %px\n",
 		 page, (void *) page->private);
@@ -1075,7 +1075,7 @@ static void vvp_set_batch_dirty(struct folio_batch *fbatch)
 				 "all pages must have the same mapping.  page %px, mapping %px, first mapping %px\n",
 				 page, page->mapping, mapping);
 			WARN_ON_ONCE(!PagePrivate(page) && !PageUptodate(page));
-			compat_account_page_dirtied(page, mapping);
+			account_page_dirtied(page, mapping);
 			__xa_set_mark(&mapping->i_pages, folio_index_page(page),
 				      PAGECACHE_TAG_DIRTY);
 			dirtied++;
@@ -1287,8 +1287,8 @@ static int vvp_io_write_start(const struct lu_env *env,
 			 pos, pos + crw_bytes);
 	}
 
-	CDEBUG(D_VFSTRACE, DNAME": write [%llu, %llu) append %d append lockpos "
-	       "%llu\n", encode_fn_file(file), pos, pos + crw_bytes,
+	CDEBUG(D_VFSTRACE, DNAME": write [%llu, %llu) append %d append lockpos %llu\n",
+	       encode_fn_file(file), pos, pos + crw_bytes,
 	       cl_io_is_append(io), io->u.ci_wr.wr_append_lockpos);
 
 	/* The maximum Lustre file size is variable, based on the OST maximum

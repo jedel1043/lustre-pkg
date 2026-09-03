@@ -1605,6 +1605,9 @@ static void tgt_import_update(struct work_struct *ws)
 	genradix_prealloc(&nfd.nfd_radix, MTI_NIDS_MAX, GFP_KERNEL);
 	nfd.nfd_lmd = NULL;
 	nfd.nfd_pos = 0;
+	/* this notification always carries large NIDs */
+	nfd.nfd_skip_ipv6 = false;
+	nfd.nfd_has_ipv6 = false;
 
 	LNetFetchNIDs(server_nid2radix, LNET_NET_ANY, &nfd);
 	if (nfd.nfd_pos == 0) {
@@ -2294,6 +2297,9 @@ static int server_show_options(struct seq_file *seq, struct dentry *dentry)
 	if (lmd->lmd_osd_type)
 		seq_printf(seq, ",osd=%s", lmd->lmd_osd_type);
 
+	if (lmd->lmd_nidnet)
+		seq_printf(seq, ",network=%s", lmd->lmd_nidnet);
+
 	if (lmd->lmd_opts) {
 		seq_putc(seq, ',');
 		seq_puts(seq, lmd->lmd_opts);
@@ -2339,9 +2345,9 @@ static int server_getattr(struct mnt_idmap *idmap,
 	if (!root_inode)
 		return -EACCES;
 
-	CDEBUG(D_SUPER, "%s: root_inode from %s ino=%lu, dev=%x\n",
+	CDEBUG(D_SUPER, "%s: root_inode from %s ino=%llu, dev=%x\n",
 	       lsi->lsi_svname, root_inode == inode ? "lsi" : "vfsmnt",
-	       root_inode->i_ino, root_inode->i_rdev);
+	       (u64)root_inode->i_ino, root_inode->i_rdev);
 	generic_fillattr(IDMAP_ARG RQMASK_ARG root_inode, stat);
 	iput(root_inode);
 
