@@ -208,6 +208,10 @@ module obdclass  lustre/obdclass              fs/lustre
 module obdecho   lustre/obdecho               fs/lustre
 module osc       lustre/osc                   fs/lustre
 module ptlrpc    lustre/ptlrpc                fs/lustre
+# Lustre optional efalnd module (--enable-efa):
+if grep -q ' --enable-efa' <<< ${OPTS}; then
+    module efalnd lnet/klnds/efalnd net/lustre
+fi
 # Lustre optional gss module:
 if echo "${OPTS} " | grep -E -q -- '--enable-gss[^-]'; then
     module ptlrpc_gss lustre/ptlrpc/gss fs/lustre

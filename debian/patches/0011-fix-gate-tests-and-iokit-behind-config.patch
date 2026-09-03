@@ -1,0 +1,144 @@
+From: =?utf-8?q?Jos=C3=A9_Juli=C3=A1n_Espina?= <julian.espina@canonical.com>
+Date: Thu, 3 Sep 2026 16:34:28 -0600
+Subject: Gate tests and iokit behind config
+
+---
+ Makefile                   |  2 +-
+ autoMakefile.am            |  4 +++-
+ config/Makefile.exports.in |  1 +
+ config/lustre-build.m4     | 24 +++++++++++++++---------
+ config/lustre-core.m4      | 20 ++++++++++++--------
+ 5 files changed, 32 insertions(+), 19 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index d62dfad..4d07140 100644
+--- a/Makefile
++++ b/Makefile
+@@ -102,7 +102,7 @@ $(SOURCE_SUBDIRS_TGT):
+ #
+ 
+ SUBDIRS := $(LUSTRE_IOKIT_MT) $(LUSTRE_LDISKFS_MT) \
+-	Documentation lustre/tests lustre/scripts \
++	Documentation $(LUSTRE_TESTS_MT) lustre/scripts \
+ 	lustre/conf lib lnet/utils lustre/utils
+ 
+ 
+diff --git a/autoMakefile.am b/autoMakefile.am
+index b48d903..b11a042 100644
+--- a/autoMakefile.am
++++ b/autoMakefile.am
+@@ -15,7 +15,7 @@ SUBDIRS += . \
+ 	lib \
+ 	lnet/utils \
+ 	lustre/utils \
+-	lustre/tests \
++	@TESTS_SUBDIR@ \
+ 	lustre/scripts \
+ 	lustre/conf
+ 
+@@ -84,6 +84,7 @@ endif # MODULES
+ 
+ dist-hook:
+ 	rm -f $(distdir)/contrib/contrib-kernel-coverage.spec
++	rm -f $(distdir)/lustre/tests/lcov-merge.sh
+ 	find include/ -type f \( -name "*.h" \) \
+ 		-exec cp --parents {} $(distdir) \;
+ 	find lustre/include/ -type f \( -name "*.h" \) \
+@@ -98,6 +99,7 @@ dist-hook:
+ 			-name CVS -o \
+ 			-name .svn -o \
+ 			-name .git -o \
++			-name .gitignore -o \
+ 			-name .#* -exec rm -rf {} \;
+ 
+ EXTRA_DIST = @PACKAGE_TARNAME@.spec	\
+diff --git a/config/Makefile.exports.in b/config/Makefile.exports.in
+index e80295b..4f9e29c 100644
+--- a/config/Makefile.exports.in
++++ b/config/Makefile.exports.in
+@@ -13,6 +13,7 @@
+ @MODULES_TRUE@LUSTRE_MODULES_MT = modules
+ @BUILD_LUSTREIOKIT_TRUE@LUSTRE_IOKIT_MT = lustre-iokit
+ @LDISKFS_ENABLED_TRUE@LUSTRE_LDISKFS_MT = ldiskfs
++@TESTS_TRUE@LUSTRE_TESTS_MT = lustre/tests
+ @BUILT_IN_KO2IBLND_TRUE@LUSTRE_BUILT_IN_KO2IBLND_NT = lnet/klnds/in-kernel-o2iblnd
+ @EXTERNAL_KO2IBLND_TRUE@LUSTRE_EXTERNAL_KO2IBLND_NT = lnet/klnds/o2iblnd
+ 
+diff --git a/config/lustre-build.m4 b/config/lustre-build.m4
+index 024a493..cb88877 100644
+--- a/config/lustre-build.m4
++++ b/config/lustre-build.m4
+@@ -418,14 +418,6 @@ AC_DEFUN([LB_CONFIG_FILES], [
+ 		ldiskfs/autoMakefile
+ 		lnet/utils/lnet.pc
+ 		lustre/utils/lustre.pc
+-		lustre-iokit/Makefile
+-		lustre-iokit/obdfilter-survey/Makefile
+-		lustre-iokit/ost-survey/Makefile
+-		lustre-iokit/sgpdd-survey/Makefile
+-		lustre-iokit/mds-survey/Makefile
+-		lustre-iokit/ior-survey/Makefile
+-		lustre-iokit/stats-collect/Makefile
+-		lustre-iokit/lst-survey/Makefile
+ 		Documentation/Makefile
+ 		Documentation/man1/Makefile
+ 		Documentation/man3/Makefile
+@@ -433,6 +425,18 @@ AC_DEFUN([LB_CONFIG_FILES], [
+ 		Documentation/man7/Makefile
+ 		Documentation/man8/Makefile
+ 	)
++	AS_IF([test "x$enable_iokit" = "xyes"], [
++		AC_CONFIG_FILES([
++			lustre-iokit/Makefile
++			lustre-iokit/obdfilter-survey/Makefile
++			lustre-iokit/ost-survey/Makefile
++			lustre-iokit/sgpdd-survey/Makefile
++			lustre-iokit/mds-survey/Makefile
++			lustre-iokit/ior-survey/Makefile
++			lustre-iokit/stats-collect/Makefile
++			lustre-iokit/lst-survey/Makefile
++		])
++	])
+ ])
+ 
+ #
+@@ -687,7 +691,9 @@ AS_IF([test "x$enable_utils" = xyes], [
+ AS_IF([test "x$enable_tests" = xyes], [
+ 	LC_HAVE_LIBAIO
+ 	LC_GLIBC_SUPPORT_FHANDLES
+-])
++	TESTS_SUBDIR="lustre/tests"
++], [TESTS_SUBDIR=""])
++AC_SUBST(TESTS_SUBDIR)
+ 
+ LIBCFS_CONFIG_CDEBUG
+ LC_QUOTA
+diff --git a/config/lustre-core.m4 b/config/lustre-core.m4
+index bdf97c5..f7fea7a 100644
+--- a/config/lustre-core.m4
++++ b/config/lustre-core.m4
+@@ -4675,12 +4675,16 @@ lustre/kernel_patches/targets/3.x-fc18.target
+ lustre/kernel_patches/targets/5.10-oe2203.target
+ lustre/kernel_patches/targets/5.10-oe2203sp1.target
+ lustre/kernel_patches/targets/5.10-oe2203sp2.target
+-lustre/scripts/Makefile
+-lustre/scripts/systemd/Makefile
+-lustre/tests/Makefile
+-lustre/tests/mpi/Makefile
+-lustre/tests/iabf/Makefile
+-lustre/utils/Makefile
+-lustre/utils/gss/Makefile
+-])
++		lustre/scripts/Makefile
++		lustre/scripts/systemd/Makefile
++		lustre/utils/Makefile
++		lustre/utils/gss/Makefile
++	])
++	AS_IF([test "x$enable_tests" = "xyes"],
++		[AC_CONFIG_FILES(
++			[lustre/tests/Makefile
++			lustre/tests/mpi/Makefile
++			lustre/tests/iabf/Makefile
++			])
++		])
+ ]) # LC_CONFIG_FILES

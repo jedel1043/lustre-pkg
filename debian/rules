@@ -8,16 +8,46 @@ include /usr/share/dpkg/pkg-info.mk
 
 UPVER := $(DEB_VERSION_UPSTREAM)
 
+# Trim the DKMS source tree to what the module build actually needs.
+#
+# The tests/iokit contents are pruned; the build system was patched to make
+# those directories conditional (see the TESTS/BUILD_LUSTREIOKIT gating in
+# autoMakefile.am and the AC_CONFIG_FILES in config/*.m4), so only the
+# Makefile.am skeletons must survive for autoreconf; rsync uses the first
+# matching pattern.
 DKMS_RSYNC_EXCLUDES = \
+	--include='lustre/tests/Makefile.am' \
+	--include='lustre/tests/mpi/' \
+	--include='lustre/tests/mpi/Makefile.am' \
+	--exclude='lustre/tests/mpi/*' \
+	--include='lustre/tests/iabf/' \
+	--include='lustre/tests/iabf/Makefile.am' \
+	--exclude='lustre/tests/iabf/*' \
+	--exclude='lustre/tests/*' \
+	--exclude='lustre/kunit/' \
+	--include='Documentation/Makefile.am' \
+	--include='Documentation/man*/' \
+	--include='Documentation/man*/Makefile.am' \
+	--exclude='Documentation/*' \
+	--exclude='contrib/' \
+	--include='lustre-iokit/*/' \
+	--include='lustre-iokit/*/Makefile.am' \
+	--include='lustre-iokit/Makefile.am' \
+	--exclude='lustre-iokit/*' \
+	--exclude='lustre/kernel_patches/kernel_configs/' \
+	--exclude='rpm/' \
 	--exclude='.git/' \
 	--exclude='.gitignore' \
 	--exclude='.gitreview' \
 	--exclude='.mailmap' \
+	--exclude='.editorconfig' \
 	--exclude='.pc/' \
 	--exclude='debian/' \
-	--exclude='contrib/contrib-kernel-coverage.spec' \
-	--exclude='docs/' \
 	--exclude='rustreapi/' \
+	--exclude='Vagrantfile' \
+	--exclude='requirements.txt' \
+	--exclude='MAINTAINERS' \
+	--exclude='ChangeLog' \
 	--exclude='*.md' \
 	--exclude='*.rst' \
 	--exclude='*.txt' \
