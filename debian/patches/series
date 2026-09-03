@@ -3,3 +3,4 @@
 0005-Explicitly-link-against-libyaml-on-liblustreapi.patch
 0006-Check-if-zfs-nvlist-are-const-on-userland-builds.patch
 0010-Add-compatibility-patch-for-Linux-7.2.patch
+0006-Guard-unused-again-label-on-lustre-llite-namei.c.patch

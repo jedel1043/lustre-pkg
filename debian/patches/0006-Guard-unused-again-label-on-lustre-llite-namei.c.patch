@@ -1,0 +1,22 @@
+From: =?utf-8?q?Jos=C3=A9_Juli=C3=A1n_Espina?= <julian.espina@canonical.com>
+Date: Thu, 3 Sep 2026 11:49:31 -0600
+Subject: Guard unused again label on lustre/llite/namei.c
+
+---
+ lustre/llite/namei.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/lustre/llite/namei.c b/lustre/llite/namei.c
+index e5d9922..8c3552c 100644
+--- a/lustre/llite/namei.c
++++ b/lustre/llite/namei.c
+@@ -1975,7 +1975,9 @@ static int ll_new_node(struct inode *dir, struct dentry *dchild,
+ 		datalen = disk_link->len;
+ 	}
+ 
++#if LUSTRE_VERSION_CODE < OBD_OCD_VERSION(2, 17, 58, 0)
+ again:
++#endif
+ 	err = ll_new_node_prepare(dir, dchild, mode, opc, &encrypt, tgt,
+ 				  &op_data, &lum, &data, &datalen, disk_link);
+ 	if (err)
