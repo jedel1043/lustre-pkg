@@ -49,7 +49,6 @@ Copyright: 2002-2026, Sun Microsystems, Inc.
 License: GPL-2
 
 Files: lustre_compat/misc.c
-       lustre_compat/module.c
 Copyright: 2010-2017, Intel Corporation.
            1999, 2001-2010, Oracle and/or its affiliates.
 License: GPL-2
