@@ -50,7 +50,7 @@ fi
     OPTS="${OPTS} --with-kfi=/usr/src/kfabric/default"
 [[ -d /usr/src/ofa_kernel/default ]] &&
     OPTS="${OPTS} --with-o2ib=/usr/src/ofa_kernel/default"
-OPTS="${OPTS} --disable-dependency-tracking --disable-doc"
+OPTS="${OPTS} --disable-dependency-tracking --disable-doc --disable-manpages --disable-ldiskfs"
 OPTS="${OPTS} --disable-utils --disable-iokit --disable-tests"
 OPTS="${OPTS} --enable-quota --with-kmp-moddir=updates"
 

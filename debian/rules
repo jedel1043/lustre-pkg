@@ -9,30 +9,28 @@ include /usr/share/dpkg/pkg-info.mk
 UPVER := $(DEB_VERSION_UPSTREAM)
 
 # Trim the DKMS source tree to what the module build actually needs.
-#
-# The tests/iokit contents are pruned; the build system was patched to make
-# those directories conditional (see the TESTS/BUILD_LUSTREIOKIT gating in
-# autoMakefile.am and the AC_CONFIG_FILES in config/*.m4), so only the
-# Makefile.am skeletons must survive for autoreconf; rsync uses the first
-# matching pattern.
 DKMS_RSYNC_EXCLUDES = \
 	--include='lustre/tests/Makefile.am' \
+	--include='lustre/tests/*/Makefile.am' \
 	--include='lustre/tests/mpi/' \
-	--include='lustre/tests/mpi/Makefile.am' \
-	--exclude='lustre/tests/mpi/*' \
 	--include='lustre/tests/iabf/' \
-	--include='lustre/tests/iabf/Makefile.am' \
-	--exclude='lustre/tests/iabf/*' \
+	--exclude='lustre/tests/*/*' \
 	--exclude='lustre/tests/*' \
 	--exclude='lustre/kunit/' \
+	--exclude='lustre/osd-ldiskfs/' \
+	--include='ldiskfs/Makefile.in' \
+	--include='ldiskfs/autoMakefile.am' \
+	--exclude='ldiskfs/*' \
 	--include='Documentation/Makefile.am' \
 	--include='Documentation/man*/' \
 	--include='Documentation/man*/Makefile.am' \
+	--exclude='Documentation/man*/*' \
 	--exclude='Documentation/*' \
 	--exclude='contrib/' \
 	--include='lustre-iokit/*/' \
 	--include='lustre-iokit/*/Makefile.am' \
 	--include='lustre-iokit/Makefile.am' \
+	--exclude='lustre-iokit/*/*' \
 	--exclude='lustre-iokit/*' \
 	--exclude='lustre/kernel_patches/kernel_configs/' \
 	--exclude='rpm/' \
@@ -79,11 +77,11 @@ override_dh_install:
 	dh_install
 
 	install -d debian/lustre-server-modules-dkms/usr/src/lustre-server-modules-$(UPVER)
-	rsync -a --delete $(DKMS_RSYNC_EXCLUDES) \
+	rsync -a -m --delete $(DKMS_RSYNC_EXCLUDES) \
 		../pristine-src/ debian/lustre-server-modules-dkms/usr/src/lustre-server-modules-$(UPVER)/
 
 	install -d debian/lustre-client-modules-dkms/usr/src/lustre-client-modules-$(UPVER)
-	rsync -a --delete $(DKMS_RSYNC_EXCLUDES) \
+	rsync -a -m --delete $(DKMS_RSYNC_EXCLUDES) \
 		../pristine-src/ debian/lustre-client-modules-dkms/usr/src/lustre-client-modules-$(UPVER)/
 
 override_dh_auto_install:
