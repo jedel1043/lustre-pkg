@@ -1,42 +1,38 @@
 Source: lustre
 Section: admin
-Maintainer: José Julián Espina <julian.espina@canonical.com>
-Original-Maintainer: Lustre Developers <lustre-devel@lists.lustre.org>
-Build-Depends: debhelper-compat (= 13),
-               dh-dkms,
-               rsync,
-               autoconf,
-               automake,
-               libtool,
-               libyaml-dev,
-               libnl-genl-3-dev,
-               libselinux-dev,
-               libssl-dev,
-               libkeyutils-dev,
-               libmount-dev,
-               zlib1g-dev,
-               pkgconf,
-               libzfslinux-dev,
-Standards-Version: 4.7.4
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ dh-dkms,
+ autoconf,
+ automake,
+ libkeyutils-dev,
+ libmount-dev,
+ libnl-genl-3-dev,
+ libselinux-dev,
+ libssl-dev,
+ libtool,
+ libyaml-dev,
+ libzfslinux-dev,
+ pkgconf,
+ rsync,
+ zlib1g-dev,
+Standards-Version: 4.7.3
 Homepage: https://www.lustre.org/
 Vcs-Git: https://github.com/lustre/lustre-release.git
 Vcs-Browser: https://github.com/lustre/lustre-release
 
 Package: lustre-client-utils
 Section: utils
-Architecture: any
-Depends: ${shlibs:Depends},
-         ${misc:Depends},
-         ${perl:Depends},
-         libyaml-0-2,
-         libselinux1,
-         zlib1g,
-         libnl-genl-3-200,
-         libmount1,
-         libkeyutils1,
-         python3,
-         lustre-client-modules
-Suggests: bash-completion
+Architecture: amd64 arm64
+Depends:
+ lustre-client-modules,
+ python3,
+ ${misc:Depends},
+ ${perl:Depends},
+ ${shlibs:Depends},
+Suggests:
+ bash-completion,
 Description: Userspace utilities for the Lustre filesystem (client)
  Lustre is a scalable, secure, robust, highly-available cluster file system.
  This release is maintained by Whamcloud and available from
@@ -48,22 +44,21 @@ Description: Userspace utilities for the Lustre filesystem (client)
 
 Package: lustre-server-utils
 Section: utils
-Architecture: any
-Depends: ${shlibs:Depends},
-         ${misc:Depends},
-         ${perl:Depends},
-         libyaml-0-2,
-         libselinux1,
-         zlib1g,
-         libnl-genl-3-200,
-         libmount1,
-         libkeyutils1,
-         python3,
-         lustre-server-modules
-Suggests: bash-completion
-Provides: lustre-client-utils (= ${binary:Version})
-Conflicts: lustre-client-utils
-Replaces: lustre-client-utils
+Architecture: amd64 arm64
+Depends:
+ lustre-server-modules,
+ python3,
+ ${misc:Depends},
+ ${perl:Depends},
+ ${shlibs:Depends},
+Suggests:
+ bash-completion,
+Provides:
+ lustre-client-utils (= ${binary:Version}),
+Breaks:
+ lustre-client-utils,
+Replaces:
+ lustre-client-utils,
 Description: Userspace utilities for the Lustre filesystem (server)
  Lustre is a scalable, secure, robust, highly-available cluster file system.
  This release is maintained by Whamcloud and available from
@@ -75,10 +70,11 @@ Description: Userspace utilities for the Lustre filesystem (server)
  servers, the lustre-client-utils package may be used instead.
 
 Package: lustre-resource-agents
-Architecture: any
-Depends: ${misc:Depends},
-         lustre-server-utils (= ${binary:Version}),
-         resource-agents
+Architecture: amd64 arm64
+Depends:
+ lustre-server-utils (= ${binary:Version}),
+ resource-agents,
+ ${misc:Depends},
 Description: HA Reusable Cluster Resource Scripts for Lustre
  Lustre is a scalable, secure, robust, highly-available cluster file system.
  This release is maintained by Whamcloud and available from
@@ -88,11 +84,43 @@ Description: HA Reusable Cluster Resource Scripts for Lustre
  resources in a High Availability environment for both Pacemaker
  and rgmanager on a server.
 
+Package: liblustreapi1
+Section: libs
+Architecture: amd64 arm64
+Multi-Arch: same
+Depends:
+ ${misc:Depends},
+ ${shlibs:Depends},
+Description: Lustre filesystem client API library
+ Lustre is a scalable, secure, robust, highly-available cluster file system.
+ This release is maintained by Whamcloud and available from
+ https://wiki.whamcloud.com/
+ .
+ This package contains the runtime library (liblustreapi) used by
+ applications to interact with Lustre filesystems.
+
+Package: liblnetconfig4
+Section: libs
+Architecture: amd64 arm64
+Multi-Arch: same
+Depends:
+ ${misc:Depends},
+ ${shlibs:Depends},
+Description: LNet configuration library
+ Lustre is a scalable, secure, robust, highly-available cluster file system.
+ This release is maintained by Whamcloud and available from
+ https://wiki.whamcloud.com/
+ .
+ This package contains the runtime library (liblnetconfig) used to
+ configure the Lustre networking layer (LNet).
+
 Package: lustre-dev
 Section: libdevel
-Architecture: any
-Depends: ${misc:Depends},
-         lustre-client-utils (= ${binary:Version})
+Architecture: amd64 arm64
+Depends:
+ liblnetconfig4 (= ${binary:Version}),
+ liblustreapi1 (= ${binary:Version}),
+ ${misc:Depends},
 Description: Development files for the Lustre filesystem
  Lustre is a scalable, secure, robust, highly-available cluster file system.
  This release is maintained by Whamcloud and available from
@@ -102,30 +130,32 @@ Description: Development files for the Lustre filesystem
 
 Package: lustre-client-modules-dkms
 Section: kernel
-Architecture: any
-Depends: ${misc:Depends},
-         ${perl:Depends},
-         dkms,
-         autoconf,
-         automake,
-         bison,
-         build-essential,
-         flex,
-         libaio-dev,
-         libkeyutils-dev,
-         libkrb5-dev,
-         libtool,
-         libselinux-dev,
-         libssl-dev,
-         libyaml-dev,
-         linux-base,
-         linux-headers-generic | linux-headers-amd64 | linux-headers-arm64,
-         pkgconf,
-         python3-dev,
-         libnl-genl-3-dev,
-         zlib1g-dev,
-         libmount-dev
-Provides: lustre-client-modules
+Architecture: amd64 arm64
+Depends:
+ autoconf,
+ automake,
+ bison,
+ build-essential,
+ dkms,
+ flex,
+ libaio-dev,
+ libkeyutils-dev,
+ libkrb5-dev,
+ libmount-dev,
+ libnl-genl-3-dev,
+ libselinux-dev,
+ libssl-dev,
+ libtool,
+ libyaml-dev,
+ linux-base,
+ linux-headers-generic | linux-headers-amd64 | linux-headers-arm64,
+ pkgconf,
+ python3-dev,
+ zlib1g-dev,
+ ${misc:Depends},
+ ${perl:Depends},
+Provides:
+ lustre-client-modules,
 Description: Lustre Linux kernel module (DKMS)
  This package contains the loadable kernel modules for the patchless client
  for the Lustre cluster filesystem.
@@ -134,36 +164,40 @@ Description: Lustre Linux kernel module (DKMS)
 
 Package: lustre-server-modules-dkms
 Section: kernel
-Architecture: any
-Depends: ${misc:Depends},
-         ${perl:Depends},
-         dkms,
-         autoconf,
-         automake,
-         bison,
-         build-essential,
-         flex,
-         libaio-dev,
-         libkeyutils-dev,
-         libkrb5-dev,
-         libtool,
-         libselinux-dev,
-         libssl-dev,
-         libyaml-dev,
-         linux-base,
-         linux-headers-generic | linux-headers-amd64 | linux-headers-arm64,
-         pkgconf,
-         python3-dev,
-         libnl-genl-3-dev,
-         zlib1g-dev,
-         libmount-dev,
-         zfs-dkms (>= 2.0.7),
-         libzfslinux-dev
-Provides: lustre-client-modules,
-          lustre-server-modules,
-          lustre-osd-zfs
-Conflicts: lustre-client-modules-dkms
-Replaces: lustre-client-modules-dkms
+Architecture: amd64 arm64
+Depends:
+ autoconf,
+ automake,
+ bison,
+ build-essential,
+ dkms,
+ flex,
+ libaio-dev,
+ libkeyutils-dev,
+ libkrb5-dev,
+ libmount-dev,
+ libnl-genl-3-dev,
+ libselinux-dev,
+ libssl-dev,
+ libtool,
+ libyaml-dev,
+ libzfslinux-dev,
+ linux-base,
+ linux-headers-generic | linux-headers-amd64 | linux-headers-arm64,
+ pkgconf,
+ python3-dev,
+ zfs-dkms (>= 2.0.7),
+ zlib1g-dev,
+ ${misc:Depends},
+ ${perl:Depends},
+Provides:
+ lustre-client-modules,
+ lustre-osd-zfs,
+ lustre-server-modules,
+Breaks:
+ lustre-client-modules-dkms,
+Replaces:
+ lustre-client-modules-dkms,
 Description: Lustre Linux server kernel module with ZFS support (DKMS)
  This package contains the loadable kernel modules for Lustre servers
  with ZFS backend support.

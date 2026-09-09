@@ -1,6 +1,5 @@
 #!/usr/bin/make -f
 
-export DH_VERBOSE = 1
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 include /usr/share/dpkg/architecture.mk
@@ -17,6 +16,7 @@ DKMS_RSYNC_EXCLUDES = \
 	--exclude='lustre/tests/*/*' \
 	--exclude='lustre/tests/*' \
 	--exclude='lustre/kunit/' \
+	--exclude='lustre/osd-wbcfs/TODO' \
 	--exclude='lustre/osd-ldiskfs/' \
 	--include='ldiskfs/Makefile.in' \
 	--include='ldiskfs/autoMakefile.am' \
@@ -35,6 +35,7 @@ DKMS_RSYNC_EXCLUDES = \
 	--exclude='lustre/kernel_patches/kernel_configs/' \
 	--exclude='rpm/' \
 	--exclude='.git/' \
+	--exclude='autom4te.cache/' \
 	--exclude='.gitignore' \
 	--exclude='.gitreview' \
 	--exclude='.mailmap' \
@@ -76,6 +77,12 @@ override_dh_auto_build:
 override_dh_install:
 	dh_install
 
+	# lgss_sk is not built (GSS utils disabled), so its man page is unused.
+	# Must be removed from debian/tmp before dh_installman copies it; the
+	# file is not compressed yet at this point.
+	rm -f debian/tmp/usr/share/man/man8/lgss_sk.8 \
+	      debian/tmp/usr/share/man/man8/lgss_sk.8.gz
+
 	install -d debian/lustre-server-modules-dkms/usr/src/lustre-server-modules-$(UPVER)
 	rsync -a -m --delete $(DKMS_RSYNC_EXCLUDES) \
 		../pristine-src/ debian/lustre-server-modules-dkms/usr/src/lustre-server-modules-$(UPVER)/
@@ -99,9 +106,13 @@ override_dh_dkms:
 	dh_dkms -plustre-client-modules-dkms -V
 	dh_dkms -plustre-server-modules-dkms -V
 
+override_dh_makeshlibs:
+	dh_makeshlibs -pliblustreapi1 -V
+	dh_makeshlibs -pliblnetconfig4 -V
+
 override_dh_auto_clean:
 	dh_auto_clean
 	rm -rf ../pristine-src
 
 override_dh_auto_test:
-	# Disable tests for now
+	# Tests require a proper VM to run, so we only test using autopkgtest
