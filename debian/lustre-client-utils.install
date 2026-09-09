@@ -1,8 +1,7 @@
+etc/*
 sbin/* usr/sbin
-usr/sbin/*
 usr/bin/*
-usr/lib/*/*.so.*
 usr/lib/systemd/system/*
 usr/lib/udev/rules.d/99-lustre.rules
-etc/*
+usr/sbin/*
 usr/share/bash-completion/completions/*

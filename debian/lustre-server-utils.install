@@ -1,10 +1,9 @@
+etc/*
 sbin/* usr/sbin
-usr/sbin/*
 usr/bin/*
-usr/lib/*/*.so.*
 usr/lib/*/lustre/*.so*
 usr/lib/systemd/system/*
 usr/lib/udev/rules.d/*
 usr/libexec/*
-etc/*
+usr/sbin/*
 usr/share/bash-completion/completions/*

@@ -1,7 +1,20 @@
-Tests: dkms-autopkgtest-client
-Depends: dkms, linux-headers-generic
-Restrictions: needs-root, allow-stderr, isolation-machine
+Tests:
+ dkms-autopkgtest-client,
+Depends:
+ dkms,
+ linux-headers-generic,
+Restrictions:
+ allow-stderr,
+ isolation-machine,
+ needs-root,
 
-Tests: dkms-autopkgtest-server
-Depends: zfs-dkms, dkms, linux-headers-generic
-Restrictions: needs-root, allow-stderr, isolation-machine
+Tests:
+ dkms-autopkgtest-server,
+Depends:
+ dkms,
+ linux-headers-generic,
+ zfs-dkms,
+Restrictions:
+ allow-stderr,
+ isolation-machine,
+ needs-root,
