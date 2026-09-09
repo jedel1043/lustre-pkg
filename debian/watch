@@ -1,4 +1,5 @@
-version=5
-opts="filenamemangle=s%(?:.*?)?v?(\d[\d.]*)\.tar\.gz%lustre-$1.tar.gz%" \
-    https://github.com/lustre/lustre-release/tags \
-    (?:.*?/)?v?(\d[\d.]*)\.tar\.gz
+Version: 5
+
+Source: https://github.com/lustre/lustre-release/tags
+Matching-Pattern: (?:.*?/)?@ANY_VERSION@\.tar\.gz
+Filename-Mangle: s%(?:.*?)?@ANY_VERSION@\.tar\.gz%lustre-$1.tar.gz%
