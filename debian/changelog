@@ -1,3 +1,12 @@
+lustre (2.17.58-0ubuntu1~ppa1~stonking3) stonking; urgency=medium
+
+  [ José Julián Espina ]
+  * feat: extract dynamic lib as packages
+  * chore: run wrap-and-sort
+  * chore: migrate watch file to new format
+
+ -- José Julián Espina Del Ángel <julian.espina@canonical.com>  Wed, 09 Sep 2026 12:40:40 -0600
+
 lustre (2.17.58-0ubuntu1~ppa1~stonking2) stonking; urgency=medium
 
   [ José Julián Espina ]
