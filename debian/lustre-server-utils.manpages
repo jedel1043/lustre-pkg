@@ -1,1 +1,9 @@
-debian/tmp/usr/share/man/*/*
+# Man pages for the server-only tools (see lustre-server-utils.install).
+debian/tmp/usr/share/man/man5/ldev.conf.5
+debian/tmp/usr/share/man/man8/lhbadm.8
+debian/tmp/usr/share/man/man8/ll_decode_filter_fid.8
+debian/tmp/usr/share/man/man8/llog_reader.8
+debian/tmp/usr/share/man/man8/lshowmount.8
+debian/tmp/usr/share/man/man8/mkfs.lustre.8
+debian/tmp/usr/share/man/man8/mount.lustre_tgt.8
+debian/tmp/usr/share/man/man8/tunefs.lustre.8

@@ -18,10 +18,7 @@ lustre-server-utils: typo-in-manual-page *
 lustre-server-utils: spelling-error-in-binary *
 
 # udev rule without modalias (not a device driver alias match)
-lustre-server-utils: appstream-metadata-missing-modalias-provide usr/lib/udev/rules.d/99-lustre.rules
-
-# Upstream modprobe configuration uses deprecated syntax
-lustre-server-utils: obsolete-command-in-modprobe.d-file install [etc/modprobe.d/ko2iblnd.conf]
+lustre-server-utils: appstream-metadata-missing-modalias-provide usr/lib/udev/rules.d/99-lustre-server.rules
 
 # Upstream scripts use /usr/bin/bash instead of /bin/bash
 lustre-server-utils: wrong-path-for-interpreter /usr/bin/bash != /bin/bash *

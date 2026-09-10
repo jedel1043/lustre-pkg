@@ -1,1 +1,28 @@
-debian/tmp/usr/share/man/*/*
+# Common (client + server) man pages. Pages for the server-only tools
+# (mkfs.lustre, tunefs.lustre, ...) live in lustre-server-utils.manpages.
+debian/tmp/usr/share/man/man1/*
+debian/tmp/usr/share/man/man3/*
+debian/tmp/usr/share/man/man5/nids.5
+debian/tmp/usr/share/man/man7/*
+debian/tmp/usr/share/man/man8/l_getidentity.8
+debian/tmp/usr/share/man/man8/l_getsepol.8
+debian/tmp/usr/share/man/man8/lctl-*.8
+debian/tmp/usr/share/man/man8/lctl.8
+debian/tmp/usr/share/man/man8/ldev.8
+debian/tmp/usr/share/man/man8/lfs-*.8
+debian/tmp/usr/share/man/man8/ll_decode_linkea.8
+debian/tmp/usr/share/man/man8/lljobstat.8
+debian/tmp/usr/share/man/man8/llobdstat.8
+debian/tmp/usr/share/man/man8/llsom_sync.8
+debian/tmp/usr/share/man/man8/llstat.8
+debian/tmp/usr/share/man/man8/llverdev.8
+debian/tmp/usr/share/man/man8/lnet_legacy2yaml.8
+debian/tmp/usr/share/man/man8/lnetctl.8
+debian/tmp/usr/share/man/man8/lst.8
+debian/tmp/usr/share/man/man8/lustre_rmmod.8
+debian/tmp/usr/share/man/man8/lustre_routes_config.8
+debian/tmp/usr/share/man/man8/lustre_routes_conversion.8
+debian/tmp/usr/share/man/man8/lustre_rsync.8
+debian/tmp/usr/share/man/man8/mount.lustre.8
+debian/tmp/usr/share/man/man8/plot-llstat.8
+debian/tmp/usr/share/man/man8/routerstat.8

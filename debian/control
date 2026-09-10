@@ -39,13 +39,13 @@ Description: Userspace utilities for the Lustre filesystem (client)
  https://wiki.whamcloud.com/
  .
  This package provides a number of userspace utilities for accessing a
- remote Lustre filesystems from a client. If you need to serve local
- storage from this node to other clients, use lustre-server-utils instead.
+ remote Lustre filesystems from a client.
 
 Package: lustre-server-utils
 Section: utils
 Architecture: amd64 arm64
 Depends:
+ lustre-client-utils (= ${binary:Version}),
  lustre-server-modules,
  python3,
  ${misc:Depends},
@@ -53,21 +53,13 @@ Depends:
  ${shlibs:Depends},
 Suggests:
  bash-completion,
-Provides:
- lustre-client-utils (= ${binary:Version}),
-Breaks:
- lustre-client-utils,
-Replaces:
- lustre-client-utils,
 Description: Userspace utilities for the Lustre filesystem (server)
  Lustre is a scalable, secure, robust, highly-available cluster file system.
  This release is maintained by Whamcloud and available from
  https://wiki.whamcloud.com/
  .
- This package provides a number of userspace utilities for
- accessing and maintaining Lustre filesystems from a server.
- If you only need to access the filesystem hosted on remote
- servers, the lustre-client-utils package may be used instead.
+ This package provides the userspace utilities needed to serve local storage
+ to other nodes, such as formatting and mounting Lustre targets.
 
 Package: lustre-resource-agents
 Architecture: amd64 arm64
