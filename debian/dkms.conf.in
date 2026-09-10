@@ -17,12 +17,8 @@
 #
 
 PACKAGE_NAME="@PACKAGE_NAME@"
-PACKAGE_CONFIG="/etc/sysconfig/dkms-lustre"
-PACKAGE_CONFIG_FALLBACK="/etc/sysconfig/lustre"
 PACKAGE_VERSION="@UPVERSION@"
 
-no_weak_modules=yes
-strip_default=no
 # If any of these packages exist they need to be autoinstall'd before lustre
 for m in $(ls -1 $dkms_tree); do
 	[[ $m == "mlnx-ofed-kernel" ]] &&
@@ -54,51 +50,6 @@ OPTS="${OPTS} --disable-dependency-tracking --disable-doc --disable-manpages --d
 OPTS="${OPTS} --disable-utils --disable-iokit --disable-tests"
 OPTS="${OPTS} --enable-quota --with-kmp-moddir=updates"
 
-[[ -r ${PACKAGE_CONFIG} ]] || PACKAGE_CONFIG=${PACKAGE_CONFIG_FALLBACK}
-if [[ -r ${PACKAGE_CONFIG} ]] ; then
-   source ${PACKAGE_CONFIG}
-   shopt -q -s extglob
-   if [[ -n ${LUSTRE_DKMS_DISABLE_STRIP} ]] ; then
-        [[ ${LUSTRE_DKMS_DISABLE_STRIP,,} == @(y|yes) ]] && strip_default=no
-   fi
-   if [[ -n ${LUSTRE_DKMS_ENABLE_STRIP} ]] ; then
-        [[ ${LUSTRE_DKMS_ENABLE_STRIP,,} == @(y|yes) ]] && strip_default=yes
-   fi
-   if [[ -n ${LUSTRE_DKMS_DISABLE_CDEBUG} ]] ; then
-      [[ ${LUSTRE_DKMS_DISABLE_CDEBUG,,} == @(y|yes) ]] &&
-         OPTS="${OPTS} --disable-libcfs-cdebug" ||
-         OPTS="${OPTS} --enable-libcfs-cdebug"
-   fi
-   if [[ -n ${LUSTRE_DKMS_DISABLE_TRACE} ]] ; then
-      [[ ${LUSTRE_DKMS_DISABLE_TRACE,,} == @(y|yes) ]] &&
-         OPTS="${OPTS} --disable-libcfs-trace" ||
-         OPTS="${OPTS} --enable-libcfs-trace"
-   fi
-   if [[ -n ${LUSTRE_DKMS_DISABLE_ASSERT} ]] ; then
-      [[ ${LUSTRE_DKMS_DISABLE_ASSERT,,} == @(y|yes) ]] &&
-         OPTS="${OPTS} --disable-libcfs-assert" ||
-         OPTS="${OPTS} --enable-libcfs-assert"
-   fi
-   if [[ -n ${LUSTRE_DKMS_ENABLE_GSS} ]] ; then
-      [[ ${LUSTRE_DKMS_ENABLE_GSS,,} == @(y|yes) ]] &&
-         OPTS="${OPTS} --enable-gss" || OPTS="${OPTS} --disable-gss"
-   fi
-   if [[ -n ${LUSTRE_DKMS_ENABLE_GSS_KEYRING} ]] ; then
-      [[ ${LUSTRE_DKMS_ENABLE_GSS_KEYRING,,} == @(y|yes) ]] &&
-         OPTS="${OPTS} --enable-gss-keyring" ||
-         OPTS="${OPTS} --disable-gss-keyring"
-   fi
-   if [[ -n ${LUSTRE_DKMS_ENABLE_CRYPTO} ]] ; then
-      [[ ${LUSTRE_DKMS_ENABLE_CRYPTO,,} == @(y|yes) ]] &&
-         OPTS="${OPTS} --enable-crypto" || OPTS="${OPTS} --disable-crypto"
-   fi
-   [[ -n ${LUSTRE_DKMS_CONFIGURE_EXTRA} ]] &&
-       OPTS="${OPTS} ${LUSTRE_DKMS_CONFIGURE_EXTRA}"
-   if [[ -n ${LUSTRE_DKMS_WEAK_MODULES} ]] ; then
-      [[ ${LUSTRE_DKMS_WEAK_MODULES,,} == @(y|yes) ]] &&
-         no_weak_modules="no"
-   fi
-fi
 echo "${OPTS} " | grep -E -q -- '--disable-gss[^-]|--enable-gss[^-]' ||
   dpkg -l | grep libkrb5-dev | grep -q ^ii &&
       OPTS="${OPTS} --enable-gss" || OPTS="${OPTS} --disable-gss"
@@ -112,7 +63,7 @@ CONFIGURE="${CONFIGURE} --with-linux-obj=$kernel_source_dir ${OPTS}"
 MAKE="${AUTOGEN} && ${CONFIGURE} && make -j `nproc`"
 CLEAN="make distclean || true"
 
-NO_WEAK_MODULES="$no_weak_modules"
+NO_WEAK_MODULES="yes"
 AUTOINSTALL="yes"
 STRIP="no"
 
