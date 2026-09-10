@@ -4,8 +4,7 @@ Upstream-Contact: Lustre Developers <lustre-devel@lists.lustre.org>
 Source: https://github.com/lustre/lustre-release
 Files-Excluded: lustre/tests/fsx.c
 Comment: lustre/tests/fsx.c is excluded from the orig tarball because its
- APSL-1.1 license is not DFSG-free. The compiled fsx binary was never
- shipped in any of the binary packages.
+ APSL-1.1 license is not DFSG-free.
 
 Files: *
 Copyright: 2002-2026, Sun Microsystems, Inc.
@@ -43,7 +42,8 @@ License: GPL-2
 Files: debian/dkms.conf.in
 Copyright: 2012, Genome Research Ltd.
            2017-2018, Universität Hamburg
-License: NOASSERTION
+           2026 Canonical Ltd.
+License: GPL-2
 
 Files: lustre/.gitignore
        lustre/ChangeLog
@@ -1070,9 +1070,6 @@ License: LGPL-2.1
         Free Software Foundation; version 2.1 of the License.
         On Debian systems, the complete text of version 2.1 of the GNU Lesser
         General Public License can be found in '/usr/share/common-licenses/LGPL-2.1'.
-
-License: NOASSERTION
-        The license is not asserted. See the source file for details.
 
 License: NTP
         Permission to use, copy, modify, and distribute this software and its

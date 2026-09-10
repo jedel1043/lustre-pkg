@@ -20,11 +20,13 @@ Documentation/man8/mount.lustre.8:
 Documentation/man8/tunefs.lustre.8:
   license: GPL-2
 
-# ldiskfs kernel patches — no SPDX tag, inherit GPL-2 from kernel source
+# ldiskfs kernel patches
+# no SPDX tag, inherit GPL-2 from kernel source
 ldiskfs/kernel_patches/patches/:
   license: GPL-2
 
-# Files with no explicit license text — inherit project default (GPL-2)
+# Files with no explicit license text
+# inherit project default (GPL-2)
 contrib/debug_tools/:
   license: GPL-2
 contrib/scripts/updatecw.sh:
@@ -45,6 +47,5 @@ rustreapi/:
   copyright: 2024-2025, DDN
   license: Expat
 
-# debian/dkms.conf.in has SPDX-License-Identifier: NOASSERTION
 debian/dkms.conf.in:
-  license: NOASSERTION
+  license: GPL-2
