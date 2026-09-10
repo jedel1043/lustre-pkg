@@ -1,0 +1,5 @@
+# The source tree ships scripts probing for bash.
+lustre-source: bash-term-in-posix-shell *
+
+# The source tree ships COPYING, LCOPYING and LICENSES/*.
+lustre-source: extra-license-file *

@@ -55,6 +55,9 @@ echo "${OPTS} " | grep -E -q -- '--disable-gss[^-]|--enable-gss[^-]' ||
   dpkg -l | grep libkrb5-dev | grep -q ^ii &&
       OPTS="${OPTS} --enable-gss" || OPTS="${OPTS} --disable-gss"
 
+# Copies source from /usr/src/lustre-source
+PRE_BUILD="lustre-dkms_prebuild.sh"
+
 AUTOGEN="sh ./autogen.sh"
 CONFIGURE="./configure --with-linux=$kernel_source_dir"
 CONFIGURE="${CONFIGURE} --with-linux-obj=$kernel_source_dir ${OPTS}"
@@ -62,7 +65,6 @@ CONFIGURE="${CONFIGURE} --with-linux-obj=$kernel_source_dir ${OPTS}"
 # Note OPTS, AUTOGEN, CONFIGURE are not exposed to dkms parser
 
 MAKE="${AUTOGEN} && ${CONFIGURE} && make -j `nproc`"
-CLEAN="make distclean || true"
 
 NO_WEAK_MODULES="yes"
 AUTOINSTALL="yes"

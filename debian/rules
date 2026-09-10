@@ -83,13 +83,20 @@ override_dh_install:
 	rm -f debian/tmp/usr/share/man/man8/lgss_sk.8 \
 	      debian/tmp/usr/share/man/man8/lgss_sk.8.gz
 
-	install -d debian/lustre-server-modules-dkms/usr/src/lustre-server-modules-$(UPVER)
+	# Shared kernel module source tree, shipped once by lustre-source.
+	install -d debian/lustre-source/usr/src/lustre
 	rsync -a -m --delete $(DKMS_RSYNC_EXCLUDES) \
-		../pristine-src/ debian/lustre-server-modules-dkms/usr/src/lustre-server-modules-$(UPVER)/
+		../pristine-src/ debian/lustre-source/usr/src/lustre/
+
+	# DKMS packages depend on lustre-source, but the lustre-dkms_prebuild.sh
+	# scripts copies the tree into the DKMS build directory.
+	install -d debian/lustre-server-modules-dkms/usr/src/lustre-server-modules-$(UPVER)
+	install -m 0755 debian/lustre-dkms_prebuild.sh \
+		debian/lustre-server-modules-dkms/usr/src/lustre-server-modules-$(UPVER)/lustre-dkms_prebuild.sh
 
 	install -d debian/lustre-client-modules-dkms/usr/src/lustre-client-modules-$(UPVER)
-	rsync -a -m --delete $(DKMS_RSYNC_EXCLUDES) \
-		../pristine-src/ debian/lustre-client-modules-dkms/usr/src/lustre-client-modules-$(UPVER)/
+	install -m 0755 debian/lustre-dkms_prebuild.sh \
+		debian/lustre-client-modules-dkms/usr/src/lustre-client-modules-$(UPVER)/lustre-dkms_prebuild.sh
 
 override_dh_auto_install:
 	dh_auto_install -- pkgconfigdir=/usr/lib/$(DEB_HOST_MULTIARCH)/pkgconfig
