@@ -2,7 +2,4 @@ usr/lib/*.la
 usr/lib/*/*.la
 usr/include/linux/
 usr/lib/firewalld/
-# DKMS build-time knob template: entirely commented out by default and
-# optional — the dkms.conf of the module packages sources it only if
-# present, so admins can create it on demand.
 etc/sysconfig/dkms-lustre

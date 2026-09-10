@@ -1,27 +1,5 @@
-# Lintian overrides for lustre-server-utils.
-# Verified against lintian 2.129.0 on 2.17.58-0ubuntu1~ppa1~stonking2; all
-# entries correspond to actual occurrences. Fixing these requires patching
-# upstream sources (shebangs, man pages, binary strings) or splitting
-# libraries into dedicated packages, which is not done for now.
-
 # Upstream binaries lack manual pages for internal/HA scripts
 lustre-server-utils: no-manual-page *
 
-# Man pages: bad whatis entries and formatting/roff warnings in upstream man
-# pages; accent/typo issues in upstream text
-lustre-server-utils: bad-whatis-entry *
-lustre-server-utils: groff-message *
-lustre-server-utils: acute-accent-in-manual-page *
-lustre-server-utils: typo-in-manual-page *
-
-# Spelling errors inside upstream binaries
-lustre-server-utils: spelling-error-in-binary *
-
-# udev rule without modalias (not a device driver alias match)
-lustre-server-utils: appstream-metadata-missing-modalias-provide usr/lib/udev/rules.d/99-lustre-server.rules
-
 # Upstream scripts use /usr/bin/bash instead of /bin/bash
 lustre-server-utils: wrong-path-for-interpreter /usr/bin/bash != /bin/bash *
-
-# Upstream systemd service files have no Documentation= key
-lustre-server-utils: systemd-service-file-missing-documentation-key *
