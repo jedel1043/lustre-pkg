@@ -2,6 +2,10 @@ Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: Lustre
 Upstream-Contact: Lustre Developers <lustre-devel@lists.lustre.org>
 Source: https://github.com/lustre/lustre-release
+Files-Excluded: lustre/tests/fsx.c
+Comment: lustre/tests/fsx.c is excluded from the orig tarball because its
+ APSL-1.1 license is not DFSG-free. The compiled fsx binary was never
+ shipped in any of the binary packages.
 
 Files: *
 Copyright: 2002-2026, Sun Microsystems, Inc.
@@ -518,12 +522,6 @@ Files: lustre/tests/check_fallocate.c
 Copyright: 2014, DataDirect Networks, Inc.
 License: GPL-2
 
-Files: lustre/tests/fsx.c
-Copyright: 2012, Intel Corporation.
-           1998-2001, Apple Computer, Inc.
-           1991, NeXT Computer, Inc. All Rights Reserverd.
-License: APSL-1.1
-
 Files: lustre/tests/group_lock_test.c
        lustre/tests/swap_lock_test.c
 Copyright: 2014, 2015, Cray Inc
@@ -933,10 +931,6 @@ Files: include/uapi/linux/lustre/lustre_kernelcomm.h
 Copyright: 2011-2013, 2017, Intel Corporation.
            2003, 2004, 2009, 2010, Oracle and/or its affiliates.
 License: LGPL-2.1
-
-License: APSL-1.1
-        The full text of the Apple Public Source License version 1.1 can be
-        found at https://opensource.org/licenses/APSL-1.1
 
 License: Apache-2.0
         Licensed under the Apache License, Version 2.0 (the "License");

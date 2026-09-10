@@ -3,3 +3,7 @@ Version: 5
 Source: https://github.com/lustre/lustre-release/tags
 Matching-Pattern: (?:.*?/)?@ANY_VERSION@\.tar\.gz
 Filename-Mangle: s%(?:.*?)?@ANY_VERSION@\.tar\.gz%lustre-$1.tar.gz%
+Dversion-Mangle: s/\+dfsg\d*$//
+Repack: yes
+Repacksuffix: +dfsg1
+Compression: gzip
