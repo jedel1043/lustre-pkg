@@ -1,3 +1,16 @@
+lustre (2.17.58+dfsg-0ubuntu1~ppa1~stonking4) stonking; urgency=medium
+
+  [ José Julián Espina ]
+  * fix: add correct numbering to llite patch
+  * chore: cleanup dksm.conf.in to remove custom package config
+  * feat: make lustre-server-utils depend on lustre-client-utils
+  * chore: exclude lustre/tests/fsx.c from package
+  * chore: adjust copyright for dkms.config.in file
+  * chore: remove unneeded overrides
+  * chore: change repack suffix
+
+ -- José Julián Espina Del Ángel <julian.espina@canonical.com>  Thu, 10 Sep 2026 13:17:19 -0600
+
 lustre (2.17.58-0ubuntu1~ppa1~stonking3) stonking; urgency=medium
 
   [ José Julián Espina ]
