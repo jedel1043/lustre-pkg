@@ -26,7 +26,6 @@ Package: lustre-client-utils
 Section: utils
 Architecture: amd64 arm64
 Depends:
- lustre-client-modules,
  python3,
  ${misc:Depends},
  ${perl:Depends},
@@ -46,7 +45,6 @@ Section: utils
 Architecture: amd64 arm64
 Depends:
  lustre-client-utils (= ${binary:Version}),
- lustre-server-modules,
  python3,
  ${misc:Depends},
  ${perl:Depends},
@@ -120,43 +118,7 @@ Description: Development files for the Lustre filesystem
  .
  This package provides development libraries for the Lustre filesystem.
 
-Package: lustre-client-modules-dkms
-Section: kernel
-Architecture: amd64 arm64
-Depends:
- autoconf,
- automake,
- bison,
- build-essential,
- dkms,
- flex,
- libaio-dev,
- libkeyutils-dev,
- libkrb5-dev,
- libmount-dev,
- libnl-genl-3-dev,
- libselinux-dev,
- libssl-dev,
- libtool,
- libyaml-dev,
- linux-base,
- linux-headers-generic | linux-headers-amd64 | linux-headers-arm64,
- lustre-source (= ${source:Version}),
- pkgconf,
- python3-dev,
- zlib1g-dev,
- ${misc:Depends},
- ${perl:Depends},
-Provides:
- lustre-client-modules,
-Description: Lustre Linux kernel module (DKMS)
- Lustre is a scalable, secure, robust, highly-available cluster file system.
- This release is maintained by Whamcloud and available from
- https://wiki.whamcloud.com/
- .
- This package contains the loadable kernel modules for Lustre clients.
-
-Package: lustre-server-modules-dkms
+Package: lustre-modules-dkms
 Section: kernel
 Architecture: amd64 arm64
 Depends:
@@ -178,36 +140,21 @@ Depends:
  libzfslinux-dev,
  linux-base,
  linux-headers-generic | linux-headers-amd64 | linux-headers-arm64,
- lustre-source (= ${source:Version}),
  pkgconf,
  python3-dev,
  zfs-dkms (>= 2.0.7),
  zlib1g-dev,
  ${misc:Depends},
  ${perl:Depends},
+Recommends:
+ lustre-client-utils (>= ${source:Version}),
+ lustre-server-utils (>= ${source:Version}),
 Provides:
- lustre-client-modules,
- lustre-server-modules,
-Breaks:
- lustre-client-modules-dkms,
-Replaces:
- lustre-client-modules-dkms,
-Description: Lustre Linux server kernel module with ZFS support (DKMS)
+ lustre-modules,
+Description: Lustre Linux kernel modules with ZFS support (DKMS)
  Lustre is a scalable, secure, robust, highly-available cluster file system.
- This release is maintained by Whamcloud and available from
+ This release is maintained by Whamcloud and available at
  https://wiki.whamcloud.com/
  .
- This package contains the loadable kernel modules for Lustre servers
- with ZFS backend support.
-
-Package: lustre-source
-Section: kernel
-Architecture: all
-Depends:
- ${misc:Depends},
-Description: Source for the Lustre filesystem
- Lustre is a scalable, secure, robust, highly-available cluster file system.
- This release is maintained by Whamcloud and available from
- https://wiki.whamcloud.com/
- .
- This package provides the source tree for the Lustre filesystem.
+ This package contains the loadable kernel modules for Lustre clients
+ and servers with ZFS backend support.

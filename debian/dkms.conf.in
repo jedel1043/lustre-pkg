@@ -37,12 +37,8 @@ for m in $(ls -1 $dkms_tree); do
 	[[ $m == "sl-driver" ]] &&
 		BUILD_DEPENDS[${#BUILD_DEPENDS[@]}]=$m
 done
-OPTS=""
-if [[ "x${PACKAGE_NAME}" = "xlustre-client-modules" ]] ; then
-    OPTS="${OPTS} --disable-server --disable-quilt"
-else
-    OPTS="${OPTS} --enable-server"
-fi
+# Unified package: build both client and server modules.
+OPTS="--enable-server"
 [[ -f /usr/src/kfabric/default/Module.symvers ]] &&
     OPTS="${OPTS} --with-kfi=/usr/src/kfabric/default"
 [[ -d /usr/src/ofa_kernel/default ]] &&
@@ -54,9 +50,6 @@ OPTS="${OPTS} --enable-quota --with-kmp-moddir=updates"
 echo "${OPTS} " | grep -E -q -- '--disable-gss[^-]|--enable-gss[^-]' ||
   dpkg -l | grep libkrb5-dev | grep -q ^ii &&
       OPTS="${OPTS} --enable-gss" || OPTS="${OPTS} --disable-gss"
-
-# Copies source from /usr/src/lustre-source
-PRE_BUILD="lustre-dkms_prebuild.sh"
 
 AUTOGEN="sh ./autogen.sh"
 CONFIGURE="./configure --with-linux=$kernel_source_dir"
@@ -180,17 +173,15 @@ if grep -q ' --enable-tests' <<< ${OPTS}; then
    module obd_test            lustre/kunit     fs/lustre
 fi
 # Lustre server modules:
-if [[ "x${PACKAGE_NAME}" != "xlustre-client-modules" ]] ; then
-    # MODULE NAME     PATH TO MODULE    INSTALL PATH
-    # -------------   ---------------   ------------
-    module ofd        lustre/ofd        fs/lustre
-    module lfsck      lustre/lfsck      fs/lustre
-    module mgs        lustre/mgs        fs/lustre
-    module lquota     lustre/quota      fs/lustre
-    module mdt        lustre/mdt        fs/lustre
-    module osp        lustre/osp        fs/lustre
-    module mdd        lustre/mdd        fs/lustre
-    module lod        lustre/lod        fs/lustre
-    module osd_wbcfs  lustre/osd-wbcfs  fs/lustre
-    module osd_zfs    lustre/osd-zfs    fs/lustre
-fi
+# MODULE NAME     PATH TO MODULE    INSTALL PATH
+# -------------   ---------------   ------------
+module ofd        lustre/ofd        fs/lustre
+module lfsck      lustre/lfsck      fs/lustre
+module mgs        lustre/mgs        fs/lustre
+module lquota     lustre/quota      fs/lustre
+module mdt        lustre/mdt        fs/lustre
+module osp        lustre/osp        fs/lustre
+module mdd        lustre/mdd        fs/lustre
+module lod        lustre/lod        fs/lustre
+module osd_wbcfs  lustre/osd-wbcfs  fs/lustre
+module osd_zfs    lustre/osd-zfs    fs/lustre

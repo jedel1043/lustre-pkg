@@ -1,5 +1,0 @@
-#!/bin/bash
-set -eux pipefail
-
-dkms autoinstall
-/usr/lib/dkms/dkms-autopkgtest

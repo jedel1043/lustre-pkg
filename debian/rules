@@ -83,35 +83,23 @@ override_dh_install:
 	rm -f debian/tmp/usr/share/man/man8/lgss_sk.8 \
 	      debian/tmp/usr/share/man/man8/lgss_sk.8.gz
 
-	# Shared kernel module source tree, shipped once by lustre-source.
-	install -d debian/lustre-source/usr/src/lustre
+	# Ship the module source tree with the DKMS package; dkms copies it
+	# to its private build area for every build, so /usr/src is never
+	# written to during module builds.
+	install -d debian/lustre-modules-dkms/usr/src/lustre-modules-$(UPVER)
 	rsync -a -m --delete $(DKMS_RSYNC_EXCLUDES) \
-		../pristine-src/ debian/lustre-source/usr/src/lustre/
-
-	# DKMS packages depend on lustre-source, but the lustre-dkms_prebuild.sh
-	# scripts copies the tree into the DKMS build directory.
-	install -d debian/lustre-server-modules-dkms/usr/src/lustre-server-modules-$(UPVER)
-	install -m 0755 debian/lustre-dkms_prebuild.sh \
-		debian/lustre-server-modules-dkms/usr/src/lustre-server-modules-$(UPVER)/lustre-dkms_prebuild.sh
-
-	install -d debian/lustre-client-modules-dkms/usr/src/lustre-client-modules-$(UPVER)
-	install -m 0755 debian/lustre-dkms_prebuild.sh \
-		debian/lustre-client-modules-dkms/usr/src/lustre-client-modules-$(UPVER)/lustre-dkms_prebuild.sh
+		../pristine-src/ debian/lustre-modules-dkms/usr/src/lustre-modules-$(UPVER)/
 
 override_dh_auto_install:
 	dh_auto_install -- pkgconfigdir=/usr/lib/$(DEB_HOST_MULTIARCH)/pkgconfig
 
-	# Generate dkms.conf files
-	sed -e 's/@PACKAGE_NAME@/lustre-server-modules/g' \
+	# Generate dkms.conf
+	sed -e 's/@PACKAGE_NAME@/lustre-modules/g' \
 	    -e 's/@UPVERSION@/$(UPVER)/g' \
-	    debian/dkms.conf.in > debian/lustre-server-modules-dkms.dkms
-	sed -e 's/@PACKAGE_NAME@/lustre-client-modules/g' \
-	    -e 's/@UPVERSION@/$(UPVER)/g' \
-	    debian/dkms.conf.in > debian/lustre-client-modules-dkms.dkms
+	    debian/dkms.conf.in > debian/lustre-modules-dkms.dkms
 
 override_dh_dkms:
-	dh_dkms -plustre-client-modules-dkms -V
-	dh_dkms -plustre-server-modules-dkms -V
+	dh_dkms -plustre-modules-dkms -V
 
 override_dh_makeshlibs:
 	dh_makeshlibs -pliblustreapi1 -V
