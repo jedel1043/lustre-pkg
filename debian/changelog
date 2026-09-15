@@ -1,3 +1,10 @@
+lustre (2.17.58+dfsg-0ubuntu1~ppa1~stonking6) stonking; urgency=medium
+
+  [ José Julián Espina ]
+  * fix: unify client and server DKMS packages
+
+ -- José Julián Espina Del Ángel <julian.espina@canonical.com>  Tue, 15 Sep 2026 10:37:23 -0600
+
 lustre (2.17.58+dfsg-0ubuntu1~ppa1~stonking5) stonking; urgency=medium
 
   [ José Julián Espina ]
