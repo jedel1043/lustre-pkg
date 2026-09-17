@@ -1,3 +1,10 @@
+lustre (2.17.58+dfsg-0ubuntu1~ppa1~stonking7) stonking; urgency=medium
+
+  [ José Julián Espina ]
+  * Add compatibility patch for Linux 7.3
+
+ -- José Julián Espina Del Ángel <julian.espina@canonical.com>  Thu, 17 Sep 2026 12:33:04 -0600
+
 lustre (2.17.58+dfsg-0ubuntu1~ppa1~stonking6) stonking; urgency=medium
 
   [ José Julián Espina ]
