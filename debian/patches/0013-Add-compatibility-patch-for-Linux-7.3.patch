@@ -1,0 +1,189 @@
+From: =?utf-8?q?Jos=C3=A9_Juli=C3=A1n_Espina?= <julian.espina@canonical.com>
+Date: Thu, 17 Sep 2026 12:30:45 -0600
+Subject: Add compatibility patch for Linux 7.3
+
+---
+ config/lustre-core.m4            | 57 ++++++++++++++++++++++++++++++++++++++++
+ lnet/klnds/socklnd/socklnd_lib.c |  4 +++
+ lustre/llite/llite_lib.c         |  4 +--
+ lustre/llite/namei.c             | 13 +++++++++
+ lustre/osd-wbcfs/wbcfs.c         | 13 +++++++++
+ 5 files changed, 89 insertions(+), 2 deletions(-)
+
+diff --git a/config/lustre-core.m4 b/config/lustre-core.m4
+index f7fea7a..5a20b3e 100644
+--- a/config/lustre-core.m4
++++ b/config/lustre-core.m4
+@@ -2486,6 +2486,55 @@ AC_DEFUN([LC_HAVE_SECURITY_LISTSECURITY_PTR], [
+ 	])
+ ]) # LC_HAVE_SECURITY_LISTSECURITY_PTR
+ 
++#
++# LC_HAVE_IOPS_CREATE_NO_EXCL
++#
++# Linux v7.3
++#   Drop the excl argument from inode_operations.create()
++#
++AC_DEFUN([LC_SRC_HAVE_IOPS_CREATE_NO_EXCL], [
++	LB2_LINUX_TEST_SRC([iops_create_no_excl], [
++		#include <linux/fs.h>
++	],[
++		struct inode_operations *iop = NULL;
++		struct inode *parent = NULL;
++		struct dentry *din = NULL;
++		umode_t mode = 0700;
++
++		iop->create(&nop_mnt_idmap, parent, din, mode);
++	],[-Werror])
++])
++AC_DEFUN([LC_HAVE_IOPS_CREATE_NO_EXCL], [
++	LB2_MSG_LINUX_TEST_RESULT([if inode_operations.create() has no excl argument],
++	[iops_create_no_excl], [
++		AC_DEFINE(HAVE_IOPS_CREATE_NO_EXCL, 1,
++			[inode_operations.create() has no excl argument])
++	])
++]) # LC_HAVE_IOPS_CREATE_NO_EXCL
++
++#
++# LC_HAVE_BVEC_ITER_BI_OFFSET
++#
++# Linux v7.3
++#   Rename bvec_iter.bi_bvec_done to bi_offset
++#
++AC_DEFUN([LC_SRC_HAVE_BVEC_ITER_BI_OFFSET], [
++	LB2_LINUX_TEST_SRC([bvec_iter_bi_offset], [
++		#include <linux/bvec.h>
++	],[
++		struct bvec_iter iter;
++
++		iter.bi_offset = 0;
++	],[-Werror])
++])
++AC_DEFUN([LC_HAVE_BVEC_ITER_BI_OFFSET], [
++	LB2_MSG_LINUX_TEST_RESULT([if bvec_iter.bi_bvec_done is named bi_offset],
++	[bvec_iter_bi_offset], [
++		AC_DEFINE(HAVE_BVEC_ITER_BI_OFFSET, 1,
++			[bvec_iter.bi_bvec_done is named bi_offset])
++	])
++]) # LC_HAVE_BVEC_ITER_BI_OFFSET
++
+ #
+ # LC_HAVE_FLUSH___WORKQUEUE
+ #
+@@ -4038,6 +4087,10 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
+ 	# 7.2
+ 	LC_SRC_HAVE_KERNEL_STRNCPY
+ 	LC_SRC_HAVE_SECURITY_LISTSECURITY_PTR
++
++	# 7.3
++	LC_SRC_HAVE_IOPS_CREATE_NO_EXCL
++	LC_SRC_HAVE_BVEC_ITER_BI_OFFSET
+ ])
+ 
+ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
+@@ -4270,6 +4323,10 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
+ 	# 7.2
+ 	LC_HAVE_KERNEL_STRNCPY
+ 	LC_HAVE_SECURITY_LISTSECURITY_PTR
++
++	# 7.3
++	LC_HAVE_IOPS_CREATE_NO_EXCL
++	LC_HAVE_BVEC_ITER_BI_OFFSET
+ ])
+ 
+ #
+diff --git a/lnet/klnds/socklnd/socklnd_lib.c b/lnet/klnds/socklnd/socklnd_lib.c
+index 6600918..6dd7147 100644
+--- a/lnet/klnds/socklnd/socklnd_lib.c
++++ b/lnet/klnds/socklnd/socklnd_lib.c
+@@ -172,7 +172,11 @@ static int ksocknal_iter_for_each_range(struct iov_iter *i, size_t bytes,
+ 	if (iov_iter_type(i) == ITER_BVEC) {
+ 		struct bvec_iter start = {
+ 			.bi_size	= bytes,
++#ifdef HAVE_BVEC_ITER_BI_OFFSET
++			.bi_offset	= skip,
++#else
+ 			.bi_bvec_done	= skip,
++#endif
+ 			.bi_idx = 0,
+ 		};
+ 		struct bvec_iter bi;
+diff --git a/lustre/llite/llite_lib.c b/lustre/llite/llite_lib.c
+index 4775c7c..cde1a38 100644
+--- a/lustre/llite/llite_lib.c
++++ b/lustre/llite/llite_lib.c
+@@ -3704,8 +3704,8 @@ void ll_umount_begin(struct super_block *sb)
+ 
+ 	ENTRY;
+ 
+-	CDEBUG(D_VFSTRACE, "VFS Op: superblock %p count %d active %d\n", sb,
+-	       sb->s_count, atomic_read(&sb->s_active));
++	CDEBUG(D_VFSTRACE, "VFS Op: superblock %p active %d\n", sb,
++	       atomic_read(&sb->s_active));
+ 
+ 	obd = class_exp2obd(sbi->ll_md_exp);
+ 	if (obd == NULL) {
+diff --git a/lustre/llite/namei.c b/lustre/llite/namei.c
+index 8c3552c..9256f19 100644
+--- a/lustre/llite/namei.c
++++ b/lustre/llite/namei.c
+@@ -2145,6 +2145,15 @@ static int ll_create_nd(struct mnt_idmap *map, struct inode *dir,
+ 	return rc;
+ }
+ 
++#ifdef HAVE_IOPS_CREATE_NO_EXCL
++/* Kernel v7.3 dropped the excl argument from inode_operations.create() */
++static int ll_create_nd_no_excl(struct mnt_idmap *map, struct inode *dir,
++				struct dentry *dentry, umode_t mode)
++{
++	return ll_create_nd(map, dir, dentry, mode, false);
++}
++#endif
++
+ static int ll_symlink(struct mnt_idmap *map, struct inode *dir,
+ 		      struct dentry *dchild, const char *oldpath)
+ {
+@@ -2566,7 +2575,11 @@ const struct inode_operations ll_dir_inode_operations = {
+ 	.mknod		= ll_mknod,
+ 	.atomic_open	= ll_atomic_open,
+ 	.lookup		= ll_lookup_nd,
++#ifdef HAVE_IOPS_CREATE_NO_EXCL
++	.create		= ll_create_nd_no_excl,
++#else
+ 	.create		= ll_create_nd,
++#endif
+ 	/* We need all these non-raw things for NFSD, to not patch it. */
+ 	.unlink		= ll_unlink,
+ 	.mkdir		= ll_mkdir,
+diff --git a/lustre/osd-wbcfs/wbcfs.c b/lustre/osd-wbcfs/wbcfs.c
+index 0b8e2f4..e9c6d8c 100644
+--- a/lustre/osd-wbcfs/wbcfs.c
++++ b/lustre/osd-wbcfs/wbcfs.c
+@@ -354,6 +354,15 @@ static int memfs_create_nd(struct mnt_idmap *map, struct inode *dir,
+ 	return memfs_mknod(map, dir, dentry, mode | S_IFREG, 0);
+ }
+ 
++#ifdef HAVE_IOPS_CREATE_NO_EXCL
++/* Kernel v7.3 dropped the excl argument from inode_operations.create() */
++static int memfs_create_nd_no_excl(struct mnt_idmap *map, struct inode *dir,
++			   struct dentry *dentry, umode_t mode)
++{
++	return memfs_create_nd(map, dir, dentry, mode, false);
++}
++#endif
++
+ static int memfs_unlink(struct inode *dir, struct dentry *dentry)
+ {
+ 	struct inode *inode = d_inode(dentry);
+@@ -1013,7 +1022,11 @@ static const struct file_operations memfs_dir_operations = {
+ static const struct inode_operations memfs_dir_inode_operations = {
+ 	.mknod		= memfs_mknod,
+ 	.lookup		= simple_lookup,
++#ifdef HAVE_IOPS_CREATE_NO_EXCL
++	.create		= memfs_create_nd_no_excl,
++#else
+ 	.create		= memfs_create_nd,
++#endif
+ 	.unlink		= memfs_unlink,
+ 	.mkdir		= memfs_mkdir,
+ 	.rmdir		= memfs_rmdir,
