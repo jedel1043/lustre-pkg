@@ -1,3 +1,10 @@
+lustre (2.17.58+dfsg-0ubuntu1~ppa1~stonking8) stonking; urgency=medium
+
+  [ José Julián Espina ]
+  * chore: address review from #1
+
+ -- José Julián Espina Del Ángel <julian.espina@canonical.com>  Tue, 22 Sep 2026 12:38:36 -0600
+
 lustre (2.17.58+dfsg-0ubuntu1~ppa1~stonking7) stonking; urgency=medium
 
   [ José Julián Espina ]
