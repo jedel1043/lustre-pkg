@@ -1,8 +1,0 @@
-#!/bin/bash
-set -eux pipefail
-
-apt-get update
-apt-get install -y zfs-dkms
-
-dkms autoinstall
-/usr/lib/dkms/dkms-autopkgtest

@@ -1,0 +1,4 @@
+usr/include/lustre/*
+usr/lib/*/liblustreapi.a
+usr/lib/*/liblustreapi.so
+usr/lib/*/pkgconfig/lustre.pc

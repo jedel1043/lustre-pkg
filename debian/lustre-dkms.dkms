@@ -9,7 +9,7 @@
 #
 # This file is part of Lustre, http://www.lustre.org/
 #
-# debian/dkms.conf.in
+# debian/lustre-dkms.dkms
 #
 # Lustre Linux kernel module (DKMS)
 #
@@ -17,8 +17,8 @@
 # Updated by Michael Kuhn
 #
 
-PACKAGE_NAME="@PACKAGE_NAME@"
-PACKAGE_VERSION="@UPVERSION@"
+PACKAGE_NAME="lustre-dkms"
+PACKAGE_VERSION=#MODULE_VERSION#
 
 # If any of these packages exist they need to be autoinstall'd before lustre
 for m in $(ls -1 $dkms_tree); do

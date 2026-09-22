@@ -39,7 +39,7 @@ Files: contrib/yaml-event-dump.c
 Copyright: 2023, James Simmons <jsimmons@infradead.org>
 License: GPL-2
 
-Files: debian/dkms.conf.in
+Files: debian/lustre-dkms.dkms
 Copyright: 2012, Genome Research Ltd.
            2017-2018, Universität Hamburg
            2026 Canonical Ltd.

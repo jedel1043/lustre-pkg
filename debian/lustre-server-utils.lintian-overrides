@@ -1,4 +1,4 @@
-# Upstream binaries lack manual pages for internal/HA scripts
+# Upstream binaries lack manual pages (internal/debug tools)
 lustre-server-utils: no-manual-page *
 
 # Upstream scripts use /usr/bin/bash instead of /bin/bash

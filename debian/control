@@ -60,10 +60,10 @@ Description: Userspace utilities for the Lustre filesystem (server)
  to other Lustre server nodes, such as formatting and mounting Lustre targets.
 
 Package: lustre-resource-agents
-Architecture: amd64 arm64
+Architecture: all
 Depends:
- lustre-server-utils (= ${binary:Version}),
- resource-agents,
+ lustre-server-utils (>= ${source:Version}),
+ resource-agents-base,
  ${misc:Depends},
 Description: HA Reusable Cluster Resource Scripts for Lustre
  Lustre is a scalable, secure, robust, highly-available cluster file system.
@@ -104,21 +104,39 @@ Description: LNet configuration library
  This package contains the runtime library (liblnetconfig) used to
  configure the Lustre networking layer (LNet).
 
-Package: lustre-dev
+Package: liblustreapi-dev
 Section: libdevel
 Architecture: amd64 arm64
+Multi-Arch: same
 Depends:
- liblnetconfig4 (= ${binary:Version}),
  liblustreapi1 (= ${binary:Version}),
  ${misc:Depends},
-Description: Development files for the Lustre filesystem
+Description: Development files for the Lustre client API library
  Lustre is a scalable, secure, robust, highly-available cluster file system.
  This release is maintained by Whamcloud and available from
  https://wiki.whamcloud.com/
  .
- This package provides development libraries for the Lustre filesystem.
+ This package contains the development files (headers, static library and
+ pkg-config file) for liblustreapi, used by applications to interact with
+ Lustre filesystems.
 
-Package: lustre-modules-dkms
+Package: liblnetconfig-dev
+Section: libdevel
+Architecture: amd64 arm64
+Multi-Arch: same
+Depends:
+ liblnetconfig4 (= ${binary:Version}),
+ ${misc:Depends},
+Description: Development files for the LNet configuration library
+ Lustre is a scalable, secure, robust, highly-available cluster file system.
+ This release is maintained by Whamcloud and available from
+ https://wiki.whamcloud.com/
+ .
+ This package contains the development files (static library and
+ pkg-config file) for liblnetconfig, used by tools to configure and
+ manage LNet.
+
+Package: lustre-dkms
 Section: kernel
 Architecture: amd64 arm64
 Depends:
@@ -128,21 +146,13 @@ Depends:
  build-essential,
  dkms,
  flex,
- libaio-dev,
- libkeyutils-dev,
- libkrb5-dev,
  libmount-dev,
  libnl-genl-3-dev,
- libselinux-dev,
- libssl-dev,
  libtool,
  libyaml-dev,
- libzfslinux-dev,
- linux-base,
- linux-headers-generic | linux-headers-amd64 | linux-headers-arm64,
  pkgconf,
- python3-dev,
  zfs-dkms (>= 2.0.7),
+ libzfslinux-dev,
  zlib1g-dev,
  ${misc:Depends},
  ${perl:Depends},

@@ -1,5 +1,5 @@
 liblustreapi.so.1 liblustreapi1 #MINVER#
-* Build-Depends-Package: lustre-dev
+* Build-Depends-Package: liblustreapi-dev
  cfs_abs_path@Base 2.17.58
  cfs_expand_nidlist@Base 2.17.58
  cfs_expr2str@Base 2.17.58

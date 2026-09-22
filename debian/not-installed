@@ -3,3 +3,23 @@ usr/lib/*/*.la
 usr/include/linux/
 usr/lib/firewalld/
 etc/sysconfig/dkms-lustre
+usr/lib/*/lustre/mount_osd_wbcfs.so
+# Legacy Heartbeat v1 tools
+etc/ha.d/resource.d/Lustre.ha_v2
+usr/libexec/lustre/haconfig
+usr/libexec/lustre/lc_common
+usr/sbin/lc_cluman
+usr/sbin/lc_hb
+usr/sbin/lc_lvm
+usr/sbin/lc_md
+usr/sbin/lc_modprobe
+usr/sbin/lc_mon
+usr/sbin/lc_net
+usr/sbin/lc_servip
+usr/sbin/lhbadm
+usr/share/man/man8/lhbadm.8
+usr/sbin/lustre_start
+usr/sbin/lnet
+# lsvcgss wrapper and unit (GSS daemon is not built)
+usr/bin/lsvcgss_sysd
+usr/lib/systemd/system/lsvcgss.service

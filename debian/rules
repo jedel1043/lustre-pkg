@@ -69,6 +69,7 @@ override_dh_auto_configure:
 		--disable-tests \
 		--disable-iokit \
 		--disable-doc \
+		--disable-gss \
 		--with-systemdsystemunitdir=/usr/lib/systemd/system
 
 override_dh_auto_build:
@@ -77,29 +78,22 @@ override_dh_auto_build:
 override_dh_install:
 	dh_install
 
-	# lgss_sk is not built (GSS utils disabled), so its man page is unused.
-	# Must be removed from debian/tmp before dh_installman copies it; the
-	# file is not compressed yet at this point.
+	# lgss_sk is not built (--disable-gss), so its man page is unused.
 	rm -f debian/tmp/usr/share/man/man8/lgss_sk.8 \
 	      debian/tmp/usr/share/man/man8/lgss_sk.8.gz
 
 	# Ship the module source tree with the DKMS package; dkms copies it
 	# to its private build area for every build, so /usr/src is never
 	# written to during module builds.
-	install -d debian/lustre-modules-dkms/usr/src/lustre-modules-$(UPVER)
+	install -d debian/lustre-dkms/usr/src/lustre-dkms-$(UPVER)
 	rsync -a -m --delete $(DKMS_RSYNC_EXCLUDES) \
-		../pristine-src/ debian/lustre-modules-dkms/usr/src/lustre-modules-$(UPVER)/
+		../pristine-src/ debian/lustre-dkms/usr/src/lustre-dkms-$(UPVER)/
 
 override_dh_auto_install:
 	dh_auto_install -- pkgconfigdir=/usr/lib/$(DEB_HOST_MULTIARCH)/pkgconfig
 
-	# Generate dkms.conf
-	sed -e 's/@PACKAGE_NAME@/lustre-modules/g' \
-	    -e 's/@UPVERSION@/$(UPVER)/g' \
-	    debian/dkms.conf.in > debian/lustre-modules-dkms.dkms
-
 override_dh_dkms:
-	dh_dkms -plustre-modules-dkms -V
+	dh_dkms -plustre-dkms -V
 
 override_dh_makeshlibs:
 	dh_makeshlibs -pliblustreapi1 -V

@@ -1,5 +1,5 @@
 liblnetconfig.so.4 liblnetconfig4 #MINVER#
-* Build-Depends-Package: lustre-dev
+* Build-Depends-Package: liblnetconfig-dev
  cYAML_build_error@Base 2.17.58
  cYAML_build_tree@Base 2.17.58
  cYAML_clean_usr_data@Base 2.17.58

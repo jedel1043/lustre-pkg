@@ -1,0 +1,3 @@
+usr/lib/*/liblnetconfig.a
+usr/lib/*/liblnetconfig.so
+usr/lib/*/pkgconfig/lnet.pc
