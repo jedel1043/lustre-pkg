@@ -1,5 +1,5 @@
 lustre (2.17.58+dfsg-0ubuntu1) stonking; urgency=medium
 
-  * Initial release.
+  * Initial release (LP: #2168274).
 
  -- José Julián Espina Del Ángel <julian.espina@canonical.com>  Tue, 22 Sep 2026 17:53:34 -0600
