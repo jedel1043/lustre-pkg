@@ -159,6 +159,7 @@ Depends:
 Recommends:
  lustre-client-utils (>= ${source:Version}),
  lustre-server-utils (>= ${source:Version}),
+ linux-headers-generic
 Provides:
  lustre-modules,
 Description: Lustre Linux kernel modules with ZFS support (DKMS)

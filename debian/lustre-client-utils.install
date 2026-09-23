@@ -2,7 +2,7 @@ etc/lnet-sysctl.conf
 etc/lnet.conf
 etc/lnet_routes.conf
 etc/lustre/mount.client.params
-etc/modprobe.d/ko2iblnd.conf
+etc/modprobe.d/ko2iblnd.conf usr/lib/modprobe.d
 etc/projid
 sbin/mount.lustre usr/sbin
 usr/bin/lfs
