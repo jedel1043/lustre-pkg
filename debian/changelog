@@ -1,5 +1,20 @@
 lustre (2.17.58+dfsg-0ubuntu1) stonking; urgency=medium
 
   * Initial release (LP: #2168274).
+  * Package the client, server and resource-agent userspace from a
+    single source, and split the shared libraries into liblustreapi1
+    and liblnetconfig4, with symbols files and matching -dev packages.
+  * Ship one unified DKMS package (lustre-dkms) with both client and
+    server modules and the ZFS OSD backend (osd_zfs).
+  * Make the DKMS package depend on zfs-dkms (>= 2.0.7) and
+    libzfslinux-dev, so osd_zfs always builds against the zfs it will
+    load.
+  * Include compatibility patches for Linux 7.2 and 7.3, plus
+    several build patches to resolve Lintian warnings.
+  * Trim the DKMS source tree to the minimal set of files the build needs.
+  * Add an autopkgtest that builds and installs the module on a
+    dedicated machine (needs-root, isolation-machine).
+  * Add a watch file over GitHub tags with +dfsg repack,
+    copyright with scanning fixes, lintian overrides and manpages.
 
  -- José Julián Espina Del Ángel <julian.espina@canonical.com>  Tue, 22 Sep 2026 17:53:34 -0600
